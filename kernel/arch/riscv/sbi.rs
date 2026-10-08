@@ -6,10 +6,12 @@ const EID_BASE: usize = 0x10;
 const EID_LEGACY_PUTCHAR: usize = 0x01;
 const EID_DBCN: usize = 0x4442_434E; // "DBCN": debug console
 const EID_SRST: usize = 0x5352_5354; // "SRST": system reset
+const EID_TIME: usize = 0x5449_4D45; // "TIME"
 
 const BASE_PROBE_EXTENSION: usize = 3;
 const DBCN_WRITE: usize = 0;
 const SRST_RESET: usize = 0;
+const TIME_SET_TIMER: usize = 0;
 
 const SRST_TYPE_SHUTDOWN: usize = 0;
 const SRST_REASON_NONE: usize = 0;
@@ -64,4 +66,10 @@ pub fn legacy_putchar(byte: u8) {
 pub fn shutdown(failure: bool) {
     let reason = if failure { SRST_REASON_FAILURE } else { SRST_REASON_NONE };
     ecall(EID_SRST, SRST_RESET, SRST_TYPE_SHUTDOWN, reason, 0);
+}
+
+/// Request a supervisor timer interrupt when `time` reaches `deadline`;
+/// also clears a pending one.
+pub fn set_timer(deadline: u64) {
+    ecall(EID_TIME, TIME_SET_TIMER, deadline as usize, 0, 0);
 }

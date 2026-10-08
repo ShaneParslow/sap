@@ -6,6 +6,8 @@
 
 use core::arch::{asm, global_asm};
 
+use super::timer;
+
 /// Registers saved by `trap_entry`; layout must match the assembly below.
 #[repr(C)]
 pub struct TrapFrame {
@@ -56,6 +58,7 @@ unsafe extern "C" {
 }
 
 const INTERRUPT_BIT: usize = 1 << (usize::BITS - 1);
+const IRQ_SUPERVISOR_TIMER: usize = 5;
 const EXC_BREAKPOINT: usize = 3;
 
 /// Point `stvec` at `trap_entry` (direct mode: all traps to one address).
@@ -78,7 +81,11 @@ extern "C" fn trap_handler(frame: &mut TrapFrame) {
     let code = scause & !INTERRUPT_BIT;
 
     if scause & INTERRUPT_BIT != 0 {
-        panic!("unexpected interrupt {code} (sepc {:#x})", frame.sepc);
+        match code {
+            IRQ_SUPERVISOR_TIMER => timer::on_interrupt(),
+            _ => panic!("unexpected interrupt {code} (sepc {:#x})", frame.sepc),
+        }
+        return;
     }
 
     match code {

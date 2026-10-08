@@ -2,6 +2,7 @@
 
 mod entry;
 mod sbi;
+pub mod timer;
 pub mod trap;
 
 use core::sync::atomic::{AtomicU8, Ordering};
@@ -31,6 +32,19 @@ pub fn console_write(bytes: &[u8]) {
 pub fn shutdown(failure: bool) -> ! {
     sbi::shutdown(failure);
     halt()
+}
+
+const SSTATUS_SIE: usize = 1 << 1;
+
+pub fn enable_interrupts() {
+    // SAFETY: the trap vector is installed before this is called.
+    unsafe { core::arch::asm!("csrs sstatus, {}", in(reg) SSTATUS_SIE) };
+}
+
+/// Sleep until an interrupt arrives (or return spuriously).
+pub fn wait_for_interrupt() {
+    // SAFETY: wfi only waits for an interrupt.
+    unsafe { core::arch::asm!("wfi", options(nomem, nostack)) };
 }
 
 pub fn halt() -> ! {

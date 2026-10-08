@@ -23,6 +23,15 @@ extern "C" fn kmain(hart_id: usize, dtb: usize) -> ! {
 fn boot_checks() {
     arch::trap::breakpoint();
     info!("trap: breakpoint handled and returned");
+
+    arch::timer::start(100);
+    arch::enable_interrupts();
+    let start = arch::timer::now();
+    while arch::timer::ticks() < 10 {
+        arch::wait_for_interrupt();
+    }
+    let elapsed_us = arch::timer::to_micros(arch::timer::now() - start);
+    info!("timer: 10 ticks at 100 Hz in {elapsed_us} us");
 }
 
 #[panic_handler]
