@@ -1,0 +1,6 @@
+[build]
+target = "riscv64gc-unknown-none-elf"
+
+[target.riscv64gc-unknown-none-elf]
+# QEMU's bundled OpenSBI runs in M-mode and enters the kernel in S-mode at 0x80200000.
+runner = "qemu-system-riscv64 -machine virt -nographic -bios default -kernel"

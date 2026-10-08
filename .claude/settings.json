@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I \"$CLAUDE_PROJECT_DIR/tools/wiki/pending.py\" --hook 2>/dev/null || true",
+            "statusMessage": "Checking for un-ingested sessions"
+          }
+        ]
+      }
+    ]
+  }
+}

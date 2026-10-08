@@ -1,0 +1,16 @@
+[package]
+name = "sap-kernel"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "sap-kernel"
+path = "main.rs"
+test = false
+bench = false
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
