@@ -18,6 +18,9 @@ extern "C" fn kmain(hart_id: usize, dtb: usize) -> ! {
 
     arch::trap::init();
     arch::timer::init(boot.timebase_hz);
+    if let Some(address) = boot.test_device {
+        arch::test_device::init(address);
+    }
     boot_checks();
 
     info!("boot checks passed");

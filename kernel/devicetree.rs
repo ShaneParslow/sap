@@ -54,6 +54,8 @@ pub struct BootInfo {
     /// Memory the kernel must not allocate: the reservation block,
     /// `/reserved-memory` children, and the blob.
     pub reserved: Regions,
+    /// QEMU's test device (`sifive,test0`), used to exit with a status.
+    pub test_device: Option<usize>,
 }
 
 /// Parse the blob at physical address `dtb`. Panics on an invalid blob or a
@@ -97,7 +99,12 @@ pub fn parse(dtb: usize) -> BootInfo {
         timebase_hz = cpu.timebase_frequency() as u64;
     }
 
-    BootInfo { dtb: blob, timebase_hz, harts, memory, reserved }
+    let test_device = fdt
+        .find_compatible(&["sifive,test0"])
+        .and_then(|node| node.reg()?.next())
+        .map(|r| r.starting_address as usize);
+
+    BootInfo { dtb: blob, timebase_hz, harts, memory, reserved, test_device }
 }
 
 impl BootInfo {

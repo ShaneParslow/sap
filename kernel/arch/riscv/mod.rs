@@ -2,6 +2,7 @@
 
 mod entry;
 mod sbi;
+pub mod test_device;
 pub mod timer;
 pub mod trap;
 
@@ -30,6 +31,7 @@ pub fn console_write(bytes: &[u8]) {
 
 /// Power off the machine; under QEMU this exits the emulator.
 pub fn shutdown(failure: bool) -> ! {
+    test_device::exit(failure, 1);
     sbi::shutdown(failure);
     halt()
 }
