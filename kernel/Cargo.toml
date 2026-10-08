@@ -9,6 +9,10 @@ path = "main.rs"
 test = false
 bench = false
 
+[dependencies]
+# 0.2 is in alpha with a different API; stay on the stable line.
+fdt = "=0.1.5"
+
 [profile.dev]
 panic = "abort"
 

@@ -3,6 +3,7 @@
 
 mod arch;
 mod console;
+mod devicetree;
 mod log;
 
 use core::panic::PanicInfo;
@@ -12,7 +13,11 @@ extern "C" fn kmain(hart_id: usize, dtb: usize) -> ! {
     info!("sap: sapabilities online");
     info!("boot hart {hart_id}, device tree at {dtb:#x}");
 
+    let boot = devicetree::parse(dtb);
+    boot.log();
+
     arch::trap::init();
+    arch::timer::init(boot.timebase_hz);
     boot_checks();
 
     info!("boot checks passed");

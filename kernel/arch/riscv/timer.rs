@@ -5,12 +5,10 @@ use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use super::sbi;
 
-/// QEMU virt's timebase. The real value is `/cpus/timebase-frequency` in the
-/// device tree, which isn't parsed yet.
-const TIMEBASE_HZ: u64 = 10_000_000;
-
 const SIE_STIE: usize = 1 << 5;
 
+/// Frequency of the `time` CSR, from the device tree.
+static TIMEBASE_HZ: AtomicU64 = AtomicU64::new(0);
 static INTERVAL: AtomicU64 = AtomicU64::new(0);
 static TICKS: AtomicUsize = AtomicUsize::new(0);
 
@@ -21,10 +19,21 @@ pub fn now() -> u64 {
     t
 }
 
+pub fn init(timebase_hz: u64) {
+    assert!(timebase_hz > 0, "timer: timebase frequency is zero");
+    TIMEBASE_HZ.store(timebase_hz, Ordering::Relaxed);
+}
+
+fn timebase_hz() -> u64 {
+    let hz = TIMEBASE_HZ.load(Ordering::Relaxed);
+    assert!(hz > 0, "timer: used before init");
+    hz
+}
+
 /// Start periodic timer interrupts at `hz`. Interrupts must also be enabled
 /// globally (`enable_interrupts`) for them to be taken.
 pub fn start(hz: u64) {
-    let interval = TIMEBASE_HZ / hz;
+    let interval = timebase_hz() / hz;
     INTERVAL.store(interval, Ordering::Relaxed);
     sbi::set_timer(now() + interval);
     // SAFETY: enables only the supervisor timer interrupt source.
@@ -32,7 +41,7 @@ pub fn start(hz: u64) {
 }
 
 pub fn to_micros(time: u64) -> u64 {
-    time * 1_000_000 / TIMEBASE_HZ
+    time * 1_000_000 / timebase_hz()
 }
 
 pub fn ticks() -> usize {
