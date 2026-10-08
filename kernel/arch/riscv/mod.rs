@@ -2,6 +2,7 @@
 
 mod entry;
 mod sbi;
+pub mod trap;
 
 use core::sync::atomic::{AtomicU8, Ordering};
 
