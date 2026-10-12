@@ -1,75 +1,51 @@
-//! Calls into the SBI firmware (OpenSBI). See the RISC-V SBI specification.
+//! Calls into the SBI firmware (OpenSBI), through the `sbi-rt` crate.
+//!
+//! This module only adapts `sbi-rt` to what the kernel needs, so the rest of
+//! the arch code doesn't depend on its types.
 
-use core::arch::asm;
-
-const EID_BASE: usize = 0x10;
-const EID_LEGACY_PUTCHAR: usize = 0x01;
-const EID_DBCN: usize = 0x4442_434E; // "DBCN": debug console
-const EID_SRST: usize = 0x5352_5354; // "SRST": system reset
-const EID_TIME: usize = 0x5449_4D45; // "TIME"
-
-const BASE_PROBE_EXTENSION: usize = 3;
-const DBCN_WRITE: usize = 0;
-const SRST_RESET: usize = 0;
-const TIME_SET_TIMER: usize = 0;
-
-const SRST_TYPE_SHUTDOWN: usize = 0;
-const SRST_REASON_NONE: usize = 0;
-const SRST_REASON_FAILURE: usize = 1;
-
-/// SBI calls return (error, value); error 0 is success.
-fn ecall(eid: usize, fid: usize, a0: usize, a1: usize, a2: usize) -> (isize, usize) {
-    let (error, value);
-    // SAFETY: the SBI calling convention preserves every register except a0 and a1.
-    unsafe {
-        asm!(
-            "ecall",
-            inlateout("a0") a0 => error,
-            inlateout("a1") a1 => value,
-            in("a2") a2,
-            in("a6") fid,
-            in("a7") eid,
-            options(nostack),
-        );
-    }
-    (error, value)
-}
-
-pub fn probe_extension(eid: usize) -> bool {
-    ecall(EID_BASE, BASE_PROBE_EXTENSION, eid, 0, 0).1 != 0
-}
+use sbi_rt::{Physical, Shutdown, NoReason, SystemFailure};
 
 pub fn has_debug_console() -> bool {
-    probe_extension(EID_DBCN)
+    sbi_rt::probe_extension(sbi_rt::Console).is_available()
 }
 
-/// Write bytes with the debug console extension. The MMU is off, so the
-/// slice's address is its physical address. Returns false on SBI error.
+/// Write bytes with the debug console extension. Returns false on SBI error.
+///
+/// TODO: the MMU is off, so a slice's address is its physical address. Once
+/// the kernel runs at virtual addresses, translate before calling (M2, Sv39).
 pub fn debug_console_write(bytes: &[u8]) -> bool {
     let mut rest = bytes;
     while !rest.is_empty() {
-        let addr = rest.as_ptr() as usize;
-        let (error, written) = ecall(EID_DBCN, DBCN_WRITE, rest.len(), addr, 0);
-        if error != 0 {
+        let ret = sbi_rt::console_write(Physical::new(rest.len(), rest.as_ptr() as usize, 0));
+        if ret.is_err() {
             return false;
         }
-        rest = &rest[written.min(rest.len())..];
+        rest = &rest[ret.value.min(rest.len())..];
     }
     true
 }
 
 /// Deprecated legacy console, for firmware without DBCN.
 pub fn legacy_putchar(byte: u8) {
-    ecall(EID_LEGACY_PUTCHAR, 0, byte as usize, 0, 0);
+    #[allow(deprecated)]
+    sbi_rt::legacy::console_putchar(byte as usize);
 }
 
 pub fn shutdown(failure: bool) {
-    let reason = if failure { SRST_REASON_FAILURE } else { SRST_REASON_NONE };
-    ecall(EID_SRST, SRST_RESET, SRST_TYPE_SHUTDOWN, reason, 0);
+    if failure {
+        sbi_rt::system_reset(Shutdown, SystemFailure);
+    } else {
+        sbi_rt::system_reset(Shutdown, NoReason);
+    }
 }
 
 /// Request a supervisor timer interrupt when `time` reaches `deadline`;
-/// also clears a pending one.
+/// also clears a pending one. `deadline` is in the same units as the `time`
+/// CSR (the SBI specification defines it as an absolute `time` value).
+///
+/// TODO: each call traps into firmware (hundreds of cycles). Hardware with
+/// the Sstc extension lets the kernel write `stimecmp` directly; use it when
+/// present (pick the path at boot, see hw-isa in the wiki).
 pub fn set_timer(deadline: u64) {
-    ecall(EID_TIME, TIME_SET_TIMER, deadline as usize, 0, 0);
+    sbi_rt::set_timer(deadline);
 }

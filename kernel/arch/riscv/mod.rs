@@ -36,22 +36,18 @@ pub fn shutdown(failure: bool) -> ! {
     halt()
 }
 
-const SSTATUS_SIE: usize = 1 << 1;
-
 pub fn enable_interrupts() {
     // SAFETY: the trap vector is installed before this is called.
-    unsafe { core::arch::asm!("csrs sstatus, {}", in(reg) SSTATUS_SIE) };
+    unsafe { riscv::register::sstatus::set_sie() };
 }
 
 /// Sleep until an interrupt arrives (or return spuriously).
 pub fn wait_for_interrupt() {
-    // SAFETY: wfi only waits for an interrupt.
-    unsafe { core::arch::asm!("wfi", options(nomem, nostack)) };
+    riscv::asm::wfi();
 }
 
 pub fn halt() -> ! {
     loop {
-        // SAFETY: wfi only waits for an interrupt.
-        unsafe { core::arch::asm!("wfi", options(nomem, nostack)) };
+        riscv::asm::wfi();
     }
 }

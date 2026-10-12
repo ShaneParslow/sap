@@ -1,22 +1,20 @@
 //! Supervisor timer interrupts through the SBI TIME extension.
 
-use core::arch::asm;
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
-use super::sbi;
+use riscv::register::{sie, time};
 
-const SIE_STIE: usize = 1 << 5;
+use super::sbi;
 
 /// Frequency of the `time` CSR, from the device tree.
 static TIMEBASE_HZ: AtomicU64 = AtomicU64::new(0);
 static INTERVAL: AtomicU64 = AtomicU64::new(0);
 static TICKS: AtomicUsize = AtomicUsize::new(0);
 
+/// The `time` CSR (Zicntr). Every application-class RISC-V core has it, and
+/// the RVA profiles require it.
 pub fn now() -> u64 {
-    let t: u64;
-    // SAFETY: reading the time CSR has no side effects.
-    unsafe { asm!("rdtime {}", out(reg) t) };
-    t
+    time::read() as u64
 }
 
 pub fn init(timebase_hz: u64) {
@@ -36,8 +34,9 @@ pub fn start(hz: u64) {
     let interval = timebase_hz() / hz;
     INTERVAL.store(interval, Ordering::Relaxed);
     sbi::set_timer(now() + interval);
-    // SAFETY: enables only the supervisor timer interrupt source.
-    unsafe { asm!("csrs sie, {}", in(reg) SIE_STIE) };
+    // SAFETY: enables only the supervisor timer interrupt source, which the
+    // trap handler handles.
+    unsafe { sie::set_stimer() };
 }
 
 pub fn to_micros(time: u64) -> u64 {
@@ -49,7 +48,8 @@ pub fn ticks() -> usize {
 }
 
 /// Called from the trap handler. Programming the next deadline also clears
-/// the pending interrupt.
+/// the pending interrupt. The deadline is in `time` units, as `set_timer`
+/// requires.
 pub(super) fn on_interrupt() {
     TICKS.fetch_add(1, Ordering::Relaxed);
     sbi::set_timer(now() + INTERVAL.load(Ordering::Relaxed));
