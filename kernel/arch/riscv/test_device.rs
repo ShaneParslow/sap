@@ -19,14 +19,16 @@ pub fn init(address: usize) {
 }
 
 /// Exit QEMU with status 0 on success or `code` on failure. Returns if there
-/// is no test device. The MMU is off, so `address` is physical; once paging
-/// is on, the device must be mapped.
+/// is no test device. The device is reached through the direct map, where
+/// `paging::init` maps it.
 pub fn exit(failure: bool, code: u16) {
     let address = ADDRESS.load(Ordering::Relaxed);
     if address == 0 {
         return;
     }
     let value = if failure { FINISHER_FAIL | (code as u32) << 16 } else { FINISHER_PASS };
-    // SAFETY: `address` is the test device's register, from the device tree.
-    unsafe { core::ptr::write_volatile(address as *mut u32, value) };
+    let register = super::phys_to_virt(address) as *mut u32;
+    // SAFETY: `address` is the test device's register, from the device
+    // tree, and the direct map covers it.
+    unsafe { core::ptr::write_volatile(register, value) };
 }

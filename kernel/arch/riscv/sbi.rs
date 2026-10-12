@@ -10,13 +10,14 @@ pub fn has_debug_console() -> bool {
 }
 
 /// Write bytes with the debug console extension. Returns false on SBI error.
-///
-/// TODO: the MMU is off, so a slice's address is its physical address. Once
-/// the kernel runs at virtual addresses, translate before calling (M2, Sv39).
+/// Firmware reads the bytes by physical address, so `bytes` must be
+/// physically contiguous: true for anything in the kernel image or the
+/// direct map, which is everything the kernel prints.
 pub fn debug_console_write(bytes: &[u8]) -> bool {
     let mut rest = bytes;
     while !rest.is_empty() {
-        let ret = sbi_rt::console_write(Physical::new(rest.len(), rest.as_ptr() as usize, 0));
+        let pa = super::paging::virt_to_phys(rest.as_ptr() as usize);
+        let ret = sbi_rt::console_write(Physical::new(rest.len(), pa, 0));
         if ret.is_err() {
             return false;
         }

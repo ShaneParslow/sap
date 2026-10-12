@@ -7,8 +7,9 @@ use fdt::Fdt;
 
 use crate::boot::{BootInfo, Region, Regions};
 
-/// Parse the blob at physical address `dtb`. Panics on an invalid blob or a
-/// missing required node: the kernel can't boot without this information.
+/// Parse the blob at physical address `dtb`, reached through the direct map.
+/// Panics on an invalid blob or a missing required node: the kernel can't
+/// boot without this information.
 /// The Devicetree Specification requires `/cpus` and `/memory`, which is why
 /// the `fdt` crate's accessors for them panic rather than return `None`.
 pub fn parse(dtb: usize, boot_cpu: usize) -> BootInfo {
@@ -65,7 +66,7 @@ pub fn parse(dtb: usize, boot_cpu: usize) -> BootInfo {
         }
     }
 
-    BootInfo { boot_cpu, cpus, timer_hz, memory, reserved, devicetree: Some(blob) }
+    BootInfo { boot_cpu, cpus, timer_hz, memory, reserved, free: Regions::new(), devicetree: Some(blob) }
 }
 
 /// Address of the first register range of the first node compatible with
@@ -78,11 +79,11 @@ pub fn find_device(dtb: usize, compatible: &[&str]) -> Option<usize> {
 }
 
 fn open(dtb: usize) -> Fdt<'static> {
-    // SAFETY: firmware passes a valid blob address, and the blob stays
-    // reserved for the kernel's lifetime. `from_ptr` checks the header and
-    // bounds every later read by its `totalsize`. A bad address would fault
+    // SAFETY: firmware passes a valid blob address, the blob stays reserved
+    // for the kernel's lifetime, and the direct map covers it. `from_ptr`
+    // checks the header and bounds every later read by its `totalsize`. A bad address would fault
     // in here and panic through the trap handler; there is no unwinding.
-    match unsafe { Fdt::from_ptr(dtb as *const u8) } {
+    match unsafe { Fdt::from_ptr(crate::arch::phys_to_virt(dtb) as *const u8) } {
         Ok(fdt) => fdt,
         Err(e) => panic!("invalid device tree at {dtb:#x}: {e:?}"),
     }

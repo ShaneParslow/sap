@@ -1,27 +1,44 @@
 //! RISC-V (RV64GC, S-mode under SBI firmware).
 
 mod entry;
+mod paging;
 mod sbi;
 mod test_device;
 pub mod timer;
 pub mod trap;
 
+pub use paging::phys_to_virt;
+
 use core::sync::atomic::{AtomicU8, Ordering};
 
+use crate::boot::Region;
 use crate::devicetree;
+use crate::mm::{self, BootAllocator, PAGE_SIZE};
 
-/// Called by the entry code with OpenSBI's arguments. Turns them into the
-/// architecture-neutral `BootInfo`, sets up traps and the timer, and enters
-/// the generic kernel.
+/// Called by the entry code, running at the kernel's linked address on the
+/// boot page table, with OpenSBI's arguments and the image's physical
+/// address. Turns them into the architecture-neutral `BootInfo`, sets up
+/// traps, paging and the timer, and enters the generic kernel.
 #[unsafe(no_mangle)]
-extern "C" fn riscv_start(hart_id: usize, dtb: usize) -> ! {
+extern "C" fn riscv_start(hart_id: usize, dtb: usize, image_pa: usize) -> ! {
+    paging::set_kernel_pbase(image_pa);
+    trap::init();
+
     // Find QEMU's test device first, so that a panic later in boot still
     // exits the emulator with a failure status.
-    if let Some(address) = devicetree::find_device(dtb, &["sifive,test0"]) {
+    let test_device = devicetree::find_device(dtb, &["sifive,test0"]);
+    if let Some(address) = test_device {
         test_device::init(address);
     }
-    let boot = devicetree::parse(dtb, hart_id);
-    trap::init();
+
+    let mut boot = devicetree::parse(dtb, hart_id);
+    assert!(boot.reserved.push(paging::kernel_image()), "boot: no room to reserve the kernel image");
+
+    let mut alloc = BootAllocator::new(mm::free_regions(&boot.memory, &boot.reserved));
+    let devices = test_device.map(|start| Region { start, size: PAGE_SIZE });
+    paging::init(&boot, devices.as_slice(), &mut alloc);
+    boot.free = alloc.into_free();
+
     timer::init(boot.timer_hz);
     crate::kmain(boot)
 }

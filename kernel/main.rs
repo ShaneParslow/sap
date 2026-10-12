@@ -6,6 +6,7 @@ mod boot;
 mod console;
 mod devicetree;
 mod log;
+mod mm;
 
 use core::panic::PanicInfo;
 
@@ -16,6 +17,7 @@ use boot::BootInfo;
 pub fn kmain(boot: BootInfo) -> ! {
     info!("sap: sapabilities online");
     boot.log();
+    mm::log_free(&boot.free);
     boot_checks();
 
     info!("boot checks passed");

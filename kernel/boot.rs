@@ -51,6 +51,15 @@ impl Regions {
     pub fn iter(&self) -> impl Iterator<Item = &Region> {
         self.items[..self.len].iter()
     }
+
+    pub fn first_mut(&mut self) -> Option<&mut Region> {
+        self.items[..self.len].first_mut()
+    }
+
+    pub fn remove(&mut self, index: usize) {
+        self.items.copy_within(index + 1..self.len, index);
+        self.len -= 1;
+    }
 }
 
 pub struct BootInfo {
@@ -61,9 +70,12 @@ pub struct BootInfo {
     pub timer_hz: u64,
     /// RAM.
     pub memory: Regions,
-    /// Memory the kernel must never allocate: firmware, and the firmware
-    /// tables below.
+    /// Memory the kernel must never allocate: firmware, the firmware tables
+    /// below, and the kernel image.
     pub reserved: Regions,
+    /// RAM still free after the kernel's own setup; filled in by the
+    /// architecture code once its page tables are built.
+    pub free: Regions,
     /// The device tree blob, kept intact so it can be handed to the
     /// userspace device manager.
     pub devicetree: Option<Region>,
@@ -85,8 +97,9 @@ impl BootInfo {
 }
 
 /// A byte count for humans: the smallest binary unit that keeps the number
-/// under five digits (`9287 B`, `128 MiB`, `1234 MiB`), with `~` when it
-/// was rounded down. The alternate form (`{:#}`) adds the exact count.
+/// under five digits (`9287 B`, `128 MiB`, `1234 MiB`), rounded to nearest
+/// and marked `~` when inexact. The alternate form (`{:#}`) adds the exact
+/// count.
 pub struct Bytes(pub usize);
 
 impl fmt::Display for Bytes {
@@ -96,8 +109,9 @@ impl fmt::Display for Bytes {
         while self.0 >> (10 * unit) >= 10_000 && unit < UNITS.len() - 1 {
             unit += 1;
         }
-        let value = self.0 >> (10 * unit);
-        let exact = value << (10 * unit) == self.0;
+        let shift = 10 * unit;
+        let exact = self.0 & ((1usize << shift) - 1) == 0;
+        let value = if unit == 0 { self.0 } else { (self.0 + (1 << (shift - 1))) >> shift };
         write!(f, "{}{value} {}", if exact { "" } else { "~" }, UNITS[unit])?;
         if f.alternate() && unit > 0 {
             write!(f, " ({} bytes)", self.0)?;
