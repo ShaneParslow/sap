@@ -66,7 +66,7 @@ pub fn parse(dtb: usize, boot_cpu: usize) -> BootInfo {
         }
     }
 
-    BootInfo { boot_cpu, cpus, timer_hz, memory, reserved, free: Regions::new(), devicetree: Some(blob) }
+    BootInfo { boot_cpu, cpus, timer_hz, memory, reserved, devicetree: Some(blob) }
 }
 
 /// Address of the first register range of the first node compatible with

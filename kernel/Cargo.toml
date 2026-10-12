@@ -11,6 +11,7 @@ bench = false
 
 [dependencies]
 bitflags = "2"
+elf = { version = "0.8.0", default-features = false }
 # 0.2 is in alpha with a different API; stay on the stable line.
 fdt = "=0.1.5"
 riscv = { version = "0.16.1", default-features = false }

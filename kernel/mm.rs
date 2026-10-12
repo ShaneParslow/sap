@@ -1,11 +1,23 @@
-//! Physical memory at boot: which frames are free, and a bump allocator the
-//! kernel uses for its own page tables before handing the rest on.
+//! Physical memory at boot: which frames are free, and a bump allocator for
+//! the kernel's own page tables and the root task's image and stack.
 //!
 //! The kernel doesn't keep a general-purpose allocator. Following seL4, the
-//! memory left after boot becomes untyped memory for userspace to retype
-//! (M3); this allocator only serves the kernel's own setup.
+//! memory left after boot becomes untyped memory for the root task to
+//! retype (M3); this allocator only serves the kernel's own setup.
+
+use bitflags::bitflags;
 
 use crate::boot::{Bytes, Region, Regions};
+
+bitflags! {
+    /// Access rights for a mapping, independent of the page-table format.
+    #[derive(Clone, Copy)]
+    pub struct Perms: u8 {
+        const READ = 1 << 0;
+        const WRITE = 1 << 1;
+        const EXECUTE = 1 << 2;
+    }
+}
 
 pub const PAGE_SIZE: usize = 4096;
 
@@ -68,14 +80,34 @@ impl BootAllocator {
         frame
     }
 
+    /// The physical address of `count` contiguous free frames. Panics when
+    /// no free region is big enough.
+    pub fn alloc_contiguous(&mut self, count: usize) -> usize {
+        let bytes = count * PAGE_SIZE;
+        let index = self
+            .free
+            .iter()
+            .position(|r| r.size >= bytes)
+            .unwrap_or_else(|| panic!("mm: no {} contiguous at boot", Bytes(bytes)));
+        let region = self.free.get_mut(index).unwrap();
+        let start = region.start;
+        region.start += bytes;
+        region.size -= bytes;
+        if region.size == 0 {
+            self.free.remove(index);
+        }
+        self.allocated += count;
+        start
+    }
+
     /// Frames handed out so far.
     pub fn allocated(&self) -> usize {
         self.allocated
     }
 
-    /// What is left, for whoever takes over memory next.
-    pub fn into_free(self) -> Regions {
-        self.free
+    /// What is left.
+    pub fn free(&self) -> &Regions {
+        &self.free
     }
 }
 

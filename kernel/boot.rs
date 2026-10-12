@@ -56,6 +56,10 @@ impl Regions {
         self.items[..self.len].first_mut()
     }
 
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut Region> {
+        self.items[..self.len].get_mut(index)
+    }
+
     pub fn remove(&mut self, index: usize) {
         self.items.copy_within(index + 1..self.len, index);
         self.len -= 1;
@@ -73,9 +77,6 @@ pub struct BootInfo {
     /// Memory the kernel must never allocate: firmware, the firmware tables
     /// below, and the kernel image.
     pub reserved: Regions,
-    /// RAM still free after the kernel's own setup; filled in by the
-    /// architecture code once its page tables are built.
-    pub free: Regions,
     /// The device tree blob, kept intact so it can be handed to the
     /// userspace device manager.
     pub devicetree: Option<Region>,

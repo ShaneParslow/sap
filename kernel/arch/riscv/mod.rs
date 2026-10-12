@@ -7,7 +7,7 @@ mod test_device;
 pub mod timer;
 pub mod trap;
 
-pub use paging::phys_to_virt;
+pub use paging::{phys_to_virt, AddressSpace, USER_END};
 
 use core::sync::atomic::{AtomicU8, Ordering};
 
@@ -37,10 +37,17 @@ extern "C" fn riscv_start(hart_id: usize, dtb: usize, image_pa: usize) -> ! {
     let mut alloc = BootAllocator::new(mm::free_regions(&boot.memory, &boot.reserved));
     let devices = test_device.map(|start| Region { start, size: PAGE_SIZE });
     paging::init(&boot, devices.as_slice(), &mut alloc);
-    boot.free = alloc.into_free();
 
     timer::init(boot.timer_hz);
-    crate::kmain(boot)
+    crate::kmain(boot, alloc)
+}
+
+/// Switch to `space` and run user code at `entry` with stack `sp`.
+pub fn enter_user(space: &AddressSpace, entry: usize, sp: usize) -> ! {
+    // SAFETY: a user address space shares the kernel's upper half, so the
+    // kernel stays mapped after the switch.
+    unsafe { space.activate() };
+    trap::enter_user(entry, sp)
 }
 
 const CONSOLE_UNPROBED: u8 = 0;

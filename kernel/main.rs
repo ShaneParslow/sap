@@ -7,21 +7,25 @@ mod console;
 mod devicetree;
 mod log;
 mod mm;
+mod root_task;
+mod syscall;
 
 use core::panic::PanicInfo;
 
 use boot::BootInfo;
+use mm::BootAllocator;
 
 /// The architecture-neutral kernel, entered by the architecture code once
-/// traps and the timer are set up.
-pub fn kmain(boot: BootInfo) -> ! {
+/// traps, paging and the timer are set up. `alloc` holds the memory not
+/// used by the kernel itself.
+pub fn kmain(boot: BootInfo, mut alloc: BootAllocator) -> ! {
     info!("sap: sapabilities online");
     boot.log();
-    mm::log_free(&boot.free);
+    mm::log_free(alloc.free());
     boot_checks();
-
     info!("boot checks passed");
-    arch::shutdown(false)
+
+    root_task::start(&mut alloc)
 }
 
 /// Exercise what exists so far, so `cargo run` shows it working.

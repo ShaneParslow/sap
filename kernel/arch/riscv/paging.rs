@@ -16,7 +16,7 @@ use bitflags::bitflags;
 use riscv::register::satp;
 
 use crate::boot::{BootInfo, Region};
-use crate::mm::{BootAllocator, PAGE_SIZE};
+use crate::mm::{BootAllocator, Perms, PAGE_SIZE};
 
 /// Physical address `p` is mapped at `PHYSMAP_BASE + p` (entry.rs agrees).
 pub const PHYSMAP_BASE: usize = 0xFFFF_FFC0_0000_0000;
@@ -32,6 +32,14 @@ const LEVELS: usize = 3;
 
 /// Physical address of the image, passed by the entry code.
 static KERNEL_PBASE: AtomicUsize = AtomicUsize::new(0);
+/// Root table of the kernel's address space, whose upper half every user
+/// address space shares.
+static KERNEL_ROOT: AtomicUsize = AtomicUsize::new(0);
+
+/// Root entries from here up map the kernel (the upper half of Sv39).
+const KERNEL_HALF: usize = ENTRIES / 2;
+/// User virtual addresses are below this (the lower half of Sv39).
+pub const USER_END: usize = 1 << 38;
 
 bitflags! {
     /// Page table entry flags (Sv39).
@@ -125,6 +133,29 @@ pub struct AddressSpace {
 impl AddressSpace {
     pub fn new(alloc: &mut BootAllocator) -> Self {
         Self { root: alloc_table(alloc) }
+    }
+
+    /// An empty user address space. Its upper half points at the kernel's
+    /// own lower-level tables, so the kernel stays mapped (but not
+    /// user-accessible) while it runs.
+    ///
+    /// TODO: kernel mappings added later at the root level would not reach
+    /// existing user spaces. Today the kernel never adds any after boot.
+    pub fn new_user(alloc: &mut BootAllocator) -> Self {
+        let space = Self::new(alloc);
+        let kernel = table(KERNEL_ROOT.load(Ordering::Relaxed));
+        table(space.root).0[KERNEL_HALF..].copy_from_slice(&kernel.0[KERNEL_HALF..]);
+        space
+    }
+
+    /// Map user memory: `size` bytes at `va` (below `USER_END`) to `pa`.
+    pub fn map_user(&mut self, va: usize, pa: usize, size: usize, perms: Perms, alloc: &mut BootAllocator) {
+        assert!(va + size <= USER_END, "map_user: {va:#x} is not a user address");
+        let mut flags = Flags::USER;
+        flags.set(Flags::READ, perms.contains(Perms::READ));
+        flags.set(Flags::WRITE, perms.contains(Perms::WRITE));
+        flags.set(Flags::EXECUTE, perms.contains(Perms::EXECUTE));
+        self.map(va, pa, size, flags, alloc);
     }
 
     /// Map `size` bytes at `va` to `pa` with the largest pages that fit.
@@ -226,6 +257,7 @@ pub fn init(boot: &BootInfo, devices: &[Region], alloc: &mut BootAllocator) -> A
     // SAFETY: the image, the direct map of RAM (which holds every page
     // table and the device tree) and the devices in use are all mapped.
     unsafe { space.activate() };
+    KERNEL_ROOT.store(space.root, Ordering::Relaxed);
     crate::info!(
         "paging: Sv39 on, image {:#x} -> {:#x}, {} page-table frame(s)",
         KERNEL_VBASE,
