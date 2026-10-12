@@ -2,11 +2,29 @@
 
 mod entry;
 mod sbi;
-pub mod test_device;
+mod test_device;
 pub mod timer;
 pub mod trap;
 
 use core::sync::atomic::{AtomicU8, Ordering};
+
+use crate::devicetree;
+
+/// Called by the entry code with OpenSBI's arguments. Turns them into the
+/// architecture-neutral `BootInfo`, sets up traps and the timer, and enters
+/// the generic kernel.
+#[unsafe(no_mangle)]
+extern "C" fn riscv_start(hart_id: usize, dtb: usize) -> ! {
+    // Find QEMU's test device first, so that a panic later in boot still
+    // exits the emulator with a failure status.
+    if let Some(address) = devicetree::find_device(dtb, &["sifive,test0"]) {
+        test_device::init(address);
+    }
+    let boot = devicetree::parse(dtb, hart_id);
+    trap::init();
+    timer::init(boot.timer_hz);
+    crate::kmain(boot)
+}
 
 const CONSOLE_UNPROBED: u8 = 0;
 const CONSOLE_DBCN: u8 = 1;

@@ -2,25 +2,20 @@
 #![no_main]
 
 mod arch;
+mod boot;
 mod console;
 mod devicetree;
 mod log;
 
 use core::panic::PanicInfo;
 
-#[unsafe(no_mangle)]
-extern "C" fn kmain(hart_id: usize, dtb: usize) -> ! {
+use boot::BootInfo;
+
+/// The architecture-neutral kernel, entered by the architecture code once
+/// traps and the timer are set up.
+pub fn kmain(boot: BootInfo) -> ! {
     info!("sap: sapabilities online");
-    info!("boot hart {hart_id}, device tree at {dtb:#x}");
-
-    let boot = devicetree::parse(dtb);
     boot.log();
-
-    arch::trap::init();
-    arch::timer::init(boot.timebase_hz);
-    if let Some(address) = boot.test_device {
-        arch::test_device::init(address);
-    }
     boot_checks();
 
     info!("boot checks passed");
@@ -42,6 +37,8 @@ fn boot_checks() {
     info!("timer: 10 ticks at 100 Hz in {elapsed_us} us");
 }
 
+/// TODO: print a backtrace in debug builds by walking frame pointers (needs
+/// `-C force-frame-pointers=yes`). Panics abort; there is no unwinding.
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     error!("panic: {info}");

@@ -1,6 +1,10 @@
 //! QEMU's `sifive_test` device: writing to it ends the emulator with a
 //! status code. SBI shutdown can't report failure under QEMU (OpenSBI
 //! powers off the same way for every reason), so this is used when present.
+//!
+//! It exists only to give automated test runs a pass/fail exit status. It is
+//! a QEMU device on the RISC-V `virt` machine (Arm's `virt` has none; PSCI
+//! or semihosting play the same role there), so it stays in `arch/riscv`.
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 
