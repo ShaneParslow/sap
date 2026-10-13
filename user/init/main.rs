@@ -4,10 +4,10 @@
 #![no_std]
 #![no_main]
 
-use libsap::abi::{error, init_slot, object, rights, BootInfo};
+use libsap::abi::{attr, error, init_slot, object, rights, BootInfo};
 use libsap::cnode::SlotRef;
 use libsap::sys::Error;
-use libsap::{debug, println, untyped};
+use libsap::{debug, println, untyped, vspace};
 
 /// Slot `i` of the root CNode.
 fn slot(i: usize) -> SlotRef {
@@ -19,6 +19,7 @@ fn sap_main(info: &'static BootInfo) -> ! {
     report(info);
     check_cnode_operations(info);
     check_retype(info);
+    check_mapping(info);
     println!("init: all checks passed");
     debug::halt(false)
 }
@@ -123,4 +124,88 @@ fn check_retype(info: &BootInfo) {
     expect("revoke again", slot(region).revoke(), Ok(()));
     expect("revoke the carve", slot(parent).revoke(), Ok(()));
     println!("init: untyped retype, exhaustion and reuse after revoke behave");
+}
+
+/// Map page tables and frames into this address space and a new one, read
+/// and write through the mappings, and check the misuse errors.
+fn check_mapping(info: &BootInfo) {
+    let base = info.empty.start + 32;
+    let (index, _) = info.untyped_list[..info.untyped.len()]
+        .iter()
+        .enumerate()
+        .find(|(_, u)| u.size_bits >= 22)
+        .expect("no untyped region of 4 MiB");
+    let parent = info.untyped.start + index;
+    let in_root = SlotRef { root: init_slot::CNODE, index: 0, depth: 0 };
+    let me = init_slot::VSPACE;
+
+    // Three page tables (one per level below the root, and a spare), two
+    // 4 KiB frames and a 2 MiB frame. The 2 MiB frame goes first so it is
+    // aligned at the start of the region.
+    let (big, l1, l0, spare, f1, f2) = (base, base + 1, base + 2, base + 3, base + 4, base + 5);
+    expect("retype 2 MiB frame", untyped::retype(parent, object::FRAME_2M, 0, in_root, big, 1), Ok(()));
+    expect("retype page tables", untyped::retype(parent, object::PAGE_TABLE, 0, in_root, l1, 3), Ok(()));
+    expect("retype frames", untyped::retype(parent, object::FRAME_4K, 0, in_root, f1, 2), Ok(()));
+
+    // 1 GiB up: nothing of init's is mapped there, so both tables are new.
+    let va: usize = 0x4000_0000;
+    let rw = rights::READ | rights::WRITE;
+    expect("frame without tables", vspace::map_frame(f1, me, va, rw, attr::EXECUTE_NEVER), Err(error::FAILED_LOOKUP));
+    expect("map level-1 table", vspace::map_page_table(l1, me, va), Ok(()));
+    expect("map level-0 table", vspace::map_page_table(l0, me, va), Ok(()));
+    expect("every level has a table", vspace::map_page_table(spare, me, va), Err(error::DELETE_FIRST));
+    expect("map frame", vspace::map_frame(f1, me, va, rw, attr::EXECUTE_NEVER), Ok(()));
+    expect("map frame twice", vspace::map_frame(f1, me, va + 0x1000, rw, 0), Err(error::INVALID_CAPABILITY));
+    expect("map over a mapping", vspace::map_frame(f2, me, va, rw, 0), Err(error::DELETE_FIRST));
+    expect("unaligned", vspace::map_frame(f2, me, va + 1, rw, 0), Err(error::ALIGNMENT_ERROR));
+    expect("kernel address", vspace::map_frame(f2, me, 0xffff_ffc0_0000_0000, rw, 0), Err(error::INVALID_ARGUMENT));
+    expect("write-only", vspace::map_frame(f2, me, va + 0x1000, rights::WRITE, 0), Err(error::INVALID_ARGUMENT));
+
+    // Write through the mapping, move the frame to another address
+    // read-only, and read the value back there.
+    let word = va as *mut u64;
+    // SAFETY: the frame was just mapped read-write at va.
+    unsafe { word.write_volatile(0x5a9_cafe) };
+    expect("unmap frame", vspace::unmap_frame(f1), Ok(()));
+    expect("remap read-only", vspace::map_frame(f1, me, va + 0x3000, rights::READ, attr::EXECUTE_NEVER), Ok(()));
+    // SAFETY: mapped read-only at va + 0x3000.
+    let back = unsafe { ((va + 0x3000) as *const u64).read_volatile() };
+    assert_eq!(back, 0x5a9_cafe, "value didn't survive remapping");
+
+    // A 2 MiB frame goes straight into the level-1 table.
+    let big_va = va + 0x20_0000;
+    expect("map 2 MiB frame", vspace::map_frame(big, me, big_va, rw, attr::EXECUTE_NEVER), Ok(()));
+    // SAFETY: mapped read-write.
+    unsafe { ((big_va + 0x1f_fff8) as *mut u64).write_volatile(7) };
+    let address = vspace::frame_address(big).expect("frame address");
+    let region = info.untyped_list[index].paddr;
+    assert!(address == region, "2 MiB frame at {address:#x}, region at {region:#x}");
+
+    // A new address space: an unmapped page table becomes a root with an
+    // ASID, and mappings go into it without touching this one.
+    let root = base + 6;
+    expect("retype root", untyped::retype(parent, object::PAGE_TABLE, 0, in_root, root, 3), Ok(()));
+    expect("map into non-root", vspace::map_page_table(base + 7, root, va), Err(error::INVALID_CAPABILITY));
+    expect("assign asid", vspace::assign_asid(init_slot::ASID_POOL, root), Ok(()));
+    expect("assign twice", vspace::assign_asid(init_slot::ASID_POOL, root), Err(error::INVALID_CAPABILITY));
+    expect("map table in new space", vspace::map_page_table(base + 7, root, va), Ok(()));
+    expect("map table in new space", vspace::map_page_table(base + 8, root, va), Ok(()));
+    expect("map frame in new space", vspace::map_frame(f2, root, va, rw, 0), Ok(()));
+
+    // Unmapping a page table detaches what is mapped through it: the frame
+    // mapped through it must be unmapped and can't be mapped again until a
+    // table is back.
+    expect("unmap level-0 table", vspace::unmap_page_table(l0), Ok(()));
+    expect("unmap frame", vspace::unmap_frame(f1), Ok(()));
+    expect("frame needs the table again", vspace::map_frame(f1, me, va, rw, 0), Err(error::FAILED_LOOKUP));
+    expect("map the spare table", vspace::map_page_table(spare, me, va), Ok(()));
+    expect("map frame again", vspace::map_frame(f1, me, va, rights::READ, attr::EXECUTE_NEVER), Ok(()));
+    // SAFETY: mapped read-only; a fresh table, the same frame.
+    let again = unsafe { (va as *const u64).read_volatile() };
+    assert_eq!(again, 0x5a9_cafe, "value didn't survive a new table");
+
+    // Revoking the region deletes every object: frames and tables are
+    // unmapped, and the new address space's ASID is freed.
+    expect("revoke", slot(parent).revoke(), Ok(()));
+    println!("init: page tables, frames, ASIDs and unmapping behave");
 }

@@ -10,6 +10,7 @@ pub mod cnode;
 pub mod debug;
 pub mod sys;
 pub mod untyped;
+pub mod vspace;
 
 use core::panic::PanicInfo;
 

@@ -196,8 +196,7 @@ impl AddressSpace {
     /// existing user spaces. Today the kernel never adds any after boot.
     pub fn new_user(alloc: &mut BootAllocator) -> Self {
         let space = Self::new(alloc);
-        let kernel = table(KERNEL_ROOT.load(Ordering::Relaxed));
-        table(space.root).0[KERNEL_HALF..].copy_from_slice(&kernel.0[KERNEL_HALF..]);
+        make_root(space.root);
         space
     }
 
@@ -261,18 +260,123 @@ impl AddressSpace {
     }
 }
 
-/// Switch to the address space rooted at physical address `root`, unless it
-/// is already active.
-///
-/// TODO: all user address spaces share ASID 0, so every switch flushes the
-/// whole TLB; give each its own ASID (M3, address spaces).
-pub fn activate_root(root: usize) {
-    if satp::read().ppn() != root >> 12 {
+/// How many ASID bits the hardware implements (0 to 16), found at boot.
+static ASID_BITS: AtomicUsize = AtomicUsize::new(0);
+
+/// Find how many ASID bits `satp` implements: write all ones and read back
+/// what sticks (the privileged specification's method).
+fn probe_asid_bits() -> usize {
+    let saved = satp::read();
+    // SAFETY: same root and mode, only the ASID changes; the kernel's
+    // mappings are global, so they stay valid under any ASID.
+    unsafe { satp::set(satp::Mode::Sv39, 0xffff, saved.ppn()) };
+    let bits = satp::read().asid().count_ones() as usize;
+    // SAFETY: restores the previous value.
+    unsafe { satp::set(satp::Mode::Sv39, saved.asid(), saved.ppn()) };
+    bits
+}
+
+/// Whether address-space identifier `asid` can be used in hardware.
+fn hardware_asid(asid: u16) -> bool {
+    (asid as usize) < 1 << ASID_BITS.load(Ordering::Relaxed)
+}
+
+/// Switch to the address space rooted at physical address `root` with
+/// identifier `asid`, unless it is already active. With hardware ASIDs the
+/// TLB keeps every space's entries apart, so switching flushes nothing;
+/// without them, every switch flushes the TLB.
+pub fn activate_root(root: usize, asid: u16) {
+    let current = satp::read();
+    let hw = if hardware_asid(asid) { asid as usize } else { 0 };
+    if current.ppn() != root >> 12 || current.asid() != hw {
         // SAFETY: user address spaces share the kernel's upper half, so the
         // kernel stays mapped across the switch.
-        unsafe { satp::set(satp::Mode::Sv39, 0, root >> 12) };
+        unsafe { satp::set(satp::Mode::Sv39, hw, root >> 12) };
+        if hw == 0 {
+            riscv::asm::sfence_vma_all();
+        }
+    }
+}
+
+/// Flush the TLB entry for `va` in address space `asid`.
+pub(super) fn flush_page(asid: u16, va: usize) {
+    if hardware_asid(asid) {
+        riscv::asm::sfence_vma(asid as usize, va);
+    } else {
         riscv::asm::sfence_vma_all();
     }
+}
+
+/// Flush every TLB entry of address space `asid` (before it is reused).
+pub(super) fn flush_asid(asid: u16) {
+    if hardware_asid(asid) {
+        // SAFETY: sfence.vma only invalidates TLB entries; rs1 = zero
+        // means every address.
+        unsafe { core::arch::asm!("sfence.vma zero, {}", in(reg) asid as usize, options(nostack)) };
+    } else {
+        riscv::asm::sfence_vma_all();
+    }
+}
+
+/// Why a mapping couldn't be made.
+pub(super) enum MapError {
+    /// No page table at this level covers the address yet.
+    MissingTable,
+    /// Something is already mapped there.
+    Occupied,
+}
+
+fn user_flags(perms: Perms) -> Flags {
+    let mut flags = Flags::USER | Flags::VALID | Flags::ACCESSED | Flags::DIRTY;
+    flags.set(Flags::READ, perms.contains(Perms::READ));
+    flags.set(Flags::WRITE, perms.contains(Perms::WRITE));
+    flags.set(Flags::EXECUTE, perms.contains(Perms::EXECUTE));
+    flags
+}
+
+/// Install the page table at physical `pt` at the first level below the
+/// root where `va` has no table yet. Returns that level and the virtual
+/// address the new table covers from.
+pub(super) fn install_table(root: usize, va: usize, pt: usize) -> Result<(usize, usize), MapError> {
+    let mut t = root;
+    for level in (1..LEVELS).rev() {
+        let entry = &mut table(t).0[index(va, level)];
+        if !entry.is_valid() {
+            *entry = Entry::new(pt, Flags::VALID);
+            let span = level_size(level);
+            return Ok((level - 1, va & !(span - 1)));
+        }
+        if entry.is_leaf() {
+            return Err(MapError::Occupied);
+        }
+        t = entry.pa();
+    }
+    Err(MapError::Occupied)
+}
+
+/// Map a user page of the size `level` implies at `va` to `pa`. The tables
+/// above it must exist.
+pub(super) fn map_user_page(root: usize, va: usize, pa: usize, level: usize, perms: Perms) -> Result<(), MapError> {
+    let entry = entry_at(root, va, level).ok_or(MapError::MissingTable)?;
+    if entry.is_valid() {
+        return Err(MapError::Occupied);
+    }
+    *entry = Entry::new(pa, user_flags(perms));
+    Ok(())
+}
+
+/// Clear a page table's entries (when it is unmapped, as seL4 does).
+pub(super) fn clear_table(pa: usize) {
+    table(pa).0.fill(Entry::EMPTY);
+}
+
+/// Make a fresh page table into an address-space root: empty user half,
+/// and the kernel's upper half.
+pub(super) fn make_root(pa: usize) {
+    let kernel = table(KERNEL_ROOT.load(Ordering::Relaxed));
+    let t = table(pa);
+    t.0[..KERNEL_HALF].fill(Entry::EMPTY);
+    t.0[KERNEL_HALF..].copy_from_slice(&kernel.0[KERNEL_HALF..]);
 }
 
 fn alloc_table(alloc: &mut BootAllocator) -> usize {
@@ -330,11 +434,13 @@ pub fn init(boot: &BootInfo, devices: &[Region], alloc: &mut BootAllocator) -> A
     // table and the device tree) and the devices in use are all mapped.
     unsafe { space.activate() };
     KERNEL_ROOT.store(space.root, Ordering::Relaxed);
+    ASID_BITS.store(probe_asid_bits(), Ordering::Relaxed);
     crate::info!(
-        "paging: Sv39 on, image {:#x} -> {:#x}, {} page-table frame(s)",
+        "paging: Sv39 on, image {:#x} -> {:#x}, {} page-table frame(s), {} ASID bits",
         KERNEL_VBASE,
         image.start,
-        alloc.allocated()
+        alloc.allocated(),
+        ASID_BITS.load(Ordering::Relaxed)
     );
     space
 }

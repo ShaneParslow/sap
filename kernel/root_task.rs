@@ -128,6 +128,7 @@ pub fn start(mut alloc: BootAllocator) {
     caps.put(init_slot::VSPACE, vspace_cap);
     caps.put(init_slot::IPC_BUFFER, frame(ipc_buffer_pa, FRAME_RIGHTS_ALL, IPC_BUFFER_VA));
     caps.put(init_slot::BOOT_INFO, frame(boot_info_pa, sap_abi::rights::READ as u8, BOOT_INFO_VA));
+    caps.put(init_slot::ASID_POOL, Cap::Arch(ArchCap::AsidPool));
 
     // Capabilities to everything else mapped in the root task's address
     // space: its frames, then its page tables.

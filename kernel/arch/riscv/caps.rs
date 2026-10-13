@@ -24,6 +24,11 @@ pub enum ArchCap {
     /// Each frame capability can map the frame once, at `va` in address
     /// space `asid`; `asid` 0 (the kernel's) means unmapped.
     Frame { size_bits: u8, rights: u8, asid: u16, pa: usize, va: usize },
+    /// The kernel's pool of address-space identifiers.
+    ///
+    /// TODO: seL4 retypes ASID pools from untyped memory through an ASID
+    /// control capability; sap has one fixed pool for now.
+    AsidPool,
 }
 
 impl ArchCap {
@@ -31,12 +36,14 @@ impl ArchCap {
         match *self {
             ArchCap::PageTable { pa, .. } => Some((pa, 12)),
             ArchCap::Frame { pa, size_bits, .. } => Some((pa, size_bits)),
+            ArchCap::AsidPool => None,
         }
     }
 
     pub fn same_region_as(&self, b: &ArchCap) -> bool {
         match (*self, *b) {
             (ArchCap::PageTable { pa, .. }, ArchCap::PageTable { pa: p2, .. }) => pa == p2,
+            (ArchCap::AsidPool, ArchCap::AsidPool) => true,
             (ArchCap::Frame { pa, size_bits, .. }, ArchCap::Frame { pa: p2, size_bits: b2, .. }) => {
                 pa <= p2 && p2 + (1usize << b2) <= pa + (1usize << size_bits)
             }

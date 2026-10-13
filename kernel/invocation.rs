@@ -16,7 +16,7 @@ use crate::thread::{self, Tcb};
 use crate::untyped;
 
 /// An invocation's result: the number of result words, or an error code.
-type Result<T = usize> = core::result::Result<T, usize>;
+pub type Result<T = usize> = core::result::Result<T, usize>;
 
 impl From<LookupError> for usize {
     fn from(_: LookupError) -> usize {
@@ -25,15 +25,25 @@ impl From<LookupError> for usize {
 }
 
 /// The message of an invocation: words in registers, then the IPC buffer.
-struct Message<'a> {
+pub struct Message<'a> {
     info: MessageInfo,
     context: &'a mut UserContext,
     tcb: *const Tcb,
 }
 
 impl Message<'_> {
+    pub fn label(&self) -> usize {
+        self.info.label()
+    }
+
+    /// Set result word `i` (registers only, for now).
+    pub fn set_result(&mut self, i: usize, value: usize) {
+        assert!(i < MESSAGE_REGISTERS, "results beyond the registers aren't supported yet");
+        self.context.set_result(2 + i, value);
+    }
+
     /// Message word `i`, or TRUNCATED_MESSAGE if the message is shorter.
-    fn word(&self, i: usize) -> Result {
+    pub fn word(&self, i: usize) -> Result {
         if i >= self.info.length() {
             return Err(error::TRUNCATED_MESSAGE);
         }
@@ -46,7 +56,7 @@ impl Message<'_> {
     }
 
     /// The slot and capability named by extra-capability address `i`.
-    fn extra_cap(&self, i: usize) -> Result<(*mut Slot, Cap)> {
+    pub fn extra_cap(&self, i: usize) -> Result<(*mut Slot, Cap)> {
         if i >= self.info.extra_caps() || i >= MAX_EXTRA_CAPS {
             return Err(error::TRUNCATED_MESSAGE);
         }
@@ -83,6 +93,7 @@ fn invoke(slot: *mut Slot, cap: Cap, message: &mut Message) -> Result {
     match cap {
         Cap::CNode { .. } => cnode(cap, message),
         Cap::Untyped { .. } => untyped(slot, message),
+        Cap::Arch(a) => crate::arch::invoke(slot, a, message),
         _ => Err(error::ILLEGAL_OPERATION),
     }
 }

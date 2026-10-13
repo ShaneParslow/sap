@@ -38,7 +38,7 @@ Moving a thread to the tail of its own queue is the whole of preemption and roun
 
 ## Idle loop
 
-`arch::idle_once` (`kernel/arch/riscv/mod.rs:85`) enables interrupts, waits with `wfi`, handles whatever arrives through the kernel-trap path, and disables interrupts again. `run` repeats it until a thread is runnable. This and the boot checks are the only places the kernel runs with interrupts enabled; seL4 uses an idle thread for the same purpose.
+`arch::idle_once` (`kernel/arch/riscv/mod.rs:90`) enables interrupts, waits with `wfi`, handles whatever arrives through the kernel-trap path, and disables interrupts again. `run` repeats it until a thread is runnable. This and the boot checks are the only places the kernel runs with interrupts enabled; seL4 uses an idle thread for the same purpose.
 
 ## Kernel globals
 

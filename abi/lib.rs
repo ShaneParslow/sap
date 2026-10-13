@@ -77,6 +77,33 @@ pub mod label {
     /// the CNode the node index and depth name; depth 0 names the root
     /// CNode itself.
     pub const UNTYPED_RETYPE: usize = 6;
+
+    // RISC-V address spaces, as seL4's.
+    /// MR0 = virtual address, MR1 = attributes (unused); extra cap 0 = the
+    /// address space (a root page table with an ASID). Install the page
+    /// table at the first level below the root that has no table for the
+    /// address.
+    pub const PAGE_TABLE_MAP: usize = 7;
+    /// Remove the page table from its address space and clear it.
+    pub const PAGE_TABLE_UNMAP: usize = 8;
+    /// MR0 = virtual address (aligned to the frame's size), MR1 = rights
+    /// (`rights`, masked by the capability's), MR2 = attributes (bit 0 =
+    /// not executable); extra cap 0 = the address space. The page tables
+    /// above the address must already be mapped (`FAILED_LOOKUP`
+    /// otherwise).
+    pub const FRAME_MAP: usize = 9;
+    pub const FRAME_UNMAP: usize = 10;
+    /// Returns the frame's physical address in MR0 (for device drivers).
+    pub const FRAME_GET_ADDRESS: usize = 11;
+    /// Extra cap 0 = an unmapped page table. Make it the root of a new
+    /// address space with a free ASID.
+    pub const ASID_POOL_ASSIGN: usize = 12;
+}
+
+/// Frame mapping attributes.
+pub mod attr {
+    /// Map without execute permission.
+    pub const EXECUTE_NEVER: usize = 1 << 0;
 }
 
 /// Capability rights, as in seL4.
@@ -160,8 +187,10 @@ pub mod init_slot {
     pub const VSPACE: usize = 3;
     pub const IPC_BUFFER: usize = 4;
     pub const BOOT_INFO: usize = 5;
+    /// The ASID pool: assigns identifiers to new address spaces.
+    pub const ASID_POOL: usize = 6;
     /// The first slot of the ranges listed in `BootInfo`.
-    pub const FIRST_FREE: usize = 6;
+    pub const FIRST_FREE: usize = 7;
 }
 
 /// A range of slots in the root task's CNode, `start..end`.

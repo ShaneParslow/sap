@@ -51,7 +51,7 @@ Each interrupt increments a tick counter, programs the next deadline, which also
 
 ## Boot check
 
-`boot_checks` (`kernel/main.rs:45`) triggers an `ebreak` and confirms execution resumes, then waits in the idle loop (`arch::idle_once`, `kernel/arch/riscv/mod.rs:85`) for ten ticks, which takes about 100 ms.
+`boot_checks` (`kernel/main.rs:45`) triggers an `ebreak` and confirms execution resumes, then waits in the idle loop (`arch::idle_once`, `kernel/arch/riscv/mod.rs:90`) for ten ticks, which takes about 100 ms.
 
 > [!todo] Not built
 > Floating-point state save and restore; external interrupts (PLIC); fault delivery over IPC.

@@ -53,6 +53,11 @@ pub fn activate_vspace(cap: crate::cap::Cap) -> bool {
     vspace::activate(cap)
 }
 
+/// Handle an invocation of an architecture capability.
+pub fn invoke(slot: *mut crate::cspace::Slot, cap: ArchCap, message: &mut crate::invocation::Message) -> Result<usize, usize> {
+    vspace::invoke(slot, cap, message)
+}
+
 /// What deleting an architecture capability does to the page tables.
 pub fn finalise_cap(cap: ArchCap, last: bool) {
     vspace::finalise(cap, last)

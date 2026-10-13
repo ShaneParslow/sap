@@ -13,7 +13,7 @@ The kernel loads exactly one program, the **root task**, as seL4 does. Every oth
 
 ## Building it
 
-The root task is `user/init`, its own crate. The kernel's build script (`kernel/build.rs`) runs Cargo on it, always in release mode, with the build directory inside the kernel's build output, and passes the result's path to the kernel, which embeds it with `include_bytes!` (`kernel/root_task.rs:26`). The script runs Cargo from the init crate's directory so that crate's `.cargo/config.toml` applies, and clears the outer build's compiler flags, which would otherwise override it.
+The root task is `user/init`, its own crate. The kernel's build script (`kernel/build.rs`) runs Cargo on it, always in release mode, with the build directory inside the kernel's build output, and passes the result's path to the kernel, which embeds it with `include_bytes!` (`kernel/root_task.rs:25`). The script runs Cargo from the init crate's directory so that crate's `.cargo/config.toml` applies, and clears the outer build's compiler flags, which would otherwise override it.
 
 `user/init` is linked as a **static position-independent executable** (`-C relocation-model=pie`, `--pie --no-dynamic-linker`), in line with the decision that all code is position-independent ([[prog-loading]]). Each segment starts on its own page (`-z separate-loadable-segments`), so segments can be mapped with different permissions. The precompiled `core` library for this target isn't position-independent, so its vtables need relocations in read-only segments; `-z notext` allows that, and the loader applies relocations before mapping anything (`user/init/build.rs`).
 
