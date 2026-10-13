@@ -67,6 +67,16 @@ pub mod label {
     pub const CNODE_MINT: usize = 4;
     /// MR0..MR3 as COPY. Move the capability; the source slot ends empty.
     pub const CNODE_MOVE: usize = 5;
+
+    // Untyped memory.
+    /// MR0 = object type (`object`), MR1 = size bits (for untyped: log2 of
+    /// its size; for CNodes: log2 of the slot count; ignored otherwise),
+    /// MR2 = node index, MR3 = node depth, MR4 = node offset, MR5 = count;
+    /// extra cap 0 = the root CNode the node is addressed from. Create
+    /// `count` objects, with capabilities in slots `offset..offset+count` of
+    /// the CNode the node index and depth name; depth 0 names the root
+    /// CNode itself.
+    pub const UNTYPED_RETYPE: usize = 6;
 }
 
 /// Capability rights, as in seL4.
@@ -82,7 +92,20 @@ pub mod rights {
 pub mod object {
     pub const UNTYPED: usize = 0;
     pub const TCB: usize = 1;
+    pub const ENDPOINT: usize = 2;
+    pub const NOTIFICATION: usize = 3;
     pub const CNODE: usize = 4;
+    // RISC-V.
+    pub const PAGE_TABLE: usize = 5;
+    pub const FRAME_4K: usize = 6;
+    pub const FRAME_2M: usize = 7;
+    pub const FRAME_1G: usize = 8;
+
+    /// Smallest and largest untyped objects, in bits.
+    pub const MIN_UNTYPED_BITS: usize = 4;
+    pub const MAX_UNTYPED_BITS: usize = 38;
+    /// Most objects one retype creates.
+    pub const MAX_RETYPE_COUNT: usize = 256;
 }
 
 /// The message info word: label (bits 12..), extra capabilities (7..9) and

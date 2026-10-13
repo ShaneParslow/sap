@@ -1,8 +1,8 @@
 ---
 status: implemented
-summary: Capabilities as implemented today, following seL4 - the capability representation, CNodes of 64-byte slots, the derivation tree kept as a linked list through the slots, resolving capability addresses through guarded CNodes, delete and revoke with finalisation, the CALL invocation path and its message format, the CNode operations, and the capabilities the root task starts with.
+summary: Capabilities as implemented today, following seL4 - the capability representation, CNodes of 64-byte slots, the derivation tree kept as a linked list through the slots, resolving capability addresses through guarded CNodes, delete and revoke with finalisation, the CALL invocation path and its message format, CNode operations, retyping untyped memory into objects, and the capabilities the root task starts with.
 updated: 2026-10-13
-code: [kernel/cap.rs, kernel/cspace.rs, kernel/invocation.rs, kernel/thread.rs, kernel/root_task.rs, kernel/arch/riscv/caps.rs, kernel/arch/riscv/vspace.rs, abi/lib.rs, user/libsap/sys.rs, user/libsap/cnode.rs, user/init/main.rs]
+code: [kernel/cap.rs, kernel/cspace.rs, kernel/invocation.rs, kernel/untyped.rs, kernel/thread.rs, kernel/root_task.rs, kernel/arch/riscv/caps.rs, kernel/arch/riscv/vspace.rs, abi/lib.rs, user/libsap/sys.rs, user/libsap/cnode.rs, user/libsap/untyped.rs, user/init/main.rs]
 sources: ["[[2026-10-08-22c3947b-wiki-setup]]"]
 ---
 
@@ -32,7 +32,7 @@ A `Slot` (`kernel/cspace.rs:28`) holds a capability and its links in the derivat
 ## The derivation tree
 
 Every slot is on one doubly linked list, seL4's "mapping database", ordered so that a capability's descendants follow it directly. Nothing is allocated; the links live in the slots.
-- **Inserting.** An original (a boot capability, or later a newly retyped object) starts a tree, or goes right after the untyped memory it came from (`insert_original`, line 132). A copy goes right after its source (`insert_derived`, line 151).
+- **Inserting.** An original (a boot capability, or a newly retyped object) starts a tree, or goes right after the untyped memory it came from (`insert_original`, line 132). A copy goes right after its source (`insert_derived`, line 151).
 - **Parenthood is computed, not stored.** `b` is a child of `a` if `a` is *revocable* and `b`'s object lies within `a`'s (`is_parent_of`, line 224; `Cap::same_region_as` in `cap.rs`). Originals are revocable, and so are copies of untyped memory (`Cap::is_revocable_copy`), as in seL4. So a copy of a TCB capability is a sibling, while a copy of untyped memory is a child and owns what is later retyped through it.
 - **Moving** keeps the capability's place in the list (`move_cap`, line 166).
 
@@ -55,9 +55,9 @@ The slot is emptied *before* finalisation, so a CNode that contains the slot bei
 
 ## Invocation
 
-`CALL` (`kernel/invocation.rs:63`) takes the invoked capability's address in `a0`, a message info word in `a1` (label, number of extra capabilities, length, laid out as in seL4, `abi/lib.rs:91`), and message words 0–3 in `a2`–`a5`. Words 4 and up, and the addresses of up to three extra capabilities, are in the thread's IPC buffer (`abi/lib.rs:119`), a 1 KiB block the kernel reaches through the frame capability in the TCB. The reply's label is an error code (`abi/lib.rs:33`, numbered as seL4's) and its result words come back in the same registers.
+`CALL` (`kernel/invocation.rs:64`) takes the invoked capability's address in `a0`, a message info word in `a1` (label, number of extra capabilities, length, laid out as in seL4, `abi/lib.rs:114`), and message words 0–3 in `a2`–`a5`. Words 4 and up, and the addresses of up to three extra capabilities, are in the thread's IPC buffer (`abi/lib.rs:142`), a 1 KiB block the kernel reaches through the frame capability in the TCB. The reply's label is an error code (`abi/lib.rs:33`, numbered as seL4's) and its result words come back in the same registers.
 
-The capability's type picks the object, and the label picks the operation (`abi/lib.rs:54`). CNodes support (`kernel/invocation.rs:91`):
+The capability's type picks the object, and the label picks the operation (`abi/lib.rs:54`). CNodes support (`kernel/invocation.rs:116`):
 
 | Operation | Effect |
 |---|---|
@@ -67,9 +67,25 @@ The capability's type picks the object, and the label picks the operation (`abi/
 | `MINT` | `COPY` plus a new guard for a CNode capability |
 | `MOVE` | move a capability to an empty slot |
 
-Derivation follows seL4's `deriveCap` (line 140): untyped memory can only be copied while nothing has been retyped from it (`REVOKE_FIRST` otherwise), and a copied frame capability starts unmapped. A destination that isn't empty gives `DELETE_FIRST`; an address that doesn't resolve gives `FAILED_LOOKUP`. Kernel object methods are plain constants in `sap-abi` for now; a `TODO` says to generate them from a Cap'n Proto schema (roadmap D5, [[cap-process-authority#Runtime capabilities and declared imports]]).
+Derivation follows seL4's `deriveCap` (line 165): untyped memory can only be copied while nothing has been retyped from it (`REVOKE_FIRST` otherwise), and a copied frame capability starts unmapped. A destination that isn't empty gives `DELETE_FIRST`; an address that doesn't resolve gives `FAILED_LOOKUP`. Kernel object methods are plain constants in `sap-abi` for now; a `TODO` says to generate them from a Cap'n Proto schema (roadmap D5, [[cap-process-authority#Runtime capabilities and declared imports]]).
 
-On the user side, `libsap` (`user/libsap/`) wraps `CALL` (`sys::call`, `user/libsap/sys.rs:42`) and the CNode operations (`user/libsap/cnode.rs`).
+On the user side, `libsap` (`user/libsap/`) wraps `CALL` (`sys::call`, `user/libsap/sys.rs:42`), the CNode operations (`user/libsap/cnode.rs`) and retype (`user/libsap/untyped.rs`).
+
+## Retyping untyped memory
+
+Retyping is the only way kernel objects come into existence after boot, so every object's memory is charged to whoever held the untyped capability ([[kernel-objects-and-syscalls#Kernel memory]]). `UNTYPED_RETYPE` (`kernel/invocation.rs:90`, `kernel/untyped.rs:61`) takes an object type (`abi/lib.rs:92`), a size where the type has one, a destination CNode named by (index, depth) from a root CNode passed as an extra capability (depth 0 names the root itself, as in seL4), and a range of empty slots in it, at most 256.
+
+| Type | Size of one object |
+|---|---|
+| Untyped | `1 << size_bits`, 16 bytes to 256 GiB |
+| TCB | 1 KiB |
+| CNode | `1 << size_bits` slots of 64 bytes, up to 2^26 slots (`MAX_CNODE_RADIX`, line 21) |
+| Page table | 4 KiB |
+| Frame | 4 KiB, 2 MiB or 1 GiB |
+
+Endpoints and notifications are accepted as types but refused until IPC exists (M4). Device untyped memory can only become frames or smaller untyped regions.
+
+Untyped memory is handed out with a **watermark**: each object goes at the next address aligned to its size, and the capability's `free_index` advances past it. Memory below the watermark is never handed out again while anything retyped from the region still exists. Once everything has been revoked, so the capability has no children (line 92), the next retype starts from zero. That is the only way memory is reclaimed, and why revoking untyped memory is how a parent takes back everything a child built from it. New objects are zeroed (except in device memory), and their capabilities are inserted as originals right after the untyped capability, so they are its children (`create`, line 121). Every check happens before anything changes, so a failed retype leaves no partial result: `NOT_ENOUGH_MEMORY` past the end of the region, `DELETE_FIRST` for an occupied slot, `RANGE_ERROR` for bad sizes or counts, `INVALID_ARGUMENT` for an unknown type.
 
 ## The root task's capabilities
 
@@ -89,7 +105,9 @@ ASIDs are a fixed table of 4,096 entries in the kernel (`kernel/arch/riscv/vspac
 
 ## Tests
 
-`user/init` checks copy, copy into an occupied slot, copy of a copy, move, copy from an emptied slot, delete, delete of an empty slot, revoking untyped memory (which deletes a copy and the copy's copy), an out-of-range slot, and a wrong depth, each against the expected error code (`user/init/main.rs`).
+`user/init` checks each operation against its expected error code (`user/init/main.rs`):
+- CNodes: copy, copy into an occupied slot, copy of a copy, move, copy from an emptied slot, delete, delete of an empty slot, revoking untyped memory (which deletes a copy and the copy's copy), an out-of-range slot, and a wrong depth.
+- Retype: carving a 64 KiB region from a larger one; retyping a CNode, a TCB, a page table and frames from it; an occupied destination; an unknown type; copying untyped memory that has children (`REVOKE_FIRST`); copying a capability into the new CNode through a two-level address; filling the region exactly, then `NOT_ENOUGH_MEMORY`; revoking the region, after which every object (including the copy inside the new CNode) is gone and the full 64 KiB can be retyped again.
 
 > [!todo] Not built
-> Retyping untyped memory (next), mapping frames and page tables, TCB invocations, endpoints and notifications, badges, zombie-style preemptible deletion, ASID pools.
+> Mapping frames and page tables (next), TCB invocations, endpoints and notifications, badges, zombie-style preemptible deletion, ASID pools.

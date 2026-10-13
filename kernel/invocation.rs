@@ -13,6 +13,7 @@ use crate::arch::UserContext;
 use crate::cap::Cap;
 use crate::cspace::{self, LookupError, Slot};
 use crate::thread::{self, Tcb};
+use crate::untyped;
 
 /// An invocation's result: the number of result words, or an error code.
 type Result<T = usize> = core::result::Result<T, usize>;
@@ -81,11 +82,35 @@ pub unsafe fn call(tcb: *const Tcb, context: &mut UserContext) {
 fn invoke(slot: *mut Slot, cap: Cap, message: &mut Message) -> Result {
     match cap {
         Cap::CNode { .. } => cnode(cap, message),
-        _ => {
-            let _ = slot;
-            Err(error::ILLEGAL_OPERATION)
-        }
+        Cap::Untyped { .. } => untyped(slot, message),
+        _ => Err(error::ILLEGAL_OPERATION),
     }
+}
+
+fn untyped(slot: *mut Slot, m: &mut Message) -> Result {
+    if m.info.label() != label::UNTYPED_RETYPE {
+        return Err(error::ILLEGAL_OPERATION);
+    }
+    let (_, root) = m.extra_cap(0)?;
+    // As in seL4, depth 0 names the root CNode itself.
+    let dest = match m.word(3)? {
+        0 => root,
+        depth => {
+            let node = cspace::lookup_target(root, m.word(2)?, depth)?;
+            // SAFETY: lookup returns live slots.
+            unsafe { (*node).cap }
+        }
+    };
+    let request = untyped::Request {
+        object_type: m.word(0)?,
+        size_bits: m.word(1)?,
+        dest,
+        offset: m.word(4)?,
+        count: m.word(5)?,
+    };
+    // SAFETY: slot is live and holds the invoked untyped capability.
+    unsafe { untyped::retype(slot, &request) }?;
+    Ok(0)
 }
 
 fn cnode(cnode: Cap, m: &mut Message) -> Result {

@@ -1,14 +1,12 @@
 //! RISC-V capabilities: page tables (one type for every level, as in seL4 on
 //! RISC-V) and frames of the three Sv39 page sizes.
 
-use sap_abi::rights;
+use sap_abi::{object, rights};
 
 /// Where a page table sits in an address space.
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PtMapping {
-    // TODO: constructed once page tables can be retyped (M3, untyped).
-    #[allow(dead_code)]
     Unmapped = 0,
     /// The root of an address space with this address-space identifier.
     Root { asid: u16 },
@@ -62,6 +60,29 @@ impl ArchCap {
             }
             other => other,
         }
+    }
+}
+
+/// log2 of the size of an architecture object type, or None if the type
+/// isn't one.
+pub fn object_bits(object_type: usize) -> Option<usize> {
+    match object_type {
+        object::PAGE_TABLE | object::FRAME_4K => Some(12),
+        object::FRAME_2M => Some(21),
+        object::FRAME_1G => Some(30),
+        _ => None,
+    }
+}
+
+pub fn is_frame_type(object_type: usize) -> bool {
+    matches!(object_type, object::FRAME_4K | object::FRAME_2M | object::FRAME_1G)
+}
+
+/// The capability for a new architecture object at physical `pa`.
+pub fn create_object(object_type: usize, pa: usize) -> ArchCap {
+    match object_type {
+        object::PAGE_TABLE => ArchCap::PageTable { pa, mapping: PtMapping::Unmapped },
+        frame => unmapped_frame(pa, object_bits(frame).expect("not a frame type") as u8, FRAME_RIGHTS_ALL),
     }
 }
 

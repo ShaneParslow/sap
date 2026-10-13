@@ -15,6 +15,7 @@ mod root_task;
 mod sched;
 mod syscall;
 mod thread;
+mod untyped;
 
 use core::panic::PanicInfo;
 

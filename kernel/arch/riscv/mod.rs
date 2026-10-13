@@ -9,7 +9,7 @@ pub mod timer;
 pub mod trap;
 mod vspace;
 
-pub use caps::{unmapped_frame, ArchCap, PtMapping, FRAME_RIGHTS_ALL};
+pub use caps::{create_object, is_frame_type, object_bits, unmapped_frame, ArchCap, PtMapping, FRAME_RIGHTS_ALL};
 pub use paging::{phys_to_virt, walk_user, AddressSpace, UserMapping, USER_END};
 pub use trap::UserContext;
 pub use vspace::assign_asid;
