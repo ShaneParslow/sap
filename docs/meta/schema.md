@@ -105,7 +105,7 @@ If a callout grows past a short paragraph, the page is really two pages; split i
 
 **Code.** In `implemented` pages, cite as `` `path/to/file.rs:42` `` or `` `path/to/file.rs:42-60` ``. Line numbers in a page are valid as of **the last commit that changed that page** (`git log -1 -- <page>`), so reading a citation at its commit is `git show <commit>:path/to/file.rs`. List every cited file in `code:`. `lint.py --stale` reports pages whose `code:` files have changed in later commits; such a page must be re-verified, and updating it in the same commit as the code change keeps it current. To cite code from a different point in history, pin it explicitly: `` `path:42@a1b2c3d` ``.
 
-**While `docs/` is not tracked by git** (the current setup), a page has no last commit, so `implemented` pages carry `verified: <commit>` in frontmatter: the commit their line citations are accurate for. `lint.py --stale` uses it when the page is untracked. When editing an implemented page, re-check its citations against `HEAD` and update `verified`.
+**Untracked pages.** Until 2026-10-13 `docs/` was not tracked by git, so `implemented` pages carried `verified: <commit>` in frontmatter, naming the commit their line citations matched; `lint.py --stale` still falls back to it for a page that has never been committed. Now that `docs/` is tracked, commit page updates with the code and drop `verified` when editing a page.
 
 **External facts** (specs, papers, projects) get a plain markdown link to the source when one exists, and a date for anything time-sensitive ("as of April 2026").
 

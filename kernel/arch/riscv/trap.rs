@@ -1,13 +1,19 @@
-//! Supervisor trap entry and dispatch, and the first entry to user mode.
+//! Supervisor trap entry and dispatch, and return to user mode.
 //!
-//! `sscratch` tells the entry code where the trap came from: it holds the
-//! kernel stack top while a user thread runs, and 0 while the kernel runs.
-//! A trap from user mode swaps it with `sp`, so the frame goes on the kernel
-//! stack; a trap from the kernel finds 0 and stays on the current stack.
+//! `sscratch` tells the entry code where a trap came from. While a user
+//! thread runs it holds the address of that thread's saved registers (the
+//! `UserContext` at the start of its TCB); while the kernel runs it is 0.
 //!
-//! TODO: there is one kernel stack (the boot stack), so only one user thread
-//! can exist. Per-thread kernel stacks or per-thread saved contexts come
-//! with threads as kernel objects (M3).
+//! - **From user mode**, the entry code saves the user registers straight
+//!   into the thread's TCB, as seL4 does, switches to the kernel stack and
+//!   calls `user_trap`. The kernel stack holds nothing between entries, so
+//!   one stack serves every thread.
+//! - **From the kernel** (the idle loop, boot checks, or a kernel bug), it
+//!   saves the registers on the current stack and calls `kernel_trap`,
+//!   which returns to the interrupted code.
+//!
+//! The kernel runs with interrupts disabled except in the idle loop, so
+//! kernel code is never preempted.
 //!
 //! `stvec` uses direct mode: every trap enters `trap_entry`, and Rust code
 //! dispatches on `scause`. Vectored mode would only skip that one dispatch
@@ -22,24 +28,66 @@ use riscv::register::{scause, stval, stvec};
 
 use super::timer;
 
-/// Registers saved by `trap_entry`; layout must match the assembly below.
+/// Saved registers. A thread's user registers live in its TCB in this form;
+/// traps from the kernel push one on the kernel stack. The layout must match
+/// the assembly below.
 #[repr(C)]
-pub struct TrapFrame {
+#[derive(Default)]
+pub struct UserContext {
     /// x0..x31; x[2] holds the interrupted sp.
     pub x: [usize; 32],
     pub sepc: usize,
     pub sstatus: usize,
 }
 
-const FRAME_SIZE: usize = core::mem::size_of::<TrapFrame>();
-const _: () = assert!(FRAME_SIZE == 34 * 8);
+const CONTEXT_SIZE: usize = core::mem::size_of::<UserContext>();
+const _: () = assert!(CONTEXT_SIZE == 34 * 8);
 
 /// `sstatus.SPP`: the privilege the trap came from (set = supervisor).
 const SSTATUS_SPP: usize = 1 << 8;
 /// `sstatus.SPIE`: interrupts are enabled after `sret`.
 const SSTATUS_SPIE: usize = 1 << 5;
-/// `sstatus.FS` = Initial: user code may use the FPU.
-const SSTATUS_FS_INITIAL: usize = 1 << 13;
+/// `sstatus.FS`: the floating-point unit's state. Off makes any FP
+/// instruction trap.
+const SSTATUS_FS: usize = 0b11 << 13;
+
+/// Registers holding syscall arguments and results: a0..a5.
+const A0: usize = 10;
+/// Register holding the syscall number: a7.
+const A7: usize = 17;
+
+impl UserContext {
+    /// Registers for a thread that starts at `entry` with stack `sp` and
+    /// `arg` in its first argument register, in user mode with interrupts
+    /// enabled.
+    ///
+    /// TODO: the FPU is off for user threads, since the kernel doesn't save
+    /// FP registers on a switch; a thread that uses it faults. Save and
+    /// restore FP state (lazily, on first use) before user code needs it.
+    pub fn new_user(entry: usize, sp: usize, arg: usize) -> Self {
+        let mut context = Self::default();
+        context.x[2] = sp;
+        context.x[A0] = arg;
+        context.sepc = entry;
+        let sstatus = riscv::register::sstatus::read().bits();
+        context.sstatus = (sstatus & !(SSTATUS_SPP | SSTATUS_FS)) | SSTATUS_SPIE;
+        context
+    }
+
+    pub fn syscall_number(&self) -> usize {
+        self.x[A7]
+    }
+
+    /// Syscall argument `i` (0..6).
+    pub fn arg(&self, i: usize) -> usize {
+        self.x[A0 + i]
+    }
+
+    /// Set syscall result `i` (0..6), returned in the argument registers.
+    pub fn set_result(&mut self, i: usize, value: usize) {
+        self.x[A0 + i] = value;
+    }
+}
 
 global_asm!(
     r#"
@@ -47,73 +95,85 @@ global_asm!(
     .balign 4                       # stvec requires 4-byte alignment
     .globl trap_entry
 trap_entry:
-    # From user mode, sscratch is the kernel stack top: swap so sp is on the
-    # kernel stack and sscratch holds the user sp. From the kernel,
-    # sscratch is 0: swap back, leaving sp unchanged and sscratch 0.
+    # From user mode, sscratch is the thread's UserContext: swap so sp points
+    # at it and sscratch holds the user sp. From the kernel, sscratch is 0:
+    # swap back, leaving sp unchanged and sscratch 0.
     csrrw   sp, sscratch, sp
-    bnez    sp, 1f
+    bnez    sp, .Lfrom_user
     csrrw   sp, sscratch, sp
-1:
-    # Make room for a TrapFrame.
-    addi    sp, sp, -{frame}
 
+    # --- Trap from the kernel: save a UserContext on the current stack. ---
+    addi    sp, sp, -{size}
     # Save every general register except x0 (always zero) and x2 (sp,
     # handled below). `.irp` repeats the line for each n: x1 goes to offset
-    # 8, x3 to 24, and so on, matching TrapFrame::x[n].
+    # 8, x3 to 24, and so on, matching UserContext::x[n].
     .irp n, 1,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31
     sd      x\n, \n*8(sp)
     .endr
-
-    # The interrupted sp: the user sp parked in sscratch, or, from the
-    # kernel, the current sp plus the frame. Leave sscratch 0: the kernel is
-    # running now.
-    csrrw   t0, sscratch, zero
-    bnez    t0, 2f
-    addi    t0, sp, {frame}
-2:  sd      t0, 2*8(sp)
-
-    # Save the trap's return address and the status register, which the
-    # handler may change (to skip an instruction) and which a nested trap
-    # would overwrite.
+    addi    t0, sp, {size}          # the interrupted sp
+    sd      t0, 2*8(sp)
     csrr    t0, sepc
     sd      t0, 32*8(sp)
     csrr    t0, sstatus
     sd      t0, 33*8(sp)
 
-    # trap_handler(&mut TrapFrame)
     mv      a0, sp
-    call    trap_handler
+    call    kernel_trap
 
-    # Return path, also used to enter user mode the first time (sp points
-    # at a prepared frame).
-    .globl trap_return
-trap_return:
-    # Restore sstatus. If returning to user mode (SPP clear), set sscratch
-    # to the kernel stack top so the next trap from user mode lands there.
+    # Return to the interrupted kernel code.
     ld      t0, 33*8(sp)
     csrw    sstatus, t0
-    andi    t1, t0, {spp}
-    bnez    t1, 3f
-    addi    t1, sp, {frame}
-    csrw    sscratch, t1
-3:
     ld      t0, 32*8(sp)
     csrw    sepc, t0
     .irp n, 1,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31
     ld      x\n, \n*8(sp)
     .endr
+    ld      sp, 2*8(sp)
+    sret
 
-    # Restore the interrupted sp last (user or kernel), then return to sepc
-    # in the mode recorded in sstatus.SPP.
+.Lfrom_user:
+    # --- Trap from user mode: sp is the thread's UserContext. ---
+    .irp n, 1,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31
+    sd      x\n, \n*8(sp)
+    .endr
+    # The user sp, parked in sscratch; leave sscratch 0 (kernel running).
+    csrrw   t0, sscratch, zero
+    sd      t0, 2*8(sp)
+    csrr    t0, sepc
+    sd      t0, 32*8(sp)
+    csrr    t0, sstatus
+    sd      t0, 33*8(sp)
+
+    # user_trap(&mut UserContext) on a fresh kernel stack. It never returns;
+    # it ends in return_to_user.
+    mv      a0, sp
+    lla     sp, __boot_stack_top
+    call    user_trap
+1:  j       1b
+
+    # return_to_user(context: *mut UserContext) -> !
+    .globl return_to_user
+return_to_user:
+    # From now until the next trap, a trap comes from this thread.
+    csrw    sscratch, a0
+    mv      sp, a0
+    ld      t0, 33*8(sp)
+    csrw    sstatus, t0
+    ld      t0, 32*8(sp)
+    csrw    sepc, t0
+    .irp n, 1,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31
+    ld      x\n, \n*8(sp)
+    .endr
+    # The user sp last, since sp addresses the context until now.
     ld      sp, 2*8(sp)
     sret
 "#,
-    frame = const FRAME_SIZE,
-    spp = const SSTATUS_SPP,
+    size = const CONTEXT_SIZE,
 );
 
 unsafe extern "C" {
     fn trap_entry();
+    fn return_to_user(context: *mut UserContext) -> !;
 }
 
 /// Point `stvec` at `trap_entry` (direct mode: all traps to one address),
@@ -127,68 +187,53 @@ pub fn init() {
     unsafe { stvec::write(stvec::Stvec::new(entry, stvec::TrapMode::Direct)) };
 }
 
+/// Resume user mode with the registers in `context`.
+pub fn resume_user(context: &mut UserContext) -> ! {
+    // SAFETY: `context` lives in a TCB, which outlives the thread running;
+    // return_to_user restores every register from it and srets.
+    unsafe { return_to_user(context) }
+}
+
 #[unsafe(no_mangle)]
-extern "C" fn trap_handler(frame: &mut TrapFrame) {
+extern "C" fn user_trap(context: &mut UserContext) -> ! {
     let cause = scause::read().cause();
-    let from_user = frame.sstatus & SSTATUS_SPP == 0;
     match cause.try_into::<Interrupt, Exception>() {
         Ok(Trap::Interrupt(Interrupt::SupervisorTimer)) => timer::on_interrupt(),
         Ok(Trap::Exception(Exception::UserEnvCall)) => {
-            // Return past the ecall (always 4 bytes) with the result in a0.
-            frame.sepc += 4;
-            let args = [frame.x[10], frame.x[11], frame.x[12], frame.x[13], frame.x[14], frame.x[15]];
-            frame.x[10] = crate::syscall::handle(frame.x[17], args);
+            // Return past the ecall, which is always 4 bytes.
+            context.sepc += 4;
+            crate::syscall::handle(context);
         }
-        Ok(Trap::Exception(Exception::Breakpoint)) if !from_user => {
+        _ => {
+            // TODO: deliver user faults to the thread's fault handler over
+            // IPC, as seL4 does (M4). Until then a fault ends the boot.
+            crate::error!(
+                "user fault: {cause:?} at pc {:#x}, address {:#x}",
+                context.sepc,
+                stval::read()
+            );
+            super::shutdown(true)
+        }
+    }
+    crate::sched::run()
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn kernel_trap(frame: &mut UserContext) {
+    let cause = scause::read().cause();
+    match cause.try_into::<Interrupt, Exception>() {
+        Ok(Trap::Interrupt(Interrupt::SupervisorTimer)) => timer::on_interrupt(),
+        Ok(Trap::Exception(Exception::Breakpoint)) => {
             crate::debug!("breakpoint at {:#x}", frame.sepc);
             // Resume after the ebreak. This is the standard way to continue
             // from a breakpoint: sepc points at the ebreak itself.
             frame.sepc += instruction_len(frame.sepc);
-        }
-        _ if from_user => {
-            // TODO: deliver user faults to the thread's fault handler over
-            // IPC, as seL4 does (M3/M4). For now the only user thread is the
-            // root task, and a fault in it ends the boot.
-            crate::error!(
-                "user fault: {cause:?} at pc {:#x}, address {:#x}",
-                frame.sepc,
-                stval::read()
-            );
-            super::shutdown(true)
         }
         _ => panic!(
             "unhandled trap {cause:?} at sepc {:#x}, stval {:#x}",
             frame.sepc,
             stval::read()
         ),
-    }
-}
-
-unsafe extern "C" {
-    static __boot_stack_top: u8;
-}
-
-/// Enter user mode at `entry` with stack pointer `sp`, in the address space
-/// that is currently active. Never returns: later traps from user mode start
-/// again at the top of the kernel stack.
-pub fn enter_user(entry: usize, sp: usize) -> ! {
-    let stack_top = &raw const __boot_stack_top as usize;
-    let frame = (stack_top - FRAME_SIZE) as *mut TrapFrame;
-    let sstatus = riscv::register::sstatus::read().bits();
-    let user = TrapFrame {
-        x: {
-            let mut x = [0; 32];
-            x[2] = sp;
-            x
-        },
-        sepc: entry,
-        sstatus: (sstatus & !SSTATUS_SPP) | SSTATUS_SPIE | SSTATUS_FS_INITIAL,
-    };
-    // SAFETY: the frame sits at the top of the kernel stack, below which
-    // nothing live remains once we jump; trap_return restores it and srets.
-    unsafe {
-        frame.write(user);
-        core::arch::asm!("mv sp, {0}", "j trap_return", in(reg) frame, options(noreturn));
     }
 }
 

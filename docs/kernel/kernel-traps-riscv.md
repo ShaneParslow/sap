@@ -1,9 +1,8 @@
 ---
 status: implemented
-summary: How the kernel takes traps on RISC-V today - one direct-mode vector that switches to the kernel stack for traps from user mode via sscratch, a shared return path that also enters user mode, a Rust dispatcher for the timer, breakpoints, syscalls and user faults, and periodic timer interrupts through the SBI TIME extension.
-updated: 2026-10-11
-verified: 1be5924
-code: [kernel/arch/riscv/trap.rs, kernel/arch/riscv/timer.rs, kernel/arch/riscv/sbi.rs, kernel/arch/riscv/mod.rs, kernel/main.rs, kernel/syscall.rs]
+summary: How the kernel takes traps on RISC-V today - one direct-mode vector that saves user registers straight into the current thread's TCB (found through sscratch) and kernel-mode traps on the stack, separate Rust handlers for each, a return path that resumes any thread, and periodic timer interrupts through the SBI TIME extension.
+updated: 2026-10-13
+code: [kernel/arch/riscv/trap.rs, kernel/arch/riscv/timer.rs, kernel/arch/riscv/sbi.rs, kernel/arch/riscv/mod.rs, kernel/main.rs, kernel/syscall.rs, kernel/sched.rs]
 sources: ["[[2026-10-08-22c3947b-wiki-setup]]"]
 ---
 
@@ -13,45 +12,45 @@ Part of roadmap milestone M2 ([[roadmap]]): the kernel takes traps from itself a
 
 ## Trap entry and return
 
-`trap::init` (`kernel/arch/riscv/trap.rs:122`) sets `sscratch` to 0 (firmware may leave it set) and writes `stvec` in direct mode: every trap enters `trap_entry`. Vectored mode would only skip one dispatch for interrupts, since exceptions, syscalls included, always use the base address, so direct mode stays.
+`trap::init` (`kernel/arch/riscv/trap.rs:182`) sets `sscratch` to 0 (firmware may leave it set) and writes `stvec` in direct mode: every trap enters `trap_entry` (line 97). Vectored mode would only skip one dispatch for interrupts, since exceptions, syscalls included, always use the base address, so direct mode stays.
 
-**Where the frame goes.** `sscratch` holds the kernel stack top while user code runs and 0 while the kernel runs. `trap_entry` (`trap.rs:49`) swaps it with `sp` (line 53). Nonzero means the trap came from user mode, and `sp` is now on the kernel stack. Zero means the kernel was running, and swapping back (line 55) leaves `sp` unchanged.
+`sscratch` tells the entry code where a trap came from. While a user thread runs it holds the address of that thread's saved registers, the `UserContext` (`trap.rs:36`) at the start of its thread control block ([[kernel-threads]]); while the kernel runs it is 0. `trap_entry` swaps it with `sp` and branches on the result.
 
-**Saving.** It pushes a `TrapFrame` (`trap.rs:27`): registers x1 and x3–x31, the interrupted stack pointer in the x2 slot (from `sscratch` for a user trap, otherwise the current `sp` plus the frame), then `sepc` and `sstatus`. `sscratch` is left 0 while the kernel runs. The frame is 34 words, and a compile-time assertion checks the Rust layout against the assembly offsets. The assembly is commented line by line.
+**From user mode** (`.Lfrom_user`, `trap.rs:134`): `sp` now points at the thread's `UserContext`. The code saves x1 and x3–x31 there, the user stack pointer from `sscratch` (line 140, which also resets `sscratch` to 0), then `sepc` and `sstatus`. It switches to the top of the kernel stack (line 150) and calls `user_trap`, which never returns. Because user registers live in the TCB, the kernel stack holds nothing between entries, and one stack serves every thread, as in seL4.
 
-**Returning** (`trap_return`, `trap.rs:90`). It restores `sstatus`. If the trap is returning to user mode (`sstatus.SPP` clear), it first sets `sscratch` to the kernel stack top (line 98), so the next user trap lands there. Then it restores `sepc` and the registers, the stack pointer last, and executes `sret`.
+**From the kernel**: the code pushes a `UserContext` on the current stack, calls `kernel_trap`, restores, and returns to the interrupted kernel code. This happens in the idle loop and the boot checks, the only places the kernel enables interrupts, and on kernel bugs.
 
-The same return path enters user mode the first time: `enter_user` (`trap.rs:174`) builds a frame at the top of the kernel stack and jumps to `trap_return` ([[kernel-root-task]]).
+**Returning to user mode** (`return_to_user`, `trap.rs:156`): given any thread's `UserContext`, it sets `sscratch` to it (line 158), so the thread's next trap saves into its own TCB, then restores `sstatus`, `sepc` and all registers, the stack pointer last, and executes `sret`. The scheduler calls it, through `arch::return_to_user`, to resume whichever thread it picks.
 
-On trap entry the hardware clears `sstatus.SIE`, so the handler runs with interrupts disabled; `sret` restores them from `SPIE`. In user mode, supervisor interrupts are always taken.
+`UserContext` is 34 words, checked by a compile-time assertion against the assembly offsets, and the assembly is commented line by line. It also gives generic code an architecture-neutral view of syscalls: `syscall_number` (`a7`), `arg(i)` and `set_result(i)` (`a0`–`a5`) (lines 77–87). `UserContext::new_user` (line 67) builds a new thread's registers: user mode, interrupts on after `sret`, and the FPU off. A `TODO` there notes the kernel doesn't save floating-point registers on a switch, so a thread that uses the FPU faults until lazy FP save and restore exists.
 
-A `TODO` notes there is one kernel stack, the boot stack, so only one user thread can exist; per-thread kernel stacks or saved contexts arrive with threads as kernel objects (M3).
+On trap entry the hardware clears `sstatus.SIE`, so kernel code always runs with interrupts disabled; it is never preempted. In user mode, supervisor interrupts are always taken.
 
 ## Dispatch
 
-`trap_handler` (`trap.rs:131`) reads `scause` through the `riscv` crate and matches on its supervisor `Interrupt` and `Exception` enums:
+`user_trap` (`trap.rs:198`) handles traps from user mode, then calls the scheduler, which picks the thread to resume ([[kernel-threads#Scheduler]]):
 
-| Cause | From | Handling |
-|---|---|---|
-| Supervisor timer interrupt | either | `timer::on_interrupt` |
-| Environment call from user mode | user | syscall: `sepc += 4`, number from `a7`, arguments `a0`–`a5`, result in `a0` (`kernel/syscall.rs`) |
-| Breakpoint | kernel | logged at debug level; `sepc` advanced past the `ebreak` |
-| Anything else | user | logged as a user fault, then shutdown with failure |
-| Anything else | kernel | panic with cause, `sepc` and `stval` |
+| Cause | Handling |
+|---|---|
+| Supervisor timer interrupt | `timer::on_interrupt`, which also counts the tick against the current thread's time slice |
+| Environment call | syscall: `sepc += 4`, then `syscall::handle` with the thread's registers |
+| Anything else | logged as a user fault, then shutdown with failure |
 
-Skipping a breakpoint uses the instruction's real length (`instruction_len`, `trap.rs:196`), since `ebreak` may be the 2-byte compressed `c.ebreak`; the low two bits of the first halfword are `11` only for 4-byte instructions. A user fault ends the boot because the root task is the only user thread; a `TODO` marks delivering faults to a handler over IPC, as seL4 does.
+A `TODO` marks delivering user faults to a fault handler over IPC, as seL4 does (M4).
+
+`kernel_trap` (`trap.rs:222`) handles the timer, breakpoints (logged, and `sepc` advanced past the `ebreak` using the instruction's real length, since `ebreak` may be the 2-byte `c.ebreak`), and panics on anything else.
 
 ## Timer
 
-`timer::init` (`kernel/arch/riscv/timer.rs:20`) records the timer frequency from the boot information ([[kernel-boot-riscv]]). `timer::start(hz)` (`timer.rs:33`) computes the interval in timer ticks, programs the first deadline with the SBI TIME extension's `set_timer` (`kernel/arch/riscv/sbi.rs:50`), and enables the supervisor timer interrupt in `sie`. Interrupts are taken in the kernel only after `enable_interrupts` (`kernel/arch/riscv/mod.rs:81`) sets `sstatus.SIE`.
+`timer::init` (`kernel/arch/riscv/timer.rs:20`) records the timer frequency from the boot information ([[kernel-boot-riscv]]). `kmain` starts the timer at 100 Hz (`TICK_HZ`, `kernel/main.rs:38`) and it runs from then on: `timer::start(hz)` (`timer.rs:33`) computes the interval in timer ticks, programs the first deadline with the SBI TIME extension's `set_timer` (`kernel/arch/riscv/sbi.rs:50`), and enables the supervisor timer interrupt in `sie`.
 
-Each interrupt increments a tick counter and programs the next deadline, which also clears the pending interrupt. `now` (`timer.rs:16`) reads the `time` CSR, which every application-class core has (Zicntr). Deadlines passed to `set_timer` are absolute values of the same counter, so the two always agree.
+Each interrupt increments a tick counter, programs the next deadline, which also clears the pending interrupt, and calls `sched::tick` (line 56). `now` (`timer.rs:16`) reads the `time` CSR, which every application-class core has (Zicntr). Deadlines passed to `set_timer` are absolute values of the same counter, so the two always agree.
 
 `set_timer` traps into firmware on every tick. A `TODO` at `sbi.rs` marks using the Sstc extension, which lets the kernel write `stimecmp` directly, when the hardware has it ([[hw-isa#Handling extension variation]]).
 
 ## Boot check
 
-`boot_checks` (`kernel/main.rs:32`) triggers an `ebreak` and confirms execution resumes, then runs the timer at 100 Hz and waits in `wfi` for ten ticks, which takes about 100 ms. The timer keeps running while the root task runs, so user code is interrupted and resumed about every 10 ms.
+`boot_checks` (`kernel/main.rs:41`) triggers an `ebreak` and confirms execution resumes, then waits in the idle loop (`arch::idle_once`, `kernel/arch/riscv/mod.rs:59`) for ten ticks, which takes about 100 ms.
 
 > [!todo] Not built
-> Per-thread kernel stacks or contexts; floating-point state save and restore (user code may use the FPU, and only one user thread exists); external interrupts (PLIC); fault delivery over IPC.
+> Floating-point state save and restore; external interrupts (PLIC); fault delivery over IPC.

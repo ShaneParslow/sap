@@ -191,6 +191,11 @@ impl AddressSpace {
         *entry = Entry::new(pa, flags | Flags::VALID | Flags::ACCESSED | Flags::DIRTY);
     }
 
+    /// Physical address of the root table.
+    pub fn root(&self) -> usize {
+        self.root
+    }
+
     /// Switch this hart to this address space.
     ///
     /// # Safety
@@ -199,6 +204,20 @@ impl AddressSpace {
     pub unsafe fn activate(&self) {
         // SAFETY: per the caller's guarantee. ASID 0 for the kernel.
         unsafe { satp::set(satp::Mode::Sv39, 0, self.root >> 12) };
+        riscv::asm::sfence_vma_all();
+    }
+}
+
+/// Switch to the address space rooted at physical address `root`, unless it
+/// is already active.
+///
+/// TODO: all user address spaces share ASID 0, so every switch flushes the
+/// whole TLB; give each its own ASID (M3, address spaces).
+pub fn activate_root(root: usize) {
+    if satp::read().ppn() != root >> 12 {
+        // SAFETY: user address spaces share the kernel's upper half, so the
+        // kernel stays mapped across the switch.
+        unsafe { satp::set(satp::Mode::Sv39, 0, root >> 12) };
         riscv::asm::sfence_vma_all();
     }
 }

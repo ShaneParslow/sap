@@ -1,8 +1,7 @@
 ---
 status: implemented
 summary: How the kernel boots on QEMU virt riscv64 today - OpenSBI enters _start in S-mode, the entry code turns on a boot page table and jumps to the kernel's upper-half address, riscv_start turns the device tree into architecture-neutral boot information and sets up traps, paging and the timer, and kmain runs boot checks and starts the root task. Also the console, log and shutdown.
-updated: 2026-10-11
-verified: 1be5924
+updated: 2026-10-13
 code: [kernel/Cargo.toml, kernel/build.rs, kernel/.cargo/config.toml, kernel/arch/riscv/linker.ld, kernel/arch/riscv/entry.rs, kernel/arch/riscv/mod.rs, kernel/arch/riscv/sbi.rs, kernel/arch/riscv/test_device.rs, kernel/arch/mod.rs, kernel/boot.rs, kernel/devicetree.rs, kernel/console.rs, kernel/log.rs, kernel/main.rs]
 sources: ["[[2026-10-08-22c3947b-wiki-setup]]"]
 ---
@@ -23,14 +22,14 @@ A successful run prints the OpenSBI banner, the kernel log, the root task's gree
 
 1. **Firmware.** OpenSBI runs in M-mode, then jumps to the image's physical address (`0x80200000` on QEMU) in S-mode with `a0` = hart id and `a1` = the device tree's physical address. Only one hart is started; the others stay parked in the firmware. With `-smp 4` the boot hart varies from run to run.
 2. **Entry** (`_start`, `kernel/arch/riscv/entry.rs:22`). Runs with the MMU off at the physical address, so it uses only PC-relative addressing. It records the image's physical address (line 25), zeroes `.bss`, builds a boot page table, enables Sv39 (line 96), and jumps to `high_entry` (line 113) at the kernel's linked address `0xffffffff80000000`, where it sets the stack and calls `riscv_start`. The boot page table is described in [[kernel-memory-riscv#Boot page table]].
-3. **`riscv_start`** (`kernel/arch/riscv/mod.rs:23`), the RISC-V half of boot:
+3. **`riscv_start`** (`kernel/arch/riscv/mod.rs:24`), the RISC-V half of boot:
    - records the image's physical address and installs the trap vector;
    - finds QEMU's test device, *before* anything else can panic, so even an early panic exits QEMU with a failure status;
    - parses the device tree into a `BootInfo` and adds the kernel image to the reserved regions;
    - builds the kernel's own page tables from free memory and switches to them ([[kernel-memory-riscv]]);
    - gives the timer its frequency;
    - calls `kmain` with the boot information and the boot allocator.
-4. **`kmain`** (`kernel/main.rs:21`), the architecture-neutral kernel: logs the boot information and free memory, runs `boot_checks` (line 32), and starts the root task ([[kernel-root-task]]). The boot checks exercise each implemented piece so `cargo run` shows it working (currently a breakpoint trap and ten timer ticks, [[kernel-traps-riscv]]).
+4. **`kmain`** (`kernel/main.rs:24`), the architecture-neutral kernel: logs the boot information and free memory, starts the timer at 100 Hz, runs `boot_checks` (line 41), loads the root task ([[kernel-root-task]]), and starts the scheduler ([[kernel-threads]]). The boot checks exercise each implemented piece so `cargo run` shows it working (currently a breakpoint trap and ten timer ticks, [[kernel-traps-riscv]]).
 
 ## Boot information
 
@@ -61,13 +60,13 @@ Sizes are logged with `Bytes` (`kernel/boot.rs:104`): the smallest binary unit t
 
 The kernel log (`kernel/log.rs`) adds levels: `error!`, `warn!`, `info!`, `debug!`, `trace!` print `[level] message`. `MAX_LEVEL` (`kernel/log.rs:13`) is `Debug` in debug builds and `Info` in release; suppressed levels compile away.
 
-`console_write` (`kernel/arch/riscv/mod.rs:62`) probes the SBI Debug Console extension (DBCN) on first use. With DBCN, a whole buffer is written per call (`kernel/arch/riscv/sbi.rs:16`); the firmware reads it by physical address, so the buffer's address is translated first. Anything the kernel prints is in the image or the direct map, which are physically contiguous. Without DBCN, it falls back to the legacy one-byte `putchar` (`sbi.rs:30`). SBI calls go through the `sbi-rt` crate; `sbi.rs` adapts it to what the kernel needs.
+`console_write` (`kernel/arch/riscv/mod.rs:74`) probes the SBI Debug Console extension (DBCN) on first use. With DBCN, a whole buffer is written per call (`kernel/arch/riscv/sbi.rs:16`); the firmware reads it by physical address, so the buffer's address is translated first. Anything the kernel prints is in the image or the direct map, which are physically contiguous. Without DBCN, it falls back to the legacy one-byte `putchar` (`sbi.rs:30`). SBI calls go through the `sbi-rt` crate; `sbi.rs` adapts it to what the kernel needs.
 
 ## Shutdown and panics
 
-`arch::shutdown(failure)` (`kernel/arch/riscv/mod.rs:75`) first tries QEMU's test device (`kernel/arch/riscv/test_device.rs:24`): it writes `0x5555` (pass) or `0x3333 | code << 16` (fail, code 1), and QEMU exits with status 0 or the code. OpenSBI's own shutdown can't report failure under QEMU, which is why the test device exists; it only serves automated test runs. Without it, shutdown uses the SBI System Reset extension (`sbi.rs:35`) with reason "none" or "system failure", and halts if that returns.
+`arch::shutdown(failure)` (`kernel/arch/riscv/mod.rs:87`) first tries QEMU's test device (`kernel/arch/riscv/test_device.rs:24`): it writes `0x5555` (pass) or `0x3333 | code << 16` (fail, code 1), and QEMU exits with status 0 or the code. OpenSBI's own shutdown can't report failure under QEMU, which is why the test device exists; it only serves automated test runs. Without it, shutdown uses the SBI System Reset extension (`sbi.rs:35`) with reason "none" or "system failure", and halts if that returns.
 
-The panic handler (`kernel/main.rs:49`) logs at error level and shuts down with failure. Panics abort; there is no unwinding. A `TODO` there is a frame-pointer backtrace for debug builds.
+The panic handler (`kernel/main.rs:57`) logs at error level and shuts down with failure. Panics abort; there is no unwinding. A `TODO` there is a frame-pointer backtrace for debug builds.
 
 > [!todo] Not built
 > Starting the other harts (SMP); honoring `no-map` reservations ([[kernel-memory-riscv]]); a backtrace on panic.

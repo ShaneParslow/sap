@@ -8,6 +8,7 @@ pub mod timer;
 pub mod trap;
 
 pub use paging::{phys_to_virt, AddressSpace, USER_END};
+pub use trap::UserContext;
 
 use core::sync::atomic::{AtomicU8, Ordering};
 
@@ -42,12 +43,23 @@ extern "C" fn riscv_start(hart_id: usize, dtb: usize, image_pa: usize) -> ! {
     crate::kmain(boot, alloc)
 }
 
-/// Switch to `space` and run user code at `entry` with stack `sp`.
-pub fn enter_user(space: &AddressSpace, entry: usize, sp: usize) -> ! {
-    // SAFETY: a user address space shares the kernel's upper half, so the
-    // kernel stays mapped after the switch.
-    unsafe { space.activate() };
-    trap::enter_user(entry, sp)
+/// Switch to the address space whose root page table is at physical
+/// address `root`, if it isn't already active.
+pub fn activate_vspace(root: usize) {
+    paging::activate_root(root);
+}
+
+/// Resume a thread in user mode with the registers in `context`.
+pub fn return_to_user(context: &mut UserContext) -> ! {
+    trap::resume_user(context)
+}
+
+/// Wait for an interrupt with interrupts enabled, handle it, and return
+/// with them disabled again. The idle loop.
+pub fn idle_once() {
+    enable_interrupts();
+    wait_for_interrupt();
+    disable_interrupts();
 }
 
 const CONSOLE_UNPROBED: u8 = 0;
@@ -81,6 +93,11 @@ pub fn shutdown(failure: bool) -> ! {
 pub fn enable_interrupts() {
     // SAFETY: the trap vector is installed before this is called.
     unsafe { riscv::register::sstatus::set_sie() };
+}
+
+pub fn disable_interrupts() {
+    // SAFETY: masking interrupts can't break any invariant.
+    unsafe { riscv::register::sstatus::clear_sie() };
 }
 
 /// Sleep until an interrupt arrives (or return spuriously).

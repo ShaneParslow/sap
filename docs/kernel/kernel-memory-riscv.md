@@ -1,8 +1,7 @@
 ---
 status: implemented
 summary: How the kernel manages memory on RISC-V today - Sv39 with the kernel in the upper half, a boot page table built in assembly, the kernel's own address space with per-section permissions and a direct map of RAM, free memory computed from the device tree, a boot-only bump allocator, and user address spaces that share the kernel half.
-updated: 2026-10-11
-verified: 1be5924
+updated: 2026-10-13
 code: [kernel/arch/riscv/entry.rs, kernel/arch/riscv/linker.ld, kernel/arch/riscv/paging.rs, kernel/arch/riscv/mod.rs, kernel/mm.rs, kernel/boot.rs]
 sources: ["[[2026-10-08-22c3947b-wiki-setup]]"]
 ---
@@ -36,12 +35,12 @@ It then jumps to the linked address by loading it from a literal (`.Lhigh_entry`
 
 ## Kernel address space
 
-`paging::init` (`kernel/arch/riscv/paging.rs:230`) builds the kernel's real address space and switches to it, replacing the boot table:
+`paging::init` (`kernel/arch/riscv/paging.rs:249`) builds the kernel's real address space and switches to it, replacing the boot table:
 - the image, section by section, with the permissions above;
 - every RAM region in the direct map;
 - the devices the architecture code uses, today only QEMU's test device, in the direct map at their physical address.
 
-`AddressSpace::map` (line 163) maps a range with the largest pages that fit the alignment of both addresses and the remaining size; on QEMU the kernel's tables take 5–6 frames. Mapping over an existing mapping panics. Leaves get the accessed and dirty bits set up front, so hardware without automatic updates (Svade) doesn't fault on first use. `activate` (line 199) writes `satp` (Sv39, ASID 0) and flushes the TLB.
+`AddressSpace::map` (line 163) maps a range with the largest pages that fit the alignment of both addresses and the remaining size; on QEMU the kernel's tables take 5–6 frames. Mapping over an existing mapping panics. Leaves get the accessed and dirty bits set up front, so hardware without automatic updates (Svade) doesn't fault on first use. `activate` (line 204) writes `satp` (Sv39, ASID 0) and flushes the TLB. The scheduler switches between address spaces with `activate_root` (line 216), which skips the switch when the address space is already active; a `TODO` there notes every space uses ASID 0, so a switch flushes the whole TLB.
 
 `phys_to_virt` and `virt_to_phys` (lines 96, 101) translate between physical addresses and the direct map or image. The console uses `virt_to_phys` to hand SBI physical buffer addresses.
 

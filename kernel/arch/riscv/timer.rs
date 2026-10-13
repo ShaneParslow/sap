@@ -53,4 +53,5 @@ pub fn ticks() -> usize {
 pub(super) fn on_interrupt() {
     TICKS.fetch_add(1, Ordering::Relaxed);
     sbi::set_timer(now() + INTERVAL.load(Ordering::Relaxed));
+    crate::sched::tick();
 }

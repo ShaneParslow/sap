@@ -26,6 +26,7 @@ Pages are ordered by dependency: the first is a decision the others depend on, t
 | [[kernel-boot-riscv]] | implemented | OpenSBI to `_start`, the boot page table and jump to the upper half, `riscv_start` and architecture-neutral boot information, `kmain`, the console, log and shutdown. |
 | [[kernel-memory-riscv]] | implemented | Sv39 with the kernel in the upper half, the boot page table, per-section permissions, the direct map, free memory and the boot allocator, user address spaces. |
 | [[kernel-traps-riscv]] | implemented | Trap entry with the `sscratch` stack switch, the shared return path, dispatch of timer, breakpoints, syscalls and user faults, and SBI timer ticks. |
+| [[kernel-threads]] | implemented | Thread control blocks, fixed-priority round-robin scheduling with time slices, the idle loop, and lock-free kernel globals on one hart. |
 | [[kernel-root-task]] | implemented | The one program the kernel loads itself: building and embedding `user/init`, loading a position-independent ELF, entering user mode, and the temporary debug syscalls. |
 
 The kernel is Rust (`no_std`); its code is in `kernel/`, with architecture code under `kernel/arch/riscv/`.

@@ -5,10 +5,13 @@ mod arch;
 mod boot;
 mod console;
 mod devicetree;
+mod global;
 mod log;
 mod mm;
 mod root_task;
+mod sched;
 mod syscall;
+mod thread;
 
 use core::panic::PanicInfo;
 
@@ -22,25 +25,30 @@ pub fn kmain(boot: BootInfo, mut alloc: BootAllocator) -> ! {
     info!("sap: sapabilities online");
     boot.log();
     mm::log_free(alloc.free());
+    arch::timer::start(TICK_HZ);
     boot_checks();
     info!("boot checks passed");
 
-    root_task::start(&mut alloc)
+    root_task::start(&mut alloc);
+    sched::run()
 }
+
+/// Timer interrupts per second; the scheduler's time slices are counted in
+/// these ticks.
+const TICK_HZ: u64 = 100;
 
 /// Exercise what exists so far, so `cargo run` shows it working.
 fn boot_checks() {
     arch::trap::breakpoint();
     info!("trap: breakpoint handled and returned");
 
-    arch::timer::start(100);
-    arch::enable_interrupts();
+    let first = arch::timer::ticks();
     let start = arch::timer::now();
-    while arch::timer::ticks() < 10 {
-        arch::wait_for_interrupt();
+    while arch::timer::ticks() < first + 10 {
+        arch::idle_once();
     }
     let elapsed_us = arch::timer::to_micros(arch::timer::now() - start);
-    info!("timer: 10 ticks at 100 Hz in {elapsed_us} us");
+    info!("timer: 10 ticks at {TICK_HZ} Hz in {elapsed_us} us");
 }
 
 /// TODO: print a backtrace in debug builds by walking frame pointers (needs

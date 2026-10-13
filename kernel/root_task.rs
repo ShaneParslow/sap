@@ -9,9 +9,10 @@ use elf::abi::{EM_RISCV, ET_DYN, PF_R, PF_W, PF_X, PT_LOAD, R_RISCV_RELATIVE};
 use elf::endian::LittleEndian;
 use elf::ElfBytes;
 
-use crate::arch::{self, AddressSpace, USER_END};
+use crate::arch::{self, AddressSpace, UserContext, USER_END};
 use crate::boot::Bytes;
 use crate::mm::{BootAllocator, Perms, PAGE_SIZE};
+use crate::thread::{Tcb, MAX_PRIORITY};
 
 static IMAGE: &[u8] = include_bytes!(env!("INIT_ELF"));
 
@@ -22,7 +23,9 @@ const STACK_SIZE: usize = 16 * 1024;
 /// The stack ends one page below the top of user space, leaving a guard.
 const STACK_TOP: usize = USER_END - PAGE_SIZE;
 
-pub fn start(alloc: &mut BootAllocator) -> ! {
+/// Load the root task and make it runnable. The caller then starts the
+/// scheduler.
+pub fn start(alloc: &mut BootAllocator) {
     let elf = ElfBytes::<LittleEndian>::minimal_parse(IMAGE).expect("root task: not an ELF file");
     assert!(
         elf.ehdr.e_machine == EM_RISCV && elf.ehdr.e_type == ET_DYN,
@@ -83,5 +86,15 @@ pub fn start(alloc: &mut BootAllocator) -> ! {
         "root task: {} image, {relocations} relocation(s), entry {entry:#x}",
         Bytes(IMAGE.len())
     );
-    arch::enter_user(&space, entry, STACK_TOP)
+
+    // The TCB gets a frame of its own; a TCB is smaller than a page.
+    // SAFETY: the frame was just allocated and is reached through the direct
+    // map.
+    let tcb = unsafe { Tcb::init(arch::phys_to_virt(alloc.alloc_frame()), space.root()) };
+    // SAFETY: tcb was just initialized.
+    unsafe {
+        (*tcb).context = UserContext::new_user(entry, STACK_TOP, 0);
+        (*tcb).priority = MAX_PRIORITY;
+        crate::sched::make_runnable(tcb);
+    }
 }

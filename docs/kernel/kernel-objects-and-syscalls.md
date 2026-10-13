@@ -1,7 +1,7 @@
 ---
 status: proposed
 summary: The kernel's object types and a seL4-sized syscall set (Call, Send, Recv, ReplyRecv, Signal, Wait, Yield); everything else is a Call on a capability to a kernel object. Register-based arguments plus a per-thread IPC buffer page.
-updated: 2026-10-08
+updated: 2026-10-13
 sources: ["[[2026-09-27-future-of-computing#m7|§m7]]", "[[2026-09-27-future-of-computing#m25|§m25]]", "[[2026-09-27-future-of-computing#m28|§m28]]", "[[2026-09-27-future-of-computing#m29|§m29]]"]
 ---
 
@@ -50,6 +50,23 @@ Every architecture has a register-based syscall convention, and with a syscall s
 For message contents that don't fit in registers, each thread has an **IPC buffer**: a page at a known address, as in seL4. This is the fixed-address kernel channel the human proposed ([[2026-09-27-future-of-computing#m28|§m28]]). Linux's vDSO is the related precedent for kernel-provided code and data mapped into every process.
 
 A batched submission ring (io_uring-style) for many kernel operations at once, such as mapping a hundred pages, is deferred: start with synchronous calls for control operations and add a ring if batching turns out to matter. A ring needs a doorbell syscall unless the kernel polls ([[2026-09-27-future-of-computing#m29|§m29]]).
+
+## Kernel memory
+
+The kernel has no heap and no fixed-size pools that userspace can exhaust. Every kernel object occupies memory that userspace retyped from untyped memory it holds, so a process that wants more of anything pays for it from its own memory budget. The human asked whether fixed kernel memory would limit capability slots or call queues ([[2026-10-08-22c3947b#m28|§m28]]); under this design neither is limited:
+
+| Resource | Where its memory comes from |
+|---|---|
+| Capability slots | CNodes, retyped from untyped. A process needing more slots creates another CNode and links it into its capability space. |
+| Endpoint queues | None: a sender that finds no receiver blocks, and the queue is a list threaded through the waiting threads' own TCBs. |
+| Notifications | One word in the notification object. |
+| Rings and buffers | Frames mapped into both processes ([[ipc-channels]]), charged to whoever created the channel. |
+| Page tables, TCBs, address spaces | Retyped from untyped. |
+| Capabilities in transfer | Slots in the receiver's receive range ([[ipc-cap-transfer]]). |
+
+Running out therefore shows up as backpressure on the process that owns the memory (a full ring, no free slots), never as kernel allocation failure. The fixed costs are set at boot and small: a kernel stack per CPU, the kernel's own page tables, and a small top-level table of address-space identifiers (seL4 has 128 entries, with the pools under it retyped from untyped).
+
+The costs move to userspace instead: allocating slots and tracking memory is the most-cited pain point of programming seL4, so the runtime library needs a slot allocator; and untyped memory is handed out with a watermark, so a region can only be reused after everything created from it is revoked.
 
 ## What the kernel does not do
 

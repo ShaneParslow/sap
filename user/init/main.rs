@@ -19,28 +19,35 @@ _start:
 "#
 );
 
-// TODO: temporary debug syscalls, matching kernel/syscall.rs. Replaced by
-// capability invocations in M3.
-const SYS_DEBUG_PUTCHAR: usize = 0x100;
-const SYS_DEBUG_HALT: usize = 0x101;
+use sap_abi::syscall::{DEBUG_HALT, DEBUG_PUTCHAR, YIELD};
 
-fn syscall(number: usize, arg: usize) {
-    // SAFETY: the kernel's debug syscalls take one argument in a0 and
-    // clobber only a0.
-    unsafe { asm!("ecall", inlateout("a0") arg => _, in("a7") number, options(nostack)) };
+/// A syscall with one argument. The kernel saves and restores every
+/// register except the result registers.
+fn syscall(number: usize, arg: usize) -> usize {
+    let result;
+    // SAFETY: the kernel preserves all registers but a0..a5; these calls
+    // only return in a0.
+    unsafe {
+        asm!("ecall", inlateout("a0") arg => result, in("a7") number,
+             lateout("a1") _, lateout("a2") _, lateout("a3") _, lateout("a4") _, lateout("a5") _,
+             options(nostack));
+    }
+    result
 }
 
 struct Console;
 
 impl Write for Console {
     fn write_str(&mut self, s: &str) -> fmt::Result {
-        s.bytes().for_each(|b| syscall(SYS_DEBUG_PUTCHAR, b as usize));
+        s.bytes().for_each(|b| {
+            syscall(DEBUG_PUTCHAR, b as usize);
+        });
         Ok(())
     }
 }
 
 fn halt(failure: bool) -> ! {
-    syscall(SYS_DEBUG_HALT, failure as usize);
+    syscall(DEBUG_HALT, failure as usize);
     loop {}
 }
 
@@ -51,6 +58,9 @@ extern "C" fn main() -> ! {
     // GREETING is a pointer in .data, so printing it also checks that the
     // loader applied the relocations.
     let _ = writeln!(Console, "init: {GREETING}, main at {:#x}", main as *const () as usize);
+    // Yielding with no other thread at this priority comes straight back.
+    syscall(YIELD, 0);
+    let _ = writeln!(Console, "init: yielded and resumed");
     halt(false)
 }
 

@@ -1,7 +1,7 @@
 ---
 status: hub
 summary: Catalog of every wiki page in reading order, with status and one-line summary.
-updated: 2026-10-11
+updated: 2026-10-13
 ---
 
 # Index
@@ -62,7 +62,8 @@ Every page, in reading order: root pages, then functional areas (concepts first,
 | [[kernel-process-model]] | proposed | A process starts with an initial capability table and one typed bootstrap capability matching its declared imports; arguments are typed values and configuration lives in the object store. No environment, argv strings, ambient user id, fork or exec - a launcher calls spawn on a process factory with code identified by hash. |
 | [[kernel-boot-riscv]] | implemented | How the kernel boots on QEMU virt riscv64 today - OpenSBI enters _start in S-mode, the entry code turns on a boot page table and jumps to the kernel's upper-half address, riscv_start turns the device tree into architecture-neutral boot information and sets up traps, paging and the timer, and kmain runs boot checks and starts the root task. Also the console, log and shutdown. |
 | [[kernel-memory-riscv]] | implemented | How the kernel manages memory on RISC-V today - Sv39 with the kernel in the upper half, a boot page table built in assembly, the kernel's own address space with per-section permissions and a direct map of RAM, free memory computed from the device tree, a boot-only bump allocator, and user address spaces that share the kernel half. |
-| [[kernel-traps-riscv]] | implemented | How the kernel takes traps on RISC-V today - one direct-mode vector that switches to the kernel stack for traps from user mode via sscratch, a shared return path that also enters user mode, a Rust dispatcher for the timer, breakpoints, syscalls and user faults, and periodic timer interrupts through the SBI TIME extension. |
+| [[kernel-traps-riscv]] | implemented | How the kernel takes traps on RISC-V today - one direct-mode vector that saves user registers straight into the current thread's TCB (found through sscratch) and kernel-mode traps on the stack, separate Rust handlers for each, a return path that resumes any thread, and periodic timer interrupts through the SBI TIME extension. |
+| [[kernel-threads]] | implemented | Threads and scheduling as implemented today - the thread control block (saved user registers, state, priority, address space), seL4-style fixed-priority round-robin scheduling with time slices counted in timer ticks, the idle loop, and how kernel globals are kept without locks on one hart. |
 | [[kernel-root-task]] | implemented | The one program the kernel starts by itself, as in seL4 - user/init, built as a static position-independent ELF and embedded in the kernel; how the kernel loads it (contiguous frames, relative relocations, W^X segments, a stack below the top of user space) and enters user mode; and the two temporary debug syscalls it uses until capability invocations exist. |
 
 ## Interfaces
