@@ -1,8 +1,8 @@
 ---
 status: implemented
-summary: Threads and scheduling as implemented today - the thread control block (saved user registers, state, priority, address space), seL4-style fixed-priority round-robin scheduling with time slices counted in timer ticks, the idle loop, and how kernel globals are kept without locks on one hart.
+summary: Threads and scheduling as implemented today - the thread control block (saved user registers, its capability slots, state, priority), seL4-style fixed-priority round-robin scheduling with time slices counted in timer ticks, the idle loop, and how kernel globals are kept without locks on one hart.
 updated: 2026-10-13
-code: [kernel/thread.rs, kernel/sched.rs, kernel/global.rs, kernel/arch/riscv/trap.rs, kernel/arch/riscv/mod.rs, kernel/root_task.rs, kernel/main.rs]
+code: [kernel/thread.rs, kernel/sched.rs, kernel/global.rs, kernel/syscall.rs, kernel/arch/riscv/trap.rs, kernel/arch/riscv/mod.rs, kernel/arch/riscv/vspace.rs, kernel/root_task.rs, kernel/main.rs, abi/lib.rs]
 sources: ["[[2026-10-08-22c3947b-wiki-setup]]"]
 ---
 
@@ -12,31 +12,32 @@ The first part of roadmap milestone M3 ([[roadmap]]): user threads are kernel ob
 
 ## Thread control block
 
-A `Tcb` (`kernel/thread.rs:26`) occupies a block of `1 << TCB_BITS` = 1 KiB (line 12, as in seL4 on RISC-V; a compile-time assertion checks it fits). It holds:
+A `Tcb` (`kernel/thread.rs:41`) occupies a block of `1 << TCB_BITS` = 1 KiB (line 19, as in seL4 on RISC-V; a compile-time assertion checks it fits). It holds:
 - `context`: the thread's saved user registers, first, so the trap entry code finds them at the TCB's own address ([[kernel-traps-riscv#Trap entry and return]]);
-- `state`: `Inactive` (never started or suspended) or `Running`, meaning runnable, whether or not it is the thread on the CPU;
+- three capability slots (lines 24–26): the root of its capability space, the root of its address space, and its IPC buffer frame. They hold copies, as in seL4, so deleting the address space or capability space also removes the thread's reference ([[kernel-capabilities]]);
+- `state`: `Inactive` (never started, or suspended) or `Running`, meaning runnable, whether or not it is the thread on the CPU;
 - `priority`: 0–255, with 255 the highest (the root task's);
-- `vspace_root`: the physical address of the root page table of its address space;
+- `ipc_buffer`: the user address of its IPC buffer, inside the frame in its slot;
 - the links of its ready queue.
 
-A `TODO` on `vspace_root` says to replace it with a capability to the address space held in the TCB, so deleting the address space stops the thread, as seL4 does.
+`Tcb::init` (line 64) zeroes the block, which is an inactive TCB with empty slots. Today the only caller is the root task's loader, which places the TCB in a frame from the boot allocator ([[kernel-root-task]]); later, TCBs are retyped from untyped memory. Deleting the last capability to a TCB takes the thread off the CPU and deletes its slots (`thread::finalise`, line 105).
 
-`Tcb::init` (line 52) writes an inactive TCB into memory the caller owns. Today the only caller is the root task's loader, which places the TCB in a frame from the boot allocator ([[kernel-root-task]]); later, TCBs are retyped from untyped memory.
+The syscall path holds `&mut` to a thread's registers, which live inside its TCB, so `thread::cspace` and `thread::ipc_buffer` (lines 81, 90) read single fields through a raw pointer rather than borrowing the whole TCB.
 
 ## Scheduler
 
-`kernel/sched.rs` keeps 256 ready queues, one per priority, and a bitmap of the non-empty ones (lines 13–32). **Every runnable thread is in its queue, including the running one.** The thread that runs is the head of the highest non-empty queue (`highest`, line 106). That keeps the rules short:
-- `make_runnable` (line 49) marks a thread `Running` and appends it to its queue;
-- `tick` (line 59), on every timer interrupt, counts down the current thread's time slice, five ticks or 50 ms (line 15), and when it runs out moves the thread to the tail of its queue;
-- `yield_current` (line 71), the `YIELD` syscall, moves it to the tail at once.
+`kernel/sched.rs` keeps 256 ready queues, one per priority, and a bitmap of the non-empty ones (lines 13–32). **Every runnable thread is in its queue, including the running one.** The thread that runs is the head of the highest non-empty queue (`highest`, line 134). That keeps the rules short:
+- `make_runnable` (line 49) marks a thread `Running` and appends it to its queue; `make_inactive` (line 62) removes it;
+- `tick` (line 80), on every timer interrupt, counts down the current thread's time slice, five ticks or 50 ms (line 15), and when it runs out moves the thread to the tail of its queue;
+- `yield_current` (line 92), the `YIELD` syscall, moves it to the tail at once.
 
 Moving a thread to the tail of its own queue is the whole of preemption and round robin. A higher-priority thread always runs first; threads at one priority take turns by time slice.
 
-`run` (line 88) ends every entry from user mode. It picks the highest-priority thread, records it as current (a new thread gets a fresh time slice), switches to its address space if that isn't already active (`arch::activate_vspace`), and resumes it in user mode. If no thread is runnable it runs the idle loop.
+`run` (line 109) ends every entry from user mode. It picks the highest-priority thread, records it as current (a new thread gets a fresh time slice), switches to the address space its address-space capability names if that isn't already active (`arch::activate_vspace`, which checks the capability is a root whose ASID is still assigned), and resumes it in user mode. A thread whose address space is gone is suspended with a warning; a `TODO` says it should fault to its handler once faults are delivered over IPC. If no thread is runnable, `run` runs the idle loop.
 
 ## Idle loop
 
-`arch::idle_once` (`kernel/arch/riscv/mod.rs:59`) enables interrupts, waits with `wfi`, handles whatever arrives through the kernel-trap path, and disables interrupts again. `run` repeats it until a thread is runnable. This and the boot checks are the only places the kernel runs with interrupts enabled; seL4 uses an idle thread for the same purpose.
+`arch::idle_once` (`kernel/arch/riscv/mod.rs:85`) enables interrupts, waits with `wfi`, handles whatever arrives through the kernel-trap path, and disables interrupts again. `run` repeats it until a thread is runnable. This and the boot checks are the only places the kernel runs with interrupts enabled; seL4 uses an idle thread for the same purpose.
 
 ## Kernel globals
 
@@ -44,7 +45,7 @@ Scheduler state is a `Global` (`kernel/global.rs:13`), a cell that hands out `&m
 
 ## Syscalls
 
-`sap-abi` (`abi/lib.rs`), a crate shared by the kernel and user programs, defines the syscall numbers, so the two sides can't drift. The kernel dispatches in `syscall::handle` (`kernel/syscall.rs:17`): `YIELD`, and the two debug calls `DEBUG_PUTCHAR` and `DEBUG_HALT`. `CALL`, the capability invocation, is reserved and returns an error until capability spaces exist.
+`sap-abi` (`abi/lib.rs`), a crate shared by the kernel and user programs, defines the syscall numbers and the layouts both sides read, so the two can't drift. The kernel dispatches in `syscall::handle` (`kernel/syscall.rs`): `CALL`, the capability invocation ([[kernel-capabilities#Invocation]]), `YIELD`, and the two debug calls `DEBUG_PUTCHAR` and `DEBUG_HALT`.
 
 > [!todo] Not built
-> Thread capabilities and TCB invocations (configure, write registers, resume, suspend, set priority); blocking states for IPC (M4); scheduling contexts and donation; per-thread ASIDs; floating-point state; multiple harts.
+> TCB invocations (configure, write registers, resume, suspend, set priority); blocking states for IPC (M4); scheduling contexts and donation; hardware ASIDs; floating-point state; multiple harts.

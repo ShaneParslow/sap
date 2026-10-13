@@ -1,8 +1,8 @@
 ---
 status: implemented
-summary: The one program the kernel starts by itself, as in seL4 - user/init, built as a static position-independent ELF and embedded in the kernel; how the kernel loads it (contiguous frames, relative relocations, W^X segments, a stack below the top of user space) and enters user mode; and the two temporary debug syscalls it uses until capability invocations exist.
+summary: The one program the kernel starts by itself, as in seL4 - user/init, built on the libsap runtime as a static position-independent ELF and embedded in the kernel; how the kernel loads it (contiguous frames, relative relocations, W^X segments, a stack, IPC buffer and boot-info page) and starts it as a thread; and the debug syscalls it still uses.
 updated: 2026-10-13
-code: [kernel/build.rs, kernel/root_task.rs, kernel/syscall.rs, abi/lib.rs, user/init/main.rs, user/init/build.rs, user/init/.cargo/config.toml]
+code: [kernel/build.rs, kernel/root_task.rs, kernel/syscall.rs, abi/lib.rs, user/init/main.rs, user/init/build.rs, user/init/.cargo/config.toml, user/libsap/lib.rs, user/libsap/debug.rs]
 sources: ["[[2026-10-08-22c3947b-wiki-setup]]"]
 ---
 
@@ -12,20 +12,23 @@ The kernel loads exactly one program, the **root task**, as seL4 does. Every oth
 
 ## Building it
 
-The root task is `user/init`, its own crate. The kernel's build script (`kernel/build.rs`) runs Cargo on it, always in release mode, with the build directory inside the kernel's build output, and passes the result's path to the kernel, which embeds it with `include_bytes!` (`kernel/root_task.rs:17`). The script runs Cargo from the init crate's directory so that crate's `.cargo/config.toml` applies, and clears the outer build's compiler flags, which would otherwise override it.
+The root task is `user/init`, its own crate. The kernel's build script (`kernel/build.rs`) runs Cargo on it, always in release mode, with the build directory inside the kernel's build output, and passes the result's path to the kernel, which embeds it with `include_bytes!` (`kernel/root_task.rs:26`). The script runs Cargo from the init crate's directory so that crate's `.cargo/config.toml` applies, and clears the outer build's compiler flags, which would otherwise override it.
 
-`user/init` is linked as a **static position-independent executable** (`-C relocation-model=pie`, `--pie --no-dynamic-linker`), in line with the decision that all code is position-independent ([[prog-loading]]). Each segment starts on its own page (`-z separate-loadable-segments`), so segments can be mapped with different permissions (`user/init/build.rs`).
+`user/init` is linked as a **static position-independent executable** (`-C relocation-model=pie`, `--pie --no-dynamic-linker`), in line with the decision that all code is position-independent ([[prog-loading]]). Each segment starts on its own page (`-z separate-loadable-segments`), so segments can be mapped with different permissions. The precompiled `core` library for this target isn't position-independent, so its vtables need relocations in read-only segments; `-z notext` allows that, and the loader applies relocations before mapping anything (`user/init/build.rs`).
+
+It is built on **`libsap`** (`user/libsap/`), the user runtime: the `_start` entry point, which records the IPC buffer address and calls the program's `sap_main` with the boot-info page; a debug console with `print!`/`println!`; the panic handler; and wrappers for syscalls and invocations ([[kernel-capabilities#Invocation]]).
 
 ## Loading it
 
-`root_task::start` (`kernel/root_task.rs:28`), called at the end of `kmain`:
+`root_task::start` (`kernel/root_task.rs:47`), called at the end of `kmain`:
 
 1. Checks the ELF is a RISC-V position-independent executable.
 2. Allocates one contiguous run of frames covering every loadable segment, zeroes it, and copies each segment's file bytes in at its offset; gaps and `.bss` stay zero.
 3. Applies the relocations in `.rela.dyn`. All of them must be `R_RISCV_RELATIVE` (store load base + addend), which is all a static position-independent executable has: pointers in statics and the GOT. `user/init` has five.
-4. Creates a user address space ([[kernel-memory-riscv#User address spaces]]) and maps each segment at `0x10000` (`LOAD_BASE`, line 21) plus its address, with the segment's permissions. A segment that is both writable and executable is refused. Page 0 and the pages below the load base stay unmapped, so null-pointer accesses fault.
-5. Maps a 16 KiB stack ending one page below the top of user space, leaving a guard page.
-6. Creates the root task's thread control block in a frame of its own, with registers that start it at the entry point on its stack, at the highest priority, and makes it runnable. `kmain` then starts the scheduler, which runs it ([[kernel-threads]]).
+4. Creates a user address space ([[kernel-memory-riscv#User address spaces]]) and maps each segment at `0x10000` (`LOAD_BASE`, line 29) plus its address, with the segment's permissions. A segment that is both writable and executable is refused. Page 0 and the pages below the load base stay unmapped, so null-pointer accesses fault.
+5. Maps a 16 KiB stack ending one page below the top of user space, leaving a guard page, then below it (each after a guard page) the IPC buffer and the read-only boot-info page, and gives the address space ASID 1.
+6. Builds the root task's CNode and fills it with capabilities to everything it has and all remaining free memory as untyped memory, described in the boot-info page ([[kernel-capabilities#The root task's capabilities]]).
+7. Creates the root task's thread control block in a frame of its own, with copies of its CNode, address space and IPC buffer capabilities in its slots, registers that start it at the entry point on its stack with the boot-info address as its argument, and the highest priority, and makes it runnable. `kmain` then starts the scheduler, which runs it ([[kernel-threads]]).
 
 The loader is deliberately narrow: it handles what `user/init` produces and nothing else. General loading, with other formats and interpreters, belongs to the userspace process manager.
 
@@ -38,9 +41,9 @@ Until capability invocations exist (M3), two temporary calls stand in, like seL4
 | `0x100` | `DEBUG_PUTCHAR(byte)` | prints one byte on the kernel console |
 | `0x101` | `DEBUG_HALT(failure)` | logs and shuts down; nonzero reports failure |
 
-Unknown numbers log a warning and return `usize::MAX`. `user/init` prints its greeting one byte at a time through `DEBUG_PUTCHAR`, yields once (and is resumed, being the only thread), and ends with `DEBUG_HALT`. The greeting is reached through a pointer in a static, so printing it also checks that the relocations were applied.
+Unknown numbers log a warning and return `usize::MAX`. `user/init` prints through `DEBUG_PUTCHAR` (via `libsap`'s console), runs its checks ([[kernel-capabilities#Tests]]), and ends with `DEBUG_HALT`. Its formatting code reaches vtables through relocated pointers, so the output itself shows the relocations were applied.
 
 A fault in user mode is logged and shuts down with failure, since the root task is the only user thread. Tested: a null read (`address 0x8`), a read of a kernel address, and 30 million loop iterations under 100 Hz timer interrupts.
 
 > [!todo] Not built
-> Capability invocations replacing the debug calls; the root task's initial capabilities (untyped memory, its own address space and capability table) and boot information, as in seL4's boot info (M3); fault delivery to a handler instead of shutdown.
+> Device untyped memory for the device manager; fault delivery to a handler instead of shutdown; a log service replacing the debug calls (M7).

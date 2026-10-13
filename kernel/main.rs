@@ -3,9 +3,12 @@
 
 mod arch;
 mod boot;
+mod cap;
 mod console;
+mod cspace;
 mod devicetree;
 mod global;
+mod invocation;
 mod log;
 mod mm;
 mod root_task;
@@ -21,7 +24,7 @@ use mm::BootAllocator;
 /// The architecture-neutral kernel, entered by the architecture code once
 /// traps, paging and the timer are set up. `alloc` holds the memory not
 /// used by the kernel itself.
-pub fn kmain(boot: BootInfo, mut alloc: BootAllocator) -> ! {
+pub fn kmain(boot: BootInfo, alloc: BootAllocator) -> ! {
     info!("sap: sapabilities online");
     boot.log();
     mm::log_free(alloc.free());
@@ -29,7 +32,7 @@ pub fn kmain(boot: BootInfo, mut alloc: BootAllocator) -> ! {
     boot_checks();
     info!("boot checks passed");
 
-    root_task::start(&mut alloc);
+    root_task::start(alloc);
     sched::run()
 }
 

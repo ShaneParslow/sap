@@ -16,4 +16,4 @@ panic = "abort"
 panic = "abort"
 
 [dependencies]
-sap-abi = { version = "0.1.0", path = "../../abi" }
+libsap = { version = "0.1.0", path = "../libsap" }

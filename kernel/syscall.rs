@@ -2,11 +2,14 @@
 //! interrupted thread's registers; arguments and results are in the
 //! argument registers, numbered by `UserContext::arg` and `set_result`.
 //!
-//! TODO: capability invocations (`CALL`) arrive with capability spaces (M3).
-//! The debug calls become debug-build only once a userspace log service
+//! `CALL` invokes a capability (`invocation.rs`). The other IPC calls
+//! (Send, Recv, ReplyRecv, Signal, Wait) arrive with endpoints and
+//! notifications (M4).
+//!
+//! TODO: make the debug calls debug-build only once a userspace log service
 //! exists (M7).
 
-use sap_abi::syscall::{DEBUG_HALT, DEBUG_PUTCHAR, YIELD};
+use sap_abi::syscall::{CALL, DEBUG_HALT, DEBUG_PUTCHAR, YIELD};
 
 use crate::arch::UserContext;
 
@@ -23,6 +26,8 @@ pub fn handle(context: &mut UserContext) {
             crate::arch::shutdown(failure)
         }
         YIELD => crate::sched::yield_current(),
+        // SAFETY: the current thread is the live TCB holding `context`.
+        CALL => unsafe { crate::invocation::call(crate::sched::current(), context) },
         number => {
             crate::warn!("syscall: unknown or unimplemented call {number:#x}");
             context.set_result(0, ERROR_UNKNOWN);

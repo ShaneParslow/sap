@@ -1,14 +1,18 @@
 //! RISC-V (RV64GC, S-mode under SBI firmware).
 
+mod caps;
 mod entry;
 mod paging;
 mod sbi;
 mod test_device;
 pub mod timer;
 pub mod trap;
+mod vspace;
 
-pub use paging::{phys_to_virt, AddressSpace, USER_END};
+pub use caps::{unmapped_frame, ArchCap, PtMapping, FRAME_RIGHTS_ALL};
+pub use paging::{phys_to_virt, walk_user, AddressSpace, UserMapping, USER_END};
 pub use trap::UserContext;
+pub use vspace::assign_asid;
 
 use core::sync::atomic::{AtomicU8, Ordering};
 
@@ -43,10 +47,32 @@ extern "C" fn riscv_start(hart_id: usize, dtb: usize, image_pa: usize) -> ! {
     crate::kmain(boot, alloc)
 }
 
-/// Switch to the address space whose root page table is at physical
-/// address `root`, if it isn't already active.
-pub fn activate_vspace(root: usize) {
-    paging::activate_root(root);
+/// Switch to the address space a thread's address-space capability names.
+/// Returns false if it isn't a live address-space root.
+pub fn activate_vspace(cap: crate::cap::Cap) -> bool {
+    vspace::activate(cap)
+}
+
+/// What deleting an architecture capability does to the page tables.
+pub fn finalise_cap(cap: ArchCap, last: bool) {
+    vspace::finalise(cap, last)
+}
+
+/// Physical address of a kernel object at kernel address `ptr`.
+pub fn kernel_to_phys(ptr: usize) -> usize {
+    paging::virt_to_phys(ptr)
+}
+
+/// The kernel address of a thread's IPC buffer at user address `va`, if
+/// `frame` is a frame capability and a whole, aligned IPC buffer at `va`
+/// fits inside that frame.
+pub fn frame_kernel_address(frame: crate::cap::Cap, va: usize) -> Option<usize> {
+    const SIZE: usize = core::mem::size_of::<sap_abi::IpcBuffer>();
+    let crate::cap::Cap::Arch(ArchCap::Frame { pa, size_bits, .. }) = frame else {
+        return None;
+    };
+    let offset = va & ((1 << size_bits) - 1);
+    (va % SIZE == 0 && offset + SIZE <= 1 << size_bits).then(|| phys_to_virt(pa + offset))
 }
 
 /// Resume a thread in user mode with the registers in `context`.

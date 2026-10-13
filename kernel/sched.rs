@@ -8,7 +8,7 @@
 //! following seL4's MCS configuration (kernel-scheduling in the wiki).
 
 use crate::global::Global;
-use crate::thread::{Tcb, ThreadState};
+use crate::thread::{Tcb, ThreadState, VSPACE_SLOT};
 
 const PRIORITIES: usize = 256;
 /// Timer ticks a thread runs before others at its priority get a turn.
@@ -55,6 +55,27 @@ pub unsafe fn make_runnable(tcb: *mut Tcb) {
     }
 }
 
+/// Take `tcb` off the CPU and out of its queue.
+///
+/// # Safety
+/// `tcb` must point at a live TCB.
+pub unsafe fn make_inactive(tcb: *mut Tcb) {
+    // SAFETY: per the caller's guarantee.
+    let t = unsafe { &mut *tcb };
+    if t.state == ThreadState::Running {
+        dequeue(tcb);
+    }
+    t.state = ThreadState::Inactive;
+    if sched().current == tcb {
+        sched().current = core::ptr::null_mut();
+    }
+}
+
+/// The thread on the CPU, or null when idle.
+pub fn current() -> *mut Tcb {
+    sched().current
+}
+
 /// Called on every timer tick.
 pub fn tick() {
     let s = sched();
@@ -95,8 +116,15 @@ pub fn run() -> ! {
             }
             // SAFETY: queued TCBs are live.
             let tcb = unsafe { &mut *next };
-            crate::arch::activate_vspace(tcb.vspace_root);
-            crate::arch::return_to_user(&mut tcb.context);
+            if crate::arch::activate_vspace(tcb.slots[VSPACE_SLOT].cap) {
+                crate::arch::return_to_user(&mut tcb.context);
+            }
+            // TODO: a thread without a valid address space should fault to
+            // its handler (M4); until then it is suspended.
+            crate::warn!("sched: thread {next:p} has no valid address space; suspending it");
+            // SAFETY: next is live.
+            unsafe { make_inactive(next) };
+            continue;
         }
         sched().current = core::ptr::null_mut();
         crate::arch::idle_once();

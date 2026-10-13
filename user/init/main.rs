@@ -1,71 +1,76 @@
-//! The first user program: the root task. For now it only proves that user
-//! mode works; it will become the process manager (M7).
+//! The first user program: the root task. It will become the process
+//! manager (M7); for now it checks the kernel features as they arrive.
 
 #![no_std]
 #![no_main]
 
-use core::arch::{asm, global_asm};
-use core::fmt::{self, Write};
-use core::panic::PanicInfo;
+use libsap::abi::{error, init_slot, rights, BootInfo};
+use libsap::cnode::SlotRef;
+use libsap::sys::Error;
+use libsap::{debug, println};
 
-// The kernel starts the root task with sp at the top of its stack.
-global_asm!(
-    r#"
-    .section .text.entry
-    .globl _start
-_start:
-    call    main
-1:  j       1b
-"#
-);
-
-use sap_abi::syscall::{DEBUG_HALT, DEBUG_PUTCHAR, YIELD};
-
-/// A syscall with one argument. The kernel saves and restores every
-/// register except the result registers.
-fn syscall(number: usize, arg: usize) -> usize {
-    let result;
-    // SAFETY: the kernel preserves all registers but a0..a5; these calls
-    // only return in a0.
-    unsafe {
-        asm!("ecall", inlateout("a0") arg => result, in("a7") number,
-             lateout("a1") _, lateout("a2") _, lateout("a3") _, lateout("a4") _, lateout("a5") _,
-             options(nostack));
-    }
-    result
+/// Slot `i` of the root CNode.
+fn slot(i: usize) -> SlotRef {
+    SlotRef::new(init_slot::CNODE, i)
 }
-
-struct Console;
-
-impl Write for Console {
-    fn write_str(&mut self, s: &str) -> fmt::Result {
-        s.bytes().for_each(|b| {
-            syscall(DEBUG_PUTCHAR, b as usize);
-        });
-        Ok(())
-    }
-}
-
-fn halt(failure: bool) -> ! {
-    syscall(DEBUG_HALT, failure as usize);
-    loop {}
-}
-
-static GREETING: &str = "hello from user mode";
 
 #[unsafe(no_mangle)]
-extern "C" fn main() -> ! {
-    // GREETING is a pointer in .data, so printing it also checks that the
-    // loader applied the relocations.
-    let _ = writeln!(Console, "init: {GREETING}, main at {:#x}", main as *const () as usize);
-    // Yielding with no other thread at this priority comes straight back.
-    syscall(YIELD, 0);
-    let _ = writeln!(Console, "init: yielded and resumed");
-    halt(false)
+fn sap_main(info: &'static BootInfo) -> ! {
+    report(info);
+    check_cnode_operations(info);
+    println!("init: all checks passed");
+    debug::halt(false)
 }
 
-#[panic_handler]
-fn panic(info: &PanicInfo) -> ! {
-    let _ = writeln!(Console, "init: panic: {info}");
-    halt(true)
+fn report(info: &BootInfo) {
+    let untyped = &info.untyped_list[..info.untyped.len()];
+    let bytes: usize = untyped.iter().map(|u| 1usize << u.size_bits).sum();
+    let largest = untyped.iter().map(|u| u.size_bits).max().unwrap_or(0);
+    println!(
+        "init: {} image frames, {} page tables, {} untyped ({} MiB, largest 2^{}), slots {}..{} free",
+        info.image_frames.len(),
+        info.image_paging.len(),
+        untyped.len(),
+        bytes >> 20,
+        largest,
+        info.empty.start,
+        info.empty.end
+    );
+}
+
+fn expect(what: &str, result: Result<(), Error>, wanted: Result<(), usize>) {
+    let got = result.map_err(|e| e.0);
+    if got != wanted {
+        panic!("{what}: got {got:?}, wanted {wanted:?}");
+    }
+}
+
+/// Copy, move, delete and revoke capabilities, and check the errors for
+/// misuse.
+fn check_cnode_operations(info: &BootInfo) {
+    let (a, b, c) = (slot(info.empty.start), slot(info.empty.start + 1), slot(info.empty.start + 2));
+    let tcb = slot(init_slot::TCB);
+    let untyped = slot(info.untyped.start);
+
+    expect("copy tcb", a.copy_from(tcb, rights::ALL), Ok(()));
+    expect("copy into occupied slot", a.copy_from(tcb, rights::ALL), Err(error::DELETE_FIRST));
+    expect("copy the copy", b.copy_from(a, rights::ALL), Ok(()));
+    expect("move", c.move_from(b), Ok(()));
+    expect("copy from emptied slot", b.copy_from(b, rights::ALL), Err(error::FAILED_LOOKUP));
+    expect("delete", c.delete(), Ok(()));
+    expect("delete", a.delete(), Ok(()));
+    expect("delete empty slot", a.delete(), Ok(()));
+
+    // A copy of untyped memory is its child: revoking the original deletes
+    // it.
+    expect("copy untyped", a.copy_from(untyped, rights::ALL), Ok(()));
+    expect("copy untyped copy", b.copy_from(a, rights::ALL), Ok(()));
+    expect("revoke untyped", untyped.revoke(), Ok(()));
+    expect("revoked copy is gone", c.copy_from(a, rights::ALL), Err(error::FAILED_LOOKUP));
+    expect("revoked grandchild is gone", c.copy_from(b, rights::ALL), Err(error::FAILED_LOOKUP));
+
+    // Addresses that don't resolve.
+    expect("slot out of range", a.copy_from(slot(1 << info.cnode_radix), rights::ALL), Err(error::FAILED_LOOKUP));
+    expect("wrong depth", a.copy_from(SlotRef { depth: 8, ..tcb }, rights::ALL), Err(error::FAILED_LOOKUP));
+    println!("init: CNode copy, move, delete and revoke behave");
 }

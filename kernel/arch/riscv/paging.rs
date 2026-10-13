@@ -65,14 +65,16 @@ const KERNEL_RO: Flags = Flags::READ.union(Flags::GLOBAL);
 
 #[derive(Clone, Copy)]
 #[repr(transparent)]
-struct Entry(u64);
+pub(super) struct Entry(u64);
 
 impl Entry {
+    pub(super) const EMPTY: Entry = Entry(0);
+
     fn new(pa: usize, flags: Flags) -> Self {
         Entry(((pa >> 12) as u64) << 10 | flags.bits())
     }
 
-    fn is_valid(self) -> bool {
+    pub(super) fn is_valid(self) -> bool {
         self.0 & Flags::VALID.bits() != 0
     }
 
@@ -81,8 +83,12 @@ impl Entry {
         self.0 & (Flags::READ | Flags::WRITE | Flags::EXECUTE).bits() != 0
     }
 
-    fn pa(self) -> usize {
+    pub(super) fn pa(self) -> usize {
         ((self.0 >> 10) as usize & ((1 << 44) - 1)) << 12
+    }
+
+    fn flags(self) -> Flags {
+        Flags::from_bits_truncate(self.0)
     }
 }
 
@@ -123,6 +129,53 @@ const fn level_size(level: usize) -> usize {
 
 const fn index(va: usize, level: usize) -> usize {
     (va >> (12 + 9 * level)) & (ENTRIES - 1)
+}
+
+/// The entry at `level` for `va` in the tree rooted at `root`, if the tables
+/// above it exist (and aren't leaves).
+pub(super) fn entry_at(root: usize, va: usize, level: usize) -> Option<&'static mut Entry> {
+    let mut t = root;
+    for l in (level + 1..LEVELS).rev() {
+        let entry = table(t).0[index(va, l)];
+        if !entry.is_valid() || entry.is_leaf() {
+            return None;
+        }
+        t = entry.pa();
+    }
+    Some(&mut table(t).0[index(va, level)])
+}
+
+/// Something mapped in the user half of an address space.
+pub enum UserMapping {
+    /// A page table at physical `pa` at `level` (0 or 1), covering virtual
+    /// addresses from `va`.
+    Table { pa: usize, va: usize, level: usize },
+    /// A page of `1 << size_bits` bytes at physical `pa`, mapped at `va`.
+    Page { pa: usize, va: usize, size_bits: u8, writable: bool },
+}
+
+/// Call `f` for every table and page in the user half of the tree rooted at
+/// `root`, tables before the pages they hold.
+pub fn walk_user(root: usize, mut f: impl FnMut(UserMapping)) {
+    fn walk(t: usize, level: usize, base: usize, f: &mut impl FnMut(UserMapping)) {
+        let entries = if level == LEVELS - 1 { KERNEL_HALF } else { ENTRIES };
+        for i in 0..entries {
+            let entry = table(t).0[i];
+            if !entry.is_valid() {
+                continue;
+            }
+            let va = base + i * level_size(level);
+            if entry.is_leaf() {
+                let size_bits = (12 + 9 * level) as u8;
+                let writable = entry.flags().contains(Flags::WRITE);
+                f(UserMapping::Page { pa: entry.pa(), va, size_bits, writable });
+            } else {
+                f(UserMapping::Table { pa: entry.pa(), va, level: level - 1 });
+                walk(entry.pa(), level - 1, va, f);
+            }
+        }
+    }
+    walk(root, LEVELS - 1, 0, &mut f);
 }
 
 /// A page-table tree, by the physical address of its root.
