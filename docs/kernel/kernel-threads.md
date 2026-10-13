@@ -3,6 +3,7 @@ status: implemented
 summary: Threads and scheduling as implemented today - the thread control block (saved user registers, its capability slots, state, priority), seL4-style fixed-priority round-robin scheduling with time slices counted in timer ticks, the idle loop, and how kernel globals are kept without locks on one hart.
 updated: 2026-10-13
 code: [kernel/thread.rs, kernel/sched.rs, kernel/global.rs, kernel/syscall.rs, kernel/arch/riscv/trap.rs, kernel/arch/riscv/mod.rs, kernel/arch/riscv/vspace.rs, kernel/root_task.rs, kernel/main.rs, abi/lib.rs]
+verified: 0c39997
 sources: ["[[2026-10-08-22c3947b-wiki-setup]]"]
 ---
 

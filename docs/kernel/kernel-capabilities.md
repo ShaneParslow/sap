@@ -20,7 +20,7 @@ A capability is a `Cap` (`kernel/cap.rs:20`): a tag and the per-capability state
 | `Untyped` | a naturally aligned power-of-two block of physical memory | base, size, how much has been retyped (`free_index`), whether it is device memory |
 | `CNode` | a table of `1 << radix` slots | radix, guard size and guard value |
 | `Thread` | a TCB ([[kernel-threads]]) | |
-| `Arch(PageTable)` | a RISC-V page table, any level (`kernel/arch/riscv/caps.rs:22`) | unmapped, the root of an address space with an ASID, or mapped at a level and address |
+| `Arch(PageTable)` | a RISC-V page table, any level (`kernel/arch/riscv/caps.rs:20`) | unmapped, the root of an address space with an ASID, or mapped at a level and address |
 | `Arch(Frame)` | a 4 KiB, 2 MiB or 1 GiB frame | rights, and the one mapping this capability made: ASID and address, ASID 0 meaning unmapped |
 
 The enum is `repr(u8)` with small fields first, so a `Cap` is 40 bytes and an all-zero `Cap` is `Null`: zeroed memory is a CNode of empty slots. Endpoints and notifications arrive with IPC (M4).

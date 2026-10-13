@@ -50,7 +50,11 @@ def git(*args):
 
 
 def stale(page, paths, verified=None):
-    last = git("log", "-1", "--format=%H", "--", str(page)) or verified
+    last = git("log", "-1", "--format=%H", "--", str(page))
+    # A `verified:` commit newer than the page's own last commit records a
+    # re-check that needed no edit (or stands in for an untracked page).
+    if verified and (not last or git("merge-base", "--is-ancestor", last, verified) is not None):
+        last = git("rev-parse", verified) or last
     if not last:
         return "no commit to check against (page untracked and no `verified:` field)"
     newer = git("rev-list", f"{last}..HEAD", "--", *paths)
