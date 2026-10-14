@@ -219,6 +219,7 @@ pub fn start(mut alloc: BootAllocator) {
         (*tcb).context = UserContext::new_user(entry, STACK_TOP, BOOT_INFO_VA);
         (*tcb).priority = MAX_PRIORITY;
         (*tcb).mcp = MAX_PRIORITY;
+        crate::fault::set_root(tcb);
         crate::sched::make_runnable(tcb);
     }
 }

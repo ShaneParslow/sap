@@ -62,3 +62,12 @@ pub fn bind_notification(tcb: usize, ntfn: usize) -> Result<(), Error> {
 pub fn unbind_notification(tcb: usize) -> Result<(), Error> {
     invoke(tcb, label::TCB_UNBIND_NOTIFICATION, &[], &[]).map(drop)
 }
+
+/// Deliver the thread's faults to the endpoint at `handler` (None clears).
+pub fn set_fault_handler(tcb: usize, handler: Option<usize>) -> Result<(), Error> {
+    match handler {
+        Some(ep) => invoke(tcb, label::TCB_SET_FAULT_HANDLER, &[], &[ep]),
+        None => invoke(tcb, label::TCB_SET_FAULT_HANDLER, &[], &[]),
+    }
+    .map(drop)
+}

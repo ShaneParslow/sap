@@ -8,6 +8,7 @@ mod console;
 mod cspace;
 mod devicetree;
 mod endpoint;
+mod fault;
 mod global;
 mod invocation;
 mod log;

@@ -13,18 +13,18 @@ Part of roadmap milestone M3 ([[roadmap]]): user threads are kernel objects with
 
 ## Thread control block
 
-A `Tcb` (`kernel/thread.rs:50`) occupies a block of `1 << TCB_BITS` = 1 KiB (line 19, as in seL4 on RISC-V; a compile-time assertion checks it fits). It holds:
+A `Tcb` (`kernel/thread.rs:52`) occupies a block of `1 << TCB_BITS` = 1 KiB (line 19, as in seL4 on RISC-V; a compile-time assertion checks it fits). It holds:
 - `context`: the thread's saved user registers, first, so the trap entry code finds them at the TCB's own address ([[kernel-traps-riscv#Trap entry and return]]);
-- three capability slots (lines 24–26): the root of its capability space, the root of its address space, and its IPC buffer frame. They hold copies, as in seL4, so deleting the address space or capability space also removes the thread's reference ([[kernel-capabilities]]);
+- four capability slots (lines 24–28): the root of its capability space, the root of its address space, its IPC buffer frame, and its fault-handler endpoint ([[kernel-ipc#Fault delivery]]). They hold copies, as in seL4, so deleting the address space or capability space also removes the thread's reference ([[kernel-capabilities]]);
 - `state`: `Inactive` (never started, or suspended), `Running`, meaning runnable whether or not it is the thread on the CPU, or blocked on a notification, an endpoint or a reply ([[kernel-ipc#Blocking and cancellation]]), with the object it is blocked on and its links in that object's queue;
 - `priority`: 0–255, with 255 the highest (the root task's);
 - `mcp`, the maximum controlled priority: the highest priority this thread may grant when used as the authority for setting priorities, as in seL4; 0 for new threads, 255 for the root task;
 - `ipc_buffer`: the user address of its IPC buffer, inside the frame in its slot;
 - the links of its ready queue.
 
-`Tcb::init` (line 94) zeroes the block, which is an inactive TCB with empty slots. The root task's TCB is placed in a frame from the boot allocator ([[kernel-root-task]]); every other TCB is retyped from untyped memory ([[kernel-capabilities#Retyping untyped memory]]). Deleting the last capability to a TCB takes the thread off the CPU and deletes its slots (`thread::finalise`, line 193).
+`Tcb::init` (line 99) zeroes the block, which is an inactive TCB with empty slots. The root task's TCB is placed in a frame from the boot allocator ([[kernel-root-task]]); every other TCB is retyped from untyped memory ([[kernel-capabilities#Retyping untyped memory]]). Deleting the last capability to a TCB takes the thread off the CPU and deletes its slots (`thread::finalise`, line 202).
 
-The syscall path holds `&mut` to a thread's registers, which live inside its TCB, so `thread::cspace` and `thread::ipc_buffer` (lines 111, 120) read single fields through a raw pointer rather than borrowing the whole TCB.
+The syscall path holds `&mut` to a thread's registers, which live inside its TCB, so `thread::cspace` and `thread::ipc_buffer` (lines 116, 125) read single fields through a raw pointer rather than borrowing the whole TCB.
 
 ## Thread invocations
 
@@ -36,6 +36,7 @@ A new TCB does nothing until it is configured and started through its capability
 | `TCB_WRITE_REGISTERS` | set registers in `sap_abi::reg` order (pc, ra, sp, gp, tp, a0–a7), reset the status bits to a fresh user thread's, and optionally make it runnable |
 | `TCB_READ_REGISTERS` | return those registers, the ones beyond the four message registers through the caller's IPC buffer |
 | `TCB_RESUME`, `TCB_SUSPEND` | make an inactive thread runnable; or stop it, cancelling and restarting a blocking system call so resuming repeats it |
+| `TCB_BIND_NOTIFICATION`, `TCB_SET_FAULT_HANDLER` | bind a notification ([[kernel-ipc#Bound notifications]]), set the fault-handler endpoint ([[kernel-ipc#Fault delivery]]) |
 | `TCB_SET_PRIORITY`, `TCB_SET_MC_PRIORITY` | set its priority or maximum controlled priority, at most the authority thread's `mcp` (`RANGE_ERROR` otherwise) |
 
 Reading and writing registers is refused on the calling thread itself (`ILLEGAL_OPERATION`), as in seL4; here the calling thread's registers are also borrowed by the syscall path. The priority rule is seL4's: a thread can't use an authority to grant more priority than that authority was itself granted. `user/libsap/tcb.rs` wraps these.
@@ -68,4 +69,4 @@ Scheduler state is a `Global` (`kernel/global.rs:13`), a cell that hands out `&m
 `sap-abi` (`abi/lib.rs`), a crate shared by the kernel and user programs, defines the syscall numbers and the layouts both sides read, so the two can't drift. The kernel dispatches in `syscall::handle` (`kernel/syscall.rs`): `CALL`, the capability invocation ([[kernel-capabilities#Invocation]]), `YIELD`, and the two debug calls `DEBUG_PUTCHAR` and `DEBUG_HALT`.
 
 > [!todo] Not built
-> Fault handlers; scheduling contexts and donation; floating-point state; copying registers between threads; multiple harts.
+> Scheduling contexts and donation; floating-point state; copying registers between threads; multiple harts.

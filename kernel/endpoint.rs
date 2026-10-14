@@ -79,6 +79,20 @@ unsafe fn transfer(from: *mut Tcb, to: *mut Tcb, badge: usize, grant: bool) {
     // if valid, are kernel-mapped frames they hold; `ptr::copy` allows the
     // two buffers to overlap if userspace made them the same memory.
     unsafe {
+        if (*from).fault.is_some() {
+            // A fault message comes from the recorded fault; the faulting
+            // thread's registers are left alone.
+            let (info, words) = (*from).fault.message();
+            for (i, word) in words.iter().enumerate() {
+                (*to).context.set_result(2 + i, *word);
+            }
+            let c = &mut (*to).context;
+            c.set_result(BADGE, badge);
+            c.set_result(INFO, info.0);
+            c.set_result(SOURCE, recv_source::MESSAGE);
+            c.set_result(ERROR, error::OK);
+            return;
+        }
         let info = MessageInfo((*from).context.arg(INFO));
         let mut length = info.length().min(MAX_MESSAGE_LENGTH);
         for i in 0..length.min(MESSAGE_REGISTERS) {
@@ -157,6 +171,16 @@ unsafe fn after_delivery(sender: *mut Tcb, call: bool, grant_reply: bool, reply:
             } else {
                 (*sender).state = ThreadState::BlockedOnReply;
                 (*sender).blocked_on = reply as usize;
+            }
+            return;
+        }
+        if (*sender).fault.is_some() {
+            // A fault the handler can't answer: the thread stays stopped.
+            (*sender).fault.take();
+            if sender_was_running {
+                sched::make_inactive(sender);
+            } else {
+                (*sender).state = ThreadState::Inactive;
             }
             return;
         }
@@ -297,6 +321,11 @@ pub unsafe fn reply(reply: *mut Reply, replier: *mut Tcb) {
             return;
         }
         (*caller).blocked_on = 0;
+        if (*caller).fault.is_some() {
+            let label = MessageInfo((*replier).context.arg(INFO)).label();
+            crate::fault::answered(caller, label);
+            return;
+        }
         transfer(replier, caller, 0, (*reply).grant);
         sched::make_runnable(caller);
     }
@@ -345,7 +374,11 @@ pub unsafe fn finalise_endpoint(ep: *mut Endpoint) {
             let tcb = (*ep).head;
             cancel(tcb);
             (*tcb).state = ThreadState::Inactive;
-            (*tcb).context.restart_syscall();
+            // A thread delivering a fault re-runs the faulting instruction
+            // instead of a system call.
+            if !(*tcb).fault.take() {
+                (*tcb).context.restart_syscall();
+            }
             sched::make_runnable(tcb);
         }
     }
@@ -363,8 +396,10 @@ pub unsafe fn finalise_reply(reply: *mut Reply) {
         if !caller.is_null() {
             (*caller).blocked_on = 0;
             (*caller).state = ThreadState::Inactive;
-            set_error(caller, error::NO_REPLY);
-            sched::make_runnable(caller);
+            if !(*caller).fault.take() {
+                set_error(caller, error::NO_REPLY);
+                sched::make_runnable(caller);
+            }
         }
         let receiver = core::mem::replace(&mut (*reply).receiver, ptr::null_mut());
         if !receiver.is_null() {

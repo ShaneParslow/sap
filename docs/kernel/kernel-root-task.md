@@ -44,7 +44,7 @@ Until capability invocations exist (M3), two temporary calls stand in, like seL4
 
 Unknown numbers log a warning and return `usize::MAX`. `user/init` prints through `DEBUG_PUTCHAR` (via `libsap`'s console), runs its checks ([[kernel-capabilities#Tests]]), and ends with `DEBUG_HALT`. Its formatting code reaches vtables through relocated pointers, so the output itself shows the relocations were applied.
 
-A fault in user mode is logged and shuts down with failure, since the root task is the only user thread. Tested: a null read (`address 0x8`), a read of a kernel address, and 30 million loop iterations under 100 Hz timer interrupts.
+Faults in other threads go to their fault handlers ([[kernel-ipc#Fault delivery]]); the root task has none, so a fault in it is logged and ends the boot with a failure. Tested: a null read (`address 0x8`), a read of a kernel address, and 30 million loop iterations under 100 Hz timer interrupts.
 
 > [!todo] Not built
-> Device untyped memory for the device manager; fault delivery to a handler instead of shutdown; a log service replacing the debug calls (M7).
+> Device untyped memory for the device manager; a log service replacing the debug calls (M7).

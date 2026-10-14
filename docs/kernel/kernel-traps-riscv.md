@@ -35,15 +35,14 @@ On trap entry the hardware clears `sstatus.SIE`, so kernel code always runs with
 |---|---|
 | Supervisor timer interrupt | `timer::on_interrupt`, which also counts the tick against the current thread's time slice |
 | Environment call | syscall: `sepc += 4`, then `syscall::handle` with the thread's registers |
-| Anything else | logged as a user fault, then shutdown with failure |
+| Anything else | a user fault, delivered to the thread's fault handler over IPC ([[kernel-ipc#Fault delivery]]) |
 
-A `TODO` marks delivering user faults to a fault handler over IPC, as seL4 does (M4).
 
-`kernel_trap` (`trap.rs:260`) handles the timer, breakpoints (logged, and `sepc` advanced past the `ebreak` using the instruction's real length, since `ebreak` may be the 2-byte `c.ebreak`), and panics on anything else.
+`kernel_trap` (`trap.rs:267`) handles the timer, breakpoints (logged, and `sepc` advanced past the `ebreak` using the instruction's real length, since `ebreak` may be the 2-byte `c.ebreak`), and panics on anything else.
 
 ## Timer
 
-`timer::init` (`kernel/arch/riscv/timer.rs:20`) records the timer frequency from the boot information ([[kernel-boot-riscv]]). `kmain` starts the timer at 100 Hz (`TICK_HZ`, `kernel/main.rs:44`) and it runs from then on: `timer::start(hz)` (`timer.rs:33`) computes the interval in timer ticks, programs the first deadline with the SBI TIME extension's `set_timer` (`kernel/arch/riscv/sbi.rs:50`), and enables the supervisor timer interrupt in `sie`.
+`timer::init` (`kernel/arch/riscv/timer.rs:20`) records the timer frequency from the boot information ([[kernel-boot-riscv]]). `kmain` starts the timer at 100 Hz (`TICK_HZ`, `kernel/main.rs:45`) and it runs from then on: `timer::start(hz)` (`timer.rs:33`) computes the interval in timer ticks, programs the first deadline with the SBI TIME extension's `set_timer` (`kernel/arch/riscv/sbi.rs:50`), and enables the supervisor timer interrupt in `sie`.
 
 Each interrupt increments a tick counter, programs the next deadline, which also clears the pending interrupt, and calls `sched::tick` (`timer.rs:56`). `now` (`timer.rs:16`) reads the `time` CSR, which every application-class core has (Zicntr). Deadlines passed to `set_timer` are absolute values of the same counter, so the two always agree.
 
@@ -51,7 +50,7 @@ Each interrupt increments a tick counter, programs the next deadline, which also
 
 ## Boot check
 
-`boot_checks` (`kernel/main.rs:47`) triggers an `ebreak` and confirms execution resumes, then waits in the idle loop (`arch::idle_once`, `kernel/arch/riscv/mod.rs:95`) for ten ticks, which takes about 100 ms.
+`boot_checks` (`kernel/main.rs:48`) triggers an `ebreak` and confirms execution resumes, then waits in the idle loop (`arch::idle_once`, `kernel/arch/riscv/mod.rs:95`) for ten ticks, which takes about 100 ms.
 
 > [!todo] Not built
 > Floating-point state save and restore; external interrupts (PLIC); fault delivery over IPC.

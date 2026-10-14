@@ -1,6 +1,6 @@
 ---
 status: implemented
-summary: Kernel IPC as implemented today - notifications (Signal, Wait, Poll), badges and their place in the derivation tree, endpoints with seL4 MCS-style reply objects (Send, Recv, Call, Reply, ReplyRecv and non-blocking variants), notifications bound to threads, capability transfer (up to 16 per message, moved or copied into a receive window), and blocking, cancellation and restarted system calls. Fault delivery follows in M4.
+summary: Kernel IPC as implemented today - notifications (Signal, Wait, Poll), badges and their place in the derivation tree, endpoints with seL4 MCS-style reply objects (Send, Recv, Call, Reply, ReplyRecv and non-blocking variants), notifications bound to threads, capability transfer (up to 16 per message, moved or copied into a receive window), fault delivery to fault-handler endpoints, and blocking, cancellation and restarted system calls.
 updated: 2026-10-13
 code: [kernel/notification.rs, kernel/endpoint.rs, kernel/syscall.rs, kernel/invocation.rs, kernel/thread.rs, kernel/sched.rs, kernel/cap.rs, kernel/cspace.rs, kernel/untyped.rs, kernel/arch/riscv/trap.rs, abi/lib.rs, user/libsap/notification.rs, user/libsap/ipc.rs, user/libsap/sys.rs, user/init/main.rs]
 sources: ["[[2026-10-08-22c3947b#m33|§m33]]", "[[2026-10-08-22c3947b#m34|§m34]]"]
@@ -37,12 +37,12 @@ An `Endpoint` (`kernel/endpoint.rs:35`, 16 bytes) is a rendezvous point with one
 
 | Syscall (`abi/lib.rs:35`) | Effect |
 |---|---|
-| `SEND` | deliver to a waiting receiver, or block until one arrives (`endpoint::send`, line 183) |
+| `SEND` | deliver to a waiting receiver, or block until one arrives (`endpoint::send`, line 207) |
 | `NB_SEND` | deliver if a receiver waits; otherwise drop the message, as in seL4 |
 | `CALL` | send, then wait for the reply; on a kernel object it is an invocation instead ([[kernel-capabilities#Invocation]]) |
-| `RECV` | take a waiting sender's message, or block until one arrives (`recv`, line 217) |
+| `RECV` | take a waiting sender's message, or block until one arrives (`recv`, line 241) |
 | `NB_RECV` | take a message if one waits; otherwise return with nothing |
-| `REPLY` | answer the caller waiting on a reply object, if any (`reply`, line 292) |
+| `REPLY` | answer the caller waiting on a reply object, if any (`reply`, line 316) |
 | `REPLY_RECV` | `REPLY`, then `RECV` with the same reply object: a server loop in one trap |
 
 **Registers.** Arguments are as for invocations: `a0` the endpoint, `a1` the message info, `a2`–`a5` message words 0–3, and the rest in the IPC buffer; `a6` names a reply object for the calls that take one. A received message arrives as `a0` the sender's badge, `a1` the message info (the sender's label and the length delivered), `a2`–`a5` the first words, the rest in the receiver's IPC buffer, and `a6` what woke the receiver (`recv_source`, `abi/lib.rs:94`). Because `a1` carries the sender's own label, IPC errors come back separately, in `a7`. Dispatch is `ipc` in `kernel/syscall.rs:94`.
@@ -51,7 +51,7 @@ An `Endpoint` (`kernel/endpoint.rs:35`, 16 bytes) is a rendezvous point with one
 
 ## Capability transfer
 
-A message carries up to 16 capabilities (`MAX_EXTRA_CAPS`, `abi/lib.rs:257`), the decided divergence from seL4's one copied capability ([[ipc-cap-transfer]]). The sender lists their addresses in its IPC buffer, with a bit per capability saying whether it is **moved** (the sender's slot ends empty and the capability keeps its place in the derivation tree) or **copied** (a derived copy, by the same rules as `CNODE_COPY`) (`caps_move`, `abi/lib.rs:272`). The receiver names a **receive window** in its own IPC buffer: a CNode and a range of its slots. `transfer_caps` (`kernel/endpoint.rs:112`) places the capabilities in the window's slots in order and stops at the first one that doesn't resolve or can't be derived, or the first slot that is full or out of range. The receiver's message info reports how many arrived.
+A message carries up to 16 capabilities (`MAX_EXTRA_CAPS`, `abi/lib.rs:281`), the decided divergence from seL4's one copied capability ([[ipc-cap-transfer]]). The sender lists their addresses in its IPC buffer, with a bit per capability saying whether it is **moved** (the sender's slot ends empty and the capability keeps its place in the derivation tree) or **copied** (a derived copy, by the same rules as `CNODE_COPY`) (`caps_move`, `abi/lib.rs:296`). The receiver names a **receive window** in its own IPC buffer: a CNode and a range of its slots. `transfer_caps` (`kernel/endpoint.rs:126`) places the capabilities in the window's slots in order and stops at the first one that doesn't resolve or can't be derived, or the first slot that is full or out of range. The receiver's message info reports how many arrived.
 
 - **The sender needs the endpoint capability's grant right.** Without it the message is delivered and no capabilities travel, as in seL4.
 - **Replies carry capabilities only if the caller's capability had grant-reply,** recorded in the reply object when the call is linked (`Reply`, line 44), as in seL4.
@@ -63,29 +63,38 @@ seL4 "unwraps" a capability to the very endpoint a message travels on into a bad
 
 ## Reply objects
 
-Replies follow seL4's MCS configuration, as decided ([[2026-10-08-22c3947b#m34|§m34]]). A receiver lends a `Reply` object (`kernel/endpoint.rs:44`, 16 bytes, retyped like any object) to `RECV`. When the message it receives is a `CALL`, the caller is linked to the reply object and blocks in `BlockedOnReply` until someone replies through it (`after_delivery`, line 149). The reply right lives in the object rather than in the server's thread, so a thread can hold several pending calls in several reply objects, and time donation can later follow the reply back to the caller ([[kernel-scheduling]]).
+Replies follow seL4's MCS configuration, as decided ([[2026-10-08-22c3947b#m34|§m34]]). A receiver lends a `Reply` object (`kernel/endpoint.rs:44`, 16 bytes, retyped like any object) to `RECV`. When the message it receives is a `CALL`, the caller is linked to the reply object and blocks in `BlockedOnReply` until someone replies through it (`after_delivery`, line 163). The reply right lives in the object rather than in the server's thread, so a thread can hold several pending calls in several reply objects, and time donation can later follow the reply back to the caller ([[kernel-scheduling]]).
 
 The edge cases:
 - **No reply object.** A `CALL` received by a thread that lent none is delivered, and the caller continues at once with `NO_REPLY` (`abi/lib.rs:90`).
 - **A reply object already holding a caller.** Lending it to `RECV` again is refused (`ILLEGAL_OPERATION`), since that would strand the caller. seL4 instead unlinks the old caller.
-- **Deleting a reply object.** A caller waiting on it wakes with `NO_REPLY`; a receiver it is lent to loses it (`finalise_reply`, line 359).
+- **Deleting a reply object.** A caller waiting on it wakes with `NO_REPLY`; a receiver it is lent to loses it (`finalise_reply`, line 392).
 - **`REPLY` with nobody waiting** does nothing, which lets a server's first `REPLY_RECV`, or one after a plain `SEND`, simply receive.
 - **Replies carry no badge:** `a0` is 0.
 
 ## Bound notifications
 
-`TCB_BIND_NOTIFICATION` (`kernel/invocation.rs:267`) binds a notification to a thread, one each way. A signal on it while the thread waits in `RECV` on any endpoint takes the thread out of the endpoint's queue and wakes it with the bits in `a0` and `a6` = `NOTIFICATION` (`wake_bound`, `kernel/endpoint.rs:277`). Bits pending when the thread enters `RECV` are delivered first. This lets one server thread wait for both calls and doorbells, which shared-memory rings need ([[ipc-channels]]).
+`TCB_BIND_NOTIFICATION` (`kernel/invocation.rs:267`) binds a notification to a thread, one each way. A signal on it while the thread waits in `RECV` on any endpoint takes the thread out of the endpoint's queue and wakes it with the bits in `a0` and `a6` = `NOTIFICATION` (`wake_bound`, `kernel/endpoint.rs:301`). Bits pending when the thread enters `RECV` are delivered first. This lets one server thread wait for both calls and doorbells, which shared-memory rings need ([[ipc-channels]]).
 
 ## Blocking and cancellation
 
-A blocked thread is in one of four states (`kernel/thread.rs:39`): blocked on a notification, on sending or receiving through an endpoint, or on a reply. It is off the ready queue (`sched::block`, `kernel/sched.rs:64`) and, except when waiting for a reply, on the object's queue, with the object recorded in the TCB. Whatever ends the wait other than its normal completion has to undo that (`cancel_blocking`, `kernel/thread.rs:145`): leave the notification's or endpoint's queue, return a lent reply object, or unlink from the reply object a caller waits on (`cancel` and `cancel_reply`, `kernel/endpoint.rs:310`, 269):
-- **Suspending** a blocked thread cancels the wait and **restarts the system call**: the program counter is moved back over the `ecall` (`UserContext::restart_syscall`, `kernel/arch/riscv/trap.rs:93`), so resuming the thread repeats its `WAIT`, as seL4 does (`thread::suspend`, `kernel/thread.rs:164`). Nothing is lost: signals sent meanwhile accumulate in the word, and the repeated `WAIT` takes them.
-- **Deleting the last capability to the notification or endpoint** restarts every waiter's call (`finalise`, `kernel/notification.rs:109`; `finalise_endpoint`, `kernel/endpoint.rs:341`). The repeated call then fails cleanly with `FAILED_LOOKUP` instead of blocking forever on an object that is gone. A caller suspended while waiting for a reply has its `CALL` restarted too, so resuming it sends the call again, as in seL4.
-- **Deleting the thread** cancels its wait and unbinds any notification bound to it (`thread::finalise`, line 193).
+A blocked thread is in one of four states (`kernel/thread.rs:41`): blocked on a notification, on sending or receiving through an endpoint, or on a reply. It is off the ready queue (`sched::block`, `kernel/sched.rs:64`) and, except when waiting for a reply, on the object's queue, with the object recorded in the TCB. Whatever ends the wait other than its normal completion has to undo that (`cancel_blocking`, `kernel/thread.rs:150`): leave the notification's or endpoint's queue, return a lent reply object, or unlink from the reply object a caller waits on (`cancel` and `cancel_reply`, `kernel/endpoint.rs:339`, 269):
+- **Suspending** a blocked thread cancels the wait and **restarts the system call**: the program counter is moved back over the `ecall` (`UserContext::restart_syscall`, `kernel/arch/riscv/trap.rs:93`), so resuming the thread repeats its `WAIT`, as seL4 does (`thread::suspend`, `kernel/thread.rs:169`). Nothing is lost: signals sent meanwhile accumulate in the word, and the repeated `WAIT` takes them.
+- **Deleting the last capability to the notification or endpoint** restarts every waiter's call (`finalise`, `kernel/notification.rs:109`; `finalise_endpoint`, `kernel/endpoint.rs:370`). The repeated call then fails cleanly with `FAILED_LOOKUP` instead of blocking forever on an object that is gone. A caller suspended while waiting for a reply has its `CALL` restarted too, so resuming it sends the call again, as in seL4.
+- **Deleting the thread** cancels its wait and unbinds any notification bound to it (`thread::finalise`, line 202).
 
-`RESUME` (and `WRITE_REGISTERS` with the resume flag) only acts on an inactive thread (`thread::resume`, line 179), so it can't make a blocked thread runnable while it is still on a queue.
+`RESUME` (and `WRITE_REGISTERS` with the resume flag) only acts on an inactive thread (`thread::resume`, line 188), so it can't make a blocked thread runnable while it is still on a queue.
 
 
+
+## Fault delivery
+
+A thread's faults go to the endpoint in its fault slot (`FAULT_SLOT`, `kernel/thread.rs:28`), set with `TCB_SET_FAULT_HANDLER` (`kernel/invocation.rs:285`), which stores a derived copy as `TCB_CONFIGURE` does. This replaces the earlier rule that any user fault ended the boot. As in seL4, the faulting thread makes an **implicit `CALL`** to that endpoint (`fault::deliver`, `kernel/fault.rs:61`):
+- **The message** is built from the recorded fault (`Fault`, line 22), never from the thread's registers: the label is the fault kind (`VM` for page and access faults, `USER_EXCEPTION` for the rest), and the words are the faulting pc, the faulting address and the cause code (`abi/lib.rs:186`). The badge is the handler capability's, so one handler can serve many threads.
+- **The reply** doesn't touch the thread's registers (`fault::answered`, line 93). Label 0 resumes the thread at the faulting instruction, so a handler can fix the cause (map a page, say) and retry; any other label leaves the thread suspended.
+- **A fault that can't be answered** (the receiver lent no reply object, or the reply object was deleted) leaves the thread suspended, instead of returning `NO_REPLY` into registers it doesn't expect to change.
+- **Without a handler** the thread is suspended with a warning. The root task has nobody to report to, so a fault there still ends the boot with a failure, which is what makes test runs fail loudly.
+- **Suspending a thread that is delivering a fault** drops the fault rather than restarting a system call, so resuming it re-runs the faulting instruction and faults again.
 
 ## Per-thread IPC buffers in userspace
 
@@ -95,7 +104,7 @@ Several threads of one program each need their own IPC buffer. `libsap` keeps ea
 
 `user/init` (`check_notifications`) checks: minting two badges and refusing a re-badge; two signals with nobody waiting accumulating, so one poll returns both bits and the next returns none; a send-only capability being refused a `WAIT`; a second thread blocked in `WAIT` waking once per signal with the right badge; a signal sent while that thread is suspended being taken by its restarted `WAIT` after `RESUME`; revoking one badge deleting its copies while the badge itself keeps working; and deleting the notification with the thread waiting, after which its restarted `WAIT` reports `FAILED_LOOKUP`.
 
-`check_ipc` uses a `spawn` helper (`user/init/main.rs:421`) to start threads with their own stack and IPC buffer, and checks:
+`check_ipc` uses a `spawn` helper (`spawn_with`) (`user/init/main.rs:423`) to start threads with their own stack and IPC buffer, and checks:
 - a server thread answering with `REPLY_RECV`: a six-word `CALL` through a badged capability comes back with the badge as the label and every word incremented, so two words crossed the IPC buffers each way, and the reply carries no badge;
 - a plain `SEND` completing without an answer, counted by the server;
 - `RECV` on a send-only capability and `CALL` on a receive-only one refused;
@@ -112,4 +121,6 @@ Several threads of one program each need their own IPC buffer. `libsap` keeps ea
 - a `CALL` through a capability with grant-reply gets a capability moved back in its reply, into `init`'s own window; through one without grant-reply, the reply arrives with none.
 
 > [!todo] Not built
-> Fault delivery, the two-process ring demo, the IPC fast path, and scheduling contexts donated on `CALL`.
+> The two-process ring demo, the IPC fast path, scheduling contexts donated on `CALL`, timeout faults, and handlers writing the faulting thread's registers in their reply.
+
+`check_faults` checks that a thread reading unmapped memory reports a `VM` fault with the right address, pc and badge; that its handler (`init`) can map a page there, write a value and reply 0, after which the thread's read completes with that value; that an illegal instruction answered with a nonzero label leaves the thread stopped at the instruction; and that a thread without a handler is suspended inside the faulting function while `init` carries on.

@@ -24,7 +24,9 @@ pub const MAX_PRIORITY: u8 = 255;
 pub const CSPACE_SLOT: usize = 0;
 pub const VSPACE_SLOT: usize = 1;
 pub const IPC_BUFFER_SLOT: usize = 2;
-const TCB_SLOTS: usize = 3;
+/// The endpoint the thread's faults are delivered to.
+pub const FAULT_SLOT: usize = 3;
+const TCB_SLOTS: usize = 4;
 
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -80,6 +82,9 @@ pub struct Tcb {
     pub(crate) ipc_grant_reply: bool,
     /// While blocked on receive: the reply object lent for a CALL.
     pub(crate) ipc_reply: *mut crate::endpoint::Reply,
+    /// The fault being delivered, while the thread waits for its handler
+    /// (kind 0 when none, so a zeroed TCB has none).
+    pub(crate) fault: crate::fault::Fault,
 }
 
 const _: () = assert!(core::mem::size_of::<Tcb>() <= 1 << TCB_BITS);
@@ -165,7 +170,11 @@ pub unsafe fn suspend(tcb: *mut Tcb) {
     // SAFETY: per the caller's guarantee.
     unsafe {
         if cancel_blocking(tcb) {
-            (*tcb).context.restart_syscall();
+            // A thread delivering a fault isn't in a system call: drop the
+            // fault, and resuming it re-runs the faulting instruction.
+            if !(*tcb).fault.take() {
+                (*tcb).context.restart_syscall();
+            }
         }
         crate::sched::make_inactive(tcb);
     }

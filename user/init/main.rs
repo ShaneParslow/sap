@@ -6,7 +6,7 @@
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use libsap::abi::{attr, error, init_slot, object, recv_source, reg, rights, BootInfo};
+use libsap::abi::{attr, error, fault, init_slot, object, recv_source, reg, rights, BootInfo};
 use libsap::cnode::SlotRef;
 use libsap::sys::Error;
 use libsap::{debug, ipc, notification, println, sys, tcb, untyped, vspace};
@@ -26,6 +26,7 @@ fn sap_main(info: &'static BootInfo) -> ! {
     check_notifications(info);
     check_ipc(info);
     check_cap_transfer(info);
+    check_faults(info);
     println!("init: all checks passed");
     debug::halt(false)
 }
@@ -418,7 +419,8 @@ fn check_notifications(info: &BootInfo) {
 /// Start a thread in this address space at `entry(args)`, with a 4 KiB
 /// stack and an IPC buffer in a fresh 1 GiB-aligned region at `va`. Uses
 /// six slots from `slots` and memory from `untyped`. Returns the TCB slot.
-fn spawn(untyped: usize, slots: usize, va: usize, entry: extern "C" fn(usize, usize, usize) -> !, args: [usize; 3]) -> usize {
+/// The thread starts at once unless `start` is false.
+fn spawn_with(untyped: usize, slots: usize, va: usize, entry: extern "C" fn(usize, usize, usize) -> !, args: [usize; 3], start: bool) -> usize {
     let in_root = SlotRef { root: init_slot::CNODE, index: 0, depth: 0 };
     let (thread, tables, frames) = (slots, slots + 1, slots + 3);
     let me = init_slot::VSPACE;
@@ -438,8 +440,12 @@ fn spawn(untyped: usize, slots: usize, va: usize, entry: extern "C" fn(usize, us
     regs[reg::SP] = va + 0x1000;
     regs[reg::TP] = buffer;
     regs[reg::A0..reg::A0 + 3].copy_from_slice(&args);
-    expect("spawn: start", tcb::write_registers(thread, true, &regs), Ok(()));
+    expect("spawn: registers", tcb::write_registers(thread, start, &regs), Ok(()));
     thread
+}
+
+fn spawn(untyped: usize, slots: usize, va: usize, entry: extern "C" fn(usize, usize, usize) -> !, args: [usize; 3]) -> usize {
+    spawn_with(untyped, slots, va, entry, args, true)
 }
 
 /// Server state, read by the checks.
@@ -705,4 +711,88 @@ fn check_cap_transfer(info: &BootInfo) {
 
     expect("revoke", slot(parent).revoke(), Ok(()));
     println!("init: capability transfer, grant rights and receive windows behave");
+}
+
+/// What the faulting thread read after its handler fixed the fault.
+static FAULT_READ: AtomicUsize = AtomicUsize::new(0);
+
+/// Mode 0: read `address` (which faults until a handler maps it) and record
+/// the value. Mode 1: run an illegal instruction. Then suspend itself.
+extern "C" fn faulter(address: usize, mode: usize, me: usize) -> ! {
+    if mode == 0 {
+        // SAFETY: deliberately touches an address that may be unmapped; the
+        // fault handler maps it before this thread resumes.
+        let value = unsafe { core::ptr::read_volatile(address as *const usize) };
+        FAULT_READ.store(value, Ordering::Relaxed);
+    } else {
+        // SAFETY: deliberately illegal; the thread never resumes past it.
+        unsafe { core::arch::asm!("unimp") };
+    }
+    loop {
+        let _ = tcb::suspend(me);
+    }
+}
+
+/// Faults delivered over IPC: a page fault fixed by the handler mapping a
+/// page and resuming the thread, an illegal instruction left suspended, and
+/// a thread without a handler suspended rather than ending the boot.
+fn check_faults(info: &BootInfo) {
+    let base = info.empty.start + 240;
+    let (index, _) = info.untyped_list[..info.untyped.len()]
+        .iter()
+        .enumerate()
+        .find(|(_, u)| u.size_bits >= 18)
+        .expect("no untyped region of 256 KiB");
+    let parent = info.untyped.start + index;
+    let in_root = SlotRef { root: init_slot::CNODE, index: 0, depth: 0 };
+    let me = init_slot::VSPACE;
+    let (ep, reply, handler_cap, page) = (base, base + 1, base + 2, base + 3);
+    expect("retype endpoint", untyped::retype(parent, object::ENDPOINT, 0, in_root, ep, 1), Ok(()));
+    expect("retype reply", untyped::retype(parent, object::REPLY, 0, in_root, reply, 1), Ok(()));
+    expect("retype page", untyped::retype(parent, object::FRAME_4K, 0, in_root, page, 1), Ok(()));
+    expect("badge the handler cap", slot(handler_cap).mint_from(slot(ep), rights::WRITE, 0x51), Ok(()));
+
+    // A page fault, fixed by the handler. The address is in the faulting
+    // thread's own region, whose page tables exist but where nothing is
+    // mapped above its stack and IPC buffer.
+    let region = 0x30_0000_0000;
+    let target = region + 0x8000;
+    let t1 = spawn_with(parent, base + 10, region, faulter, [target, 0, base + 10], false);
+    expect("set handler", tcb::set_fault_handler(t1, Some(handler_cap)), Ok(()));
+    expect("start", tcb::resume(t1), Ok(()));
+    let mut words = [0usize; 3];
+    let got = ipc::recv(ep, reply, &mut words).expect("receive the fault");
+    assert_eq!((got.info.label(), got.badge), (fault::VM, 0x51), "fault kind or badge");
+    assert_eq!(words[fault::ADDRESS], target, "fault address");
+    let entry = faulter as *const () as usize;
+    assert!((entry..entry + 0x100).contains(&words[fault::PC]), "fault pc not in faulter");
+    // Fix it: map a page there with a value in it, and resume the thread.
+    expect("map the page", vspace::map_frame(page, me, target, rights::READ | rights::WRITE, attr::EXECUTE_NEVER), Ok(()));
+    // SAFETY: just mapped read-write.
+    unsafe { (target as *mut usize).write_volatile(0xfa017) };
+    expect("resume it", ipc::reply(reply, 0, &[], &[]), Ok(()));
+    sys::yield_now();
+    assert_eq!(FAULT_READ.load(Ordering::Relaxed), 0xfa017, "the faulting read didn't complete after the fix");
+
+    // An illegal instruction answered with a nonzero label stays stopped,
+    // at the instruction.
+    let t2 = spawn_with(parent, base + 20, region + 0x4000_0000, faulter, [0, 1, base + 20], false);
+    expect("set handler", tcb::set_fault_handler(t2, Some(handler_cap)), Ok(()));
+    expect("start", tcb::resume(t2), Ok(()));
+    let got = ipc::recv(ep, reply, &mut words).expect("receive the fault");
+    assert_eq!(got.info.label(), fault::USER_EXCEPTION, "fault kind");
+    expect("refuse it", ipc::reply(reply, 1, &[], &[]), Ok(()));
+    sys::yield_now();
+    let pc = tcb::read_registers(t2).expect("read registers")[reg::PC];
+    assert_eq!(pc, words[fault::PC], "a refused fault should leave the thread at the instruction");
+
+    // Without a handler, the faulting thread is suspended; this thread
+    // carries on.
+    let t3 = spawn(parent, base + 30, region + 0x8000_0000, faulter, [0, 1, base + 30]);
+    sys::yield_now();
+    let pc3 = tcb::read_registers(t3).expect("read registers")[reg::PC];
+    assert!((entry..entry + 0x100).contains(&pc3), "the unhandled thread isn't stopped in faulter");
+
+    expect("revoke", slot(parent).revoke(), Ok(()));
+    println!("init: faults delivered, fixed, refused and unhandled behave");
 }

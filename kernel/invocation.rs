@@ -282,6 +282,24 @@ fn tcb(target: *mut Tcb, m: &mut Message) -> Result {
             }
             Ok(0)
         }
+        label::TCB_SET_FAULT_HANDLER => {
+            let handler = if m.info.extra_caps() > 0 { Some(m.extra_cap(0)?) } else { None };
+            if let Some((_, cap)) = handler
+                && !matches!(cap, Cap::Endpoint { rights, .. } if rights as usize & sap_abi::rights::WRITE != 0)
+            {
+                return Err(error::INVALID_CAPABILITY);
+            }
+            // SAFETY: target is a live TCB; its slots are live.
+            let dest = unsafe { &raw mut (*target).slots[thread::FAULT_SLOT] };
+            // SAFETY: as above.
+            unsafe { cspace::delete(dest) }.map_err(|_| error::ILLEGAL_OPERATION)?;
+            if let Some((src, cap)) = handler {
+                let copy = derive(src, cap)?;
+                // SAFETY: both live; dest was just emptied.
+                unsafe { cspace::insert_derived(copy, src, dest) };
+            }
+            Ok(0)
+        }
         label::TCB_UNBIND_NOTIFICATION => {
             // SAFETY: target is live; a bound notification is live.
             unsafe {

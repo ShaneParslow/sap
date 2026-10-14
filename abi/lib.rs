@@ -172,6 +172,30 @@ pub mod label {
     /// also wake the thread from RECV on any endpoint.
     pub const TCB_BIND_NOTIFICATION: usize = 20;
     pub const TCB_UNBIND_NOTIFICATION: usize = 21;
+    /// Extra cap 0 = an endpoint (with the write right), or none to clear.
+    /// The thread's faults are delivered there (`fault`).
+    pub const TCB_SET_FAULT_HANDLER: usize = 22;
+}
+
+/// Fault messages. A thread that faults makes an implicit CALL to its
+/// fault-handler endpoint, with the fault kind as the label and message
+/// words `PC`, `ADDRESS`, `CAUSE`. A reply labelled 0 resumes the thread at
+/// the faulting instruction (after the handler fixed the cause, say by
+/// mapping a page); any other label leaves it suspended. The reply's words
+/// don't touch the thread's registers.
+pub mod fault {
+    /// A page fault or access fault on an instruction fetch, load or store.
+    pub const VM: usize = 1;
+    /// Any other exception: illegal instruction, misaligned access,
+    /// breakpoint.
+    pub const USER_EXCEPTION: usize = 2;
+
+    /// Message word indices.
+    pub const PC: usize = 0;
+    pub const ADDRESS: usize = 1;
+    /// The architecture's exception code (`scause` on RISC-V).
+    pub const CAUSE: usize = 2;
+    pub const LENGTH: usize = 3;
 }
 
 /// Register order for reading and writing a thread's registers (RISC-V).

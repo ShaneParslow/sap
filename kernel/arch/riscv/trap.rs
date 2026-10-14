@@ -242,15 +242,22 @@ extern "C" fn user_trap(context: &mut UserContext) -> ! {
             context.sepc += 4;
             crate::syscall::handle(context);
         }
-        _ => {
-            // TODO: deliver user faults to the thread's fault handler over
-            // IPC, as seL4 does (M4). Until then a fault ends the boot.
-            crate::error!(
-                "user fault: {cause:?} at pc {:#x}, address {:#x}",
-                context.sepc,
-                stval::read()
-            );
-            super::shutdown(true)
+        other => {
+            let kind = match other {
+                Ok(Trap::Exception(
+                    Exception::InstructionPageFault
+                    | Exception::LoadPageFault
+                    | Exception::StorePageFault
+                    | Exception::InstructionFault
+                    | Exception::LoadFault
+                    | Exception::StoreFault,
+                )) => sap_abi::fault::VM,
+                _ => sap_abi::fault::USER_EXCEPTION,
+            };
+            let fault = crate::fault::Fault { kind, pc: context.sepc, address: stval::read(), cause: scause::read().code() };
+            // SAFETY: the current thread is live and running; `context` (its
+            // registers) isn't used after this.
+            unsafe { crate::fault::deliver(crate::sched::current(), fault) };
         }
     }
     crate::sched::run()
