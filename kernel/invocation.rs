@@ -235,7 +235,7 @@ fn tcb(target: *mut Tcb, m: &mut Message) -> Result {
             context.reset_status();
             if flags & 1 != 0 {
                 // SAFETY: target is live.
-                unsafe { crate::sched::make_runnable(target) };
+                unsafe { thread::resume(target) };
             }
             Ok(0)
         }
@@ -256,12 +256,12 @@ fn tcb(target: *mut Tcb, m: &mut Message) -> Result {
         }
         label::TCB_RESUME => {
             // SAFETY: target is live.
-            unsafe { crate::sched::make_runnable(target) };
+            unsafe { thread::resume(target) };
             Ok(0)
         }
         label::TCB_SUSPEND => {
             // SAFETY: target is live.
-            unsafe { crate::sched::make_inactive(target) };
+            unsafe { thread::suspend(target) };
             Ok(0)
         }
         op @ (label::TCB_SET_PRIORITY | label::TCB_SET_MC_PRIORITY) => {
@@ -302,7 +302,8 @@ fn derive(slot: *mut Slot, cap: Cap) -> Result<Cap> {
 }
 
 /// Apply MINT's data word: a new guard for a CNode capability (bits 0..6 =
-/// guard size, the rest = guard value).
+/// guard size, the rest = guard value), or a badge for an unbadged
+/// notification capability.
 fn mint(cap: Cap, data: usize) -> Result<Cap> {
     match cap {
         Cap::CNode { ptr, radix, .. } => {
@@ -312,6 +313,9 @@ fn mint(cap: Cap, data: usize) -> Result<Cap> {
             }
             Ok(Cap::CNode { ptr, radix, guard_bits, guard: data >> 6 })
         }
+        Cap::Notification { rights, ptr, badge: 0 } => Ok(Cap::Notification { rights, ptr, badge: data }),
+        // A badge can't be changed once set.
+        Cap::Notification { .. } => Err(error::ILLEGAL_OPERATION),
         other => Ok(other),
     }
 }

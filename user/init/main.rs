@@ -9,7 +9,7 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use libsap::abi::{attr, error, init_slot, object, reg, rights, BootInfo};
 use libsap::cnode::SlotRef;
 use libsap::sys::Error;
-use libsap::{debug, println, sys, tcb, untyped, vspace};
+use libsap::{debug, notification, println, sys, tcb, untyped, vspace};
 
 /// Slot `i` of the root CNode.
 fn slot(i: usize) -> SlotRef {
@@ -23,6 +23,7 @@ fn sap_main(info: &'static BootInfo) -> ! {
     check_retype(info);
     check_mapping(info);
     check_threads(info);
+    check_notifications(info);
     println!("init: all checks passed");
     debug::halt(false)
 }
@@ -305,4 +306,109 @@ fn check_threads(info: &BootInfo) {
     assert_eq!(COUNTER.load(Ordering::Relaxed), after, "a deleted thread ran");
     expect("revoke", slot(parent).revoke(), Ok(()));
     println!("init: threads, priorities, preemption, suspension and deletion behave");
+}
+
+/// Bits received by the waiting thread, how often it woke, and the error
+/// that ended it.
+static RECEIVED: AtomicUsize = AtomicUsize::new(0);
+static WAKEUPS: AtomicUsize = AtomicUsize::new(0);
+static WAIT_ERROR: AtomicUsize = AtomicUsize::new(0);
+
+/// Wait on the notification at `ntfn` forever, recording what arrives;
+/// when waiting fails, record the error and suspend itself (`me`).
+extern "C" fn waiter(ntfn: usize, me: usize) -> ! {
+    loop {
+        match notification::wait(ntfn) {
+            Ok(bits) => {
+                RECEIVED.fetch_add(bits, Ordering::Relaxed);
+                WAKEUPS.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(e) => {
+                WAIT_ERROR.store(e.0, Ordering::Relaxed);
+                let _ = tcb::suspend(me);
+            }
+        }
+    }
+}
+
+/// Badged signals, polling, a waiting thread, suspension while waiting,
+/// revoking one badge, and deleting a notification with a thread waiting.
+fn check_notifications(info: &BootInfo) {
+    let base = info.empty.start + 64;
+    let (index, _) = info.untyped_list[..info.untyped.len()]
+        .iter()
+        .enumerate()
+        .find(|(_, u)| u.size_bits >= 16)
+        .expect("no untyped region of 64 KiB");
+    let parent = info.untyped.start + index;
+    let in_root = SlotRef { root: init_slot::CNODE, index: 0, depth: 0 };
+    let me = init_slot::VSPACE;
+    let (ntfn, one, two, one_copy) = (base, base + 1, base + 2, base + 3);
+
+    expect("retype notification", untyped::retype(parent, object::NOTIFICATION, 0, in_root, ntfn, 1), Ok(()));
+    expect("badge 1", slot(one).mint_from(slot(ntfn), rights::WRITE, 0b01), Ok(()));
+    expect("badge 2", slot(two).mint_from(slot(ntfn), rights::WRITE, 0b10), Ok(()));
+    expect("re-badge", slot(base + 4).mint_from(slot(one), rights::WRITE, 0b100), Err(error::ILLEGAL_OPERATION));
+
+    // With nobody waiting, signals accumulate and a poll takes them all.
+    expect("signal 1", notification::signal(one), Ok(()));
+    expect("signal 2", notification::signal(two), Ok(()));
+    assert_eq!(notification::poll(ntfn).map_err(|e| e.0), Ok(0b11), "poll should see both badges");
+    assert_eq!(notification::poll(ntfn).map_err(|e| e.0), Ok(0), "poll should have cleared the word");
+    let denied = notification::wait(one).map_err(|e| e.0);
+    assert_eq!(denied, Err(error::INVALID_CAPABILITY), "a send-only capability can't wait");
+
+    // A thread waiting on it: retype, give it a stack, start it.
+    let (thread, tables, stack) = (base + 5, base + 6, base + 8);
+    expect("retype tcb", untyped::retype(parent, object::TCB, 0, in_root, thread, 1), Ok(()));
+    expect("retype tables", untyped::retype(parent, object::PAGE_TABLE, 0, in_root, tables, 2), Ok(()));
+    expect("retype stack", untyped::retype(parent, object::FRAME_4K, 0, in_root, stack, 1), Ok(()));
+    let stack_va: usize = 0x6000_0000;
+    expect("map table", vspace::map_page_table(tables, me, stack_va), Ok(()));
+    expect("map table", vspace::map_page_table(tables + 1, me, stack_va), Ok(()));
+    expect("map stack", vspace::map_frame(stack, me, stack_va, rights::READ | rights::WRITE, attr::EXECUTE_NEVER), Ok(()));
+    expect("configure", tcb::configure(thread, init_slot::CNODE, me, None), Ok(()));
+    expect("priority", tcb::set_priority(thread, init_slot::TCB, 255), Ok(()));
+    let mut regs = [0; reg::COUNT];
+    regs[reg::PC] = waiter as *const () as usize;
+    regs[reg::SP] = stack_va + 0x1000;
+    regs[reg::A0] = ntfn;
+    regs[reg::A0 + 1] = thread;
+    expect("start", tcb::write_registers(thread, true, &regs), Ok(()));
+    sys::yield_now(); // it runs and blocks in wait
+
+    expect("signal 1", notification::signal(one), Ok(()));
+    sys::yield_now();
+    expect("signal 2", notification::signal(two), Ok(()));
+    sys::yield_now();
+    assert_eq!(RECEIVED.load(Ordering::Relaxed), 0b11, "the waiter should have received both badges");
+    assert_eq!(WAKEUPS.load(Ordering::Relaxed), 2, "one wakeup per signal");
+
+    // Suspended while waiting, it misses nothing: the signal accumulates,
+    // and resuming restarts its wait, which takes it.
+    expect("suspend", tcb::suspend(thread), Ok(()));
+    expect("signal while suspended", notification::signal(one), Ok(()));
+    sys::yield_now();
+    assert_eq!(WAKEUPS.load(Ordering::Relaxed), 2, "a suspended thread woke");
+    expect("resume", tcb::resume(thread), Ok(()));
+    sys::yield_now();
+    assert_eq!((RECEIVED.load(Ordering::Relaxed), WAKEUPS.load(Ordering::Relaxed)), (0b11 + 0b01, 3), "the restarted wait should take the pending badge");
+
+    // Revoking badge 1 cuts off its copies but nothing else.
+    expect("copy badge 1", slot(one_copy).copy_from(slot(one), rights::WRITE), Ok(()));
+    expect("revoke badge 1", slot(one).revoke(), Ok(()));
+    let gone = notification::signal(one_copy).map_err(|e| e.0);
+    assert_eq!(gone, Err(error::FAILED_LOOKUP), "a revoked badge copy still works");
+    expect("badge 1 itself survives", notification::signal(one), Ok(()));
+    sys::yield_now();
+
+    // Deleting the notification with the thread waiting restarts its wait,
+    // which then fails cleanly instead of hanging.
+    expect("revoke notification", slot(ntfn).revoke(), Ok(()));
+    expect("delete notification", slot(ntfn).delete(), Ok(()));
+    sys::yield_now();
+    assert_eq!(WAIT_ERROR.load(Ordering::Relaxed), error::FAILED_LOOKUP, "the waiter should see its capability gone");
+
+    expect("revoke", slot(parent).revoke(), Ok(()));
+    println!("init: notifications, badges, waiting, suspension and deletion behave");
 }

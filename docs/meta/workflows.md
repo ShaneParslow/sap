@@ -112,6 +112,8 @@ Answer from the wiki first, citing pages; fall back to transcripts and code when
 
 Run `python3 -I tools/wiki/lint.py` after every change to the wiki. It checks frontmatter, unique names, broken links and `#mN` anchors, index coverage, and stale `implemented` pages.
 
+**When code moves under citations**, run `python3 -I tools/wiki/recite.py` once before committing. It compares each cited file with its version at the page's last commit and moves every `path:line` and "(line N)" citation to where its line went, resolves "(`name`, line N)" citations by finding the definition of `name` (exact, and safe to repeat with `--named-only`), and lists citations whose line was changed or removed. Write citations in those forms so it can follow them; when the prose names another file in between, give the file explicitly. `--show` prints what every citation points at.
+
 Two reports help when code or history moves: `lint.py --citations` prints the line each `path:line` citation in an implemented page points at, so a citation that moved with the code is easy to spot; `lint.py --commits` lists commit hashes the wiki mentions that the repository doesn't have (other repositories' hashes, such as seL4's, appear too).
 
 **Rewriting history.** Line citations survive a rebase as long as each page stays in the same commit as its code. Commit hashes written into the wiki don't: the roadmap's Done list, decisions, session pages and `verified:` fields name commits, and a rebase or amend changes them. Avoid rewriting commits the wiki already names; if it happens, run `lint.py --commits` and update the hashes it lists.

@@ -28,6 +28,7 @@ Pages are ordered by dependency: the first is a decision the others depend on, t
 | [[kernel-traps-riscv]] | implemented | Trap entry with the `sscratch` stack switch, the shared return path, dispatch of timer, breakpoints, syscalls and user faults, and SBI timer ticks. |
 | [[kernel-threads]] | implemented | Thread control blocks, thread invocations (configure, registers, resume, suspend, priorities), fixed-priority round-robin scheduling, the idle loop, and lock-free kernel globals on one hart. |
 | [[kernel-capabilities]] | implemented | Capability representation, slots and CNodes, the derivation tree, address resolution, delete and revoke, `CALL` and CNode operations, and the root task's initial capabilities. |
+| [[kernel-ipc]] | implemented | Notifications, badges, blocking, cancellation and restarted system calls; endpoints, reply objects, capability transfer and fault delivery to come in M4. |
 | [[kernel-root-task]] | implemented | The one program the kernel loads itself: building and embedding `user/init`, loading a position-independent ELF, entering user mode, and the temporary debug syscalls. |
 
 The kernel is Rust (`no_std`); its code is in `kernel/`, with architecture code under `kernel/arch/riscv/`.

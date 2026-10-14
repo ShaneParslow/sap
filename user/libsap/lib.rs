@@ -8,6 +8,7 @@
 
 pub mod cnode;
 pub mod debug;
+pub mod notification;
 pub mod sys;
 pub mod tcb;
 pub mod untyped;

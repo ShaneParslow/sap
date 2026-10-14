@@ -11,6 +11,7 @@
 
 use crate::arch::{self, ArchCap};
 use crate::cspace::SLOT_BITS;
+use crate::notification::NOTIFICATION_BITS;
 use crate::thread::TCB_BITS;
 
 // `repr(u8)` gives a defined layout with the tag first and tag 0 = Null;
@@ -27,6 +28,10 @@ pub enum Cap {
     CNode { radix: u8, guard_bits: u8, ptr: usize, guard: usize },
     /// A thread control block at kernel address `ptr`.
     Thread { ptr: usize },
+    /// A notification at kernel address `ptr`. Signalling through this
+    /// capability ORs `badge` into the notification's word; `rights` (abi
+    /// `rights` bits) say whether it may signal (WRITE) and wait (READ).
+    Notification { rights: u8, ptr: usize, badge: usize },
     Arch(ArchCap),
 }
 
@@ -42,6 +47,7 @@ impl Cap {
             Cap::Untyped { base, size_bits, .. } => Some((base, size_bits)),
             Cap::CNode { ptr, radix, .. } => Some((arch::kernel_to_phys(ptr), radix + SLOT_BITS as u8)),
             Cap::Thread { ptr } => Some((arch::kernel_to_phys(ptr), TCB_BITS as u8)),
+            Cap::Notification { ptr, .. } => Some((arch::kernel_to_phys(ptr), NOTIFICATION_BITS as u8)),
             Cap::Arch(a) => a.extent(),
             Cap::Null => None,
         }
@@ -61,6 +67,7 @@ impl Cap {
             },
             (Cap::CNode { ptr, radix, .. }, Cap::CNode { ptr: p2, radix: r2, .. }) => ptr == p2 && radix == r2,
             (Cap::Thread { ptr }, Cap::Thread { ptr: p2 }) => ptr == p2,
+            (Cap::Notification { ptr, .. }, Cap::Notification { ptr: p2, .. }) => ptr == p2,
             (Cap::Arch(a), Cap::Arch(b)) => a.same_region_as(&b),
             _ => false,
         }
@@ -78,9 +85,21 @@ impl Cap {
 
     /// Whether a copy derived from `src` becomes a parent of later copies
     /// (seL4's `isCapRevocable`): copies of untyped memory do, so revoking
-    /// one copy deletes what was retyped through it.
-    pub fn is_revocable_copy(&self, _src: &Cap) -> bool {
-        matches!(self, Cap::Untyped { .. })
+    /// one copy deletes what was retyped through it; so does a copy given a
+    /// new badge, so revoking it cuts off exactly the holders of that badge.
+    pub fn is_revocable_copy(&self, src: &Cap) -> bool {
+        match self {
+            Cap::Untyped { .. } => true,
+            _ => self.badge().is_some() && self.badge() != src.badge(),
+        }
+    }
+
+    /// The badge of a notification (or, later, endpoint) capability.
+    pub fn badge(&self) -> Option<usize> {
+        match *self {
+            Cap::Notification { badge, .. } => Some(badge),
+            _ => None,
+        }
     }
 
     /// The capability with its rights reduced to `rights` (abi `rights`
@@ -88,6 +107,7 @@ impl Cap {
     pub fn masked(&self, rights: usize) -> Cap {
         match *self {
             Cap::Arch(a) => Cap::Arch(a.masked(rights)),
+            Cap::Notification { rights: r, ptr, badge } => Cap::Notification { rights: r & rights as u8, ptr, badge },
             other => other,
         }
     }

@@ -9,11 +9,12 @@
 //! next retype resets the watermark to zero. Objects are zeroed when
 //! created.
 
-use sap_abi::{error, object};
+use sap_abi::{error, object, rights};
 
 use crate::arch;
 use crate::cap::Cap;
 use crate::cspace::{self, Slot, SLOT_BITS};
+use crate::notification::NOTIFICATION_BITS;
 use crate::thread::{Tcb, TCB_BITS};
 
 /// The largest CNode, in bits of slots (seL4 allows up to the word size; 26
@@ -46,8 +47,9 @@ fn object_bits(object_type: usize, size_bits: usize) -> Result<usize, usize> {
             }
             Ok(size_bits + SLOT_BITS)
         }
-        // TODO: endpoints and notifications arrive with IPC (M4).
-        object::ENDPOINT | object::NOTIFICATION => Err(error::INVALID_ARGUMENT),
+        object::NOTIFICATION => Ok(NOTIFICATION_BITS),
+        // TODO: endpoints and reply objects arrive in the next M4 step.
+        object::ENDPOINT | object::REPLY => Err(error::INVALID_ARGUMENT),
         other => arch::object_bits(other).ok_or(error::INVALID_ARGUMENT),
     }
 }
@@ -125,6 +127,7 @@ fn create(object_type: usize, size_bits: usize, pa: usize, device: bool) -> Cap 
         // SAFETY: the TCB's memory was just zeroed and belongs to it.
         object::TCB => Cap::Thread { ptr: unsafe { Tcb::init(ptr) } as usize },
         object::CNODE => Cap::CNode { radix: size_bits as u8, guard_bits: 0, ptr, guard: 0 },
+        object::NOTIFICATION => Cap::Notification { rights: rights::ALL as u8, ptr, badge: 0 },
         other => Cap::Arch(arch::create_object(other, pa)),
     }
 }

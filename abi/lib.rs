@@ -21,6 +21,16 @@ pub mod syscall {
     /// Give up the rest of the time slice.
     pub const YIELD: usize = 6;
 
+    /// Notifications: `a0` = the notification capability's address.
+    /// Results: `a0` = badge bits (WAIT, POLL), `a1` = an `error` code.
+    /// OR the capability's badge into the notification's word, waking a
+    /// waiter if there is one.
+    pub const SIGNAL: usize = 8;
+    /// Block until the word is nonzero, then return and clear it.
+    pub const WAIT: usize = 9;
+    /// Return and clear the word without blocking (0 if nothing pending).
+    pub const POLL: usize = 10;
+
     /// TODO: debug-only calls, like seL4's; compile them out of release
     /// kernels once a userspace log service exists (M7).
     /// Print one byte on the kernel console.
@@ -63,7 +73,8 @@ pub mod label {
     /// copy with at most `rights`.
     pub const CNODE_COPY: usize = 3;
     /// Like COPY, plus MR5 = data: the new guard for a CNode capability
-    /// (bits 0..6 = guard size, the rest = guard value).
+    /// (bits 0..6 = guard size, the rest = guard value), or the badge for
+    /// an unbadged notification or endpoint capability.
     pub const CNODE_MINT: usize = 4;
     /// MR0..MR3 as COPY. Move the capability; the source slot ends empty.
     pub const CNODE_MOVE: usize = 5;
@@ -138,6 +149,8 @@ pub mod attr {
 }
 
 /// Capability rights, as in seL4.
+///
+/// For notifications: WRITE = may signal, READ = may wait or poll.
 pub mod rights {
     pub const WRITE: usize = 1 << 0;
     pub const READ: usize = 1 << 1;
@@ -152,6 +165,7 @@ pub mod object {
     pub const TCB: usize = 1;
     pub const ENDPOINT: usize = 2;
     pub const NOTIFICATION: usize = 3;
+    pub const REPLY: usize = 9;
     pub const CNODE: usize = 4;
     // RISC-V.
     pub const PAGE_TABLE: usize = 5;

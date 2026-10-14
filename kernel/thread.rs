@@ -35,6 +35,8 @@ pub enum ThreadState {
     /// Runnable, and in the scheduler's ready queue (whether or not it is
     /// the thread currently on the CPU).
     Running,
+    /// Waiting on the notification at `blocked_on`.
+    BlockedOnNotification,
 }
 
 #[repr(C)]
@@ -54,6 +56,13 @@ pub struct Tcb {
     /// Links in the scheduler's ready queue.
     pub(crate) queue_next: *mut Tcb,
     pub(crate) queue_prev: *mut Tcb,
+    /// The object this thread is blocked on (kernel address), when blocked.
+    pub(crate) blocked_on: usize,
+    /// Links in that object's queue of waiting threads.
+    pub(crate) ipc_next: *mut Tcb,
+    pub(crate) ipc_prev: *mut Tcb,
+    /// The notification bound to this thread, if any.
+    pub(crate) bound_notification: *mut crate::notification::Notification,
 }
 
 const _: () = assert!(core::mem::size_of::<Tcb>() <= 1 << TCB_BITS);
@@ -101,15 +110,67 @@ pub unsafe fn ipc_buffer(tcb: *const Tcb) -> Option<&'static mut IpcBuffer> {
     Some(unsafe { &mut *(at as *mut IpcBuffer) })
 }
 
-/// Finalise a TCB whose last capability was deleted: stop the thread and
-/// delete the capabilities it holds.
+/// Take a blocked thread off whatever it is blocked on. Returns whether it
+/// was blocked.
+///
+/// # Safety
+/// `tcb` must point at a live TCB.
+unsafe fn cancel_blocking(tcb: *mut Tcb) -> bool {
+    // SAFETY: per the caller's guarantee; a blocked thread's object is live.
+    unsafe {
+        match (*tcb).state {
+            ThreadState::BlockedOnNotification => crate::notification::cancel(tcb),
+            ThreadState::Inactive | ThreadState::Running => return false,
+        }
+        (*tcb).state = ThreadState::Inactive;
+    }
+    true
+}
+
+/// Stop a thread. One blocked in a system call has the call restarted, so
+/// resuming it repeats the call, as in seL4.
+///
+/// # Safety
+/// `tcb` must point at a live TCB.
+pub unsafe fn suspend(tcb: *mut Tcb) {
+    // SAFETY: per the caller's guarantee.
+    unsafe {
+        if cancel_blocking(tcb) {
+            (*tcb).context.restart_syscall();
+        }
+        crate::sched::make_inactive(tcb);
+    }
+}
+
+/// Make an inactive thread runnable. A thread that is runnable or blocked
+/// is left as it is, as in seL4.
+///
+/// # Safety
+/// `tcb` must point at a live TCB.
+pub unsafe fn resume(tcb: *mut Tcb) {
+    // SAFETY: per the caller's guarantee.
+    unsafe {
+        if (*tcb).state == ThreadState::Inactive {
+            crate::sched::make_runnable(tcb);
+        }
+    }
+}
+
+/// Finalise a TCB whose last capability was deleted: stop the thread,
+/// unbind its notification, and delete the capabilities it holds.
 ///
 /// # Safety
 /// `tcb` must point at a live TCB.
 pub unsafe fn finalise(tcb: *mut Tcb, depth: usize) -> Result<(), DeleteError> {
     // SAFETY: per the caller's guarantee.
     unsafe {
+        cancel_blocking(tcb);
         crate::sched::make_inactive(tcb);
+        let bound = (*tcb).bound_notification;
+        if !bound.is_null() {
+            (*bound).bound = core::ptr::null_mut();
+            (*tcb).bound_notification = core::ptr::null_mut();
+        }
         Slot::delete_all(&mut (*tcb).slots, depth)
     }
 }

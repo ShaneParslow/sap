@@ -50,9 +50,24 @@ pub unsafe fn make_runnable(tcb: *mut Tcb) {
     // SAFETY: per the caller's guarantee.
     let t = unsafe { &mut *tcb };
     if t.state != ThreadState::Running {
+        debug_assert!(t.blocked_on == 0, "making a thread runnable while it is still queued on an object");
         t.state = ThreadState::Running;
         enqueue(tcb);
     }
+}
+
+/// Block `tcb` in `state` on the object at `on`: off the CPU and out of the
+/// ready queue until something makes it runnable.
+///
+/// # Safety
+/// `tcb` must point at a live, runnable TCB.
+pub unsafe fn block(tcb: *mut Tcb, state: ThreadState, on: usize) {
+    // SAFETY: per the caller's guarantee.
+    let t = unsafe { &mut *tcb };
+    debug_assert_eq!(t.state, ThreadState::Running);
+    dequeue(tcb);
+    t.state = state;
+    t.blocked_on = on;
 }
 
 /// Take `tcb` off the CPU and out of its queue.
@@ -65,6 +80,7 @@ pub unsafe fn make_inactive(tcb: *mut Tcb) {
     if t.state == ThreadState::Running {
         dequeue(tcb);
     }
+    debug_assert!(matches!(t.state, ThreadState::Running | ThreadState::Inactive), "inactivating a blocked thread");
     t.state = ThreadState::Inactive;
     if sched().current == tcb {
         sched().current = core::ptr::null_mut();

@@ -87,6 +87,13 @@ impl UserContext {
         self.x[A0 + i] = value;
     }
 
+    /// Make the interrupted system call run again when the thread resumes:
+    /// the trap handler moved `sepc` past the 4-byte `ecall`, so move it
+    /// back.
+    pub fn restart_syscall(&mut self) {
+        self.sepc -= 4;
+    }
+
     /// Register `i` in `sap_abi::reg` order: pc, ra, sp, gp, tp, a0..a7.
     pub fn user_reg(&self, i: usize) -> usize {
         match i {

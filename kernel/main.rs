@@ -11,6 +11,7 @@ mod global;
 mod invocation;
 mod log;
 mod mm;
+mod notification;
 mod root_task;
 mod sched;
 mod syscall;

@@ -34,6 +34,10 @@ pub struct Slot {
     /// capabilities and newly retyped objects) and for copies of untyped
     /// memory.
     revocable: bool,
+    /// Whether this capability was the first to carry its badge (seL4's
+    /// `mdbFirstBadged`): copies with the same badge after it are its
+    /// children, so revoking it cuts off the whole badge.
+    first_badged: bool,
 }
 
 const _: () = assert!(core::mem::size_of::<Slot>() <= 1 << SLOT_BITS);
@@ -135,6 +139,7 @@ pub unsafe fn insert_original(cap: Cap, parent: Option<*mut Slot>, dest: *mut Sl
         debug_assert!((*dest).cap.is_null());
         (*dest).cap = cap;
         (*dest).revocable = true;
+        (*dest).first_badged = true;
         (*dest).prev = ptr::null_mut();
         (*dest).next = ptr::null_mut();
         if let Some(parent) = parent {
@@ -154,6 +159,7 @@ pub unsafe fn insert_derived(cap: Cap, src: *mut Slot, dest: *mut Slot) {
         debug_assert!((*dest).cap.is_null());
         (*dest).cap = cap;
         (*dest).revocable = cap.is_revocable_copy(&(*src).cap);
+        (*dest).first_badged = (*dest).revocable;
         link_after(src, dest);
     }
 }
@@ -173,6 +179,7 @@ pub unsafe fn move_cap(src: *mut Slot, dest: *mut Slot) {
         let d = &mut *dest;
         d.cap = s.cap;
         d.revocable = s.revocable;
+        d.first_badged = s.first_badged;
         d.prev = s.prev;
         d.next = s.next;
         if !d.prev.is_null() {
@@ -185,6 +192,7 @@ pub unsafe fn move_cap(src: *mut Slot, dest: *mut Slot) {
         s.prev = ptr::null_mut();
         s.next = ptr::null_mut();
         s.revocable = false;
+        s.first_badged = false;
     }
 }
 
@@ -216,13 +224,23 @@ unsafe fn empty(slot: *mut Slot) {
         s.prev = ptr::null_mut();
         s.next = ptr::null_mut();
         s.revocable = false;
+        s.first_badged = false;
     }
 }
 
 /// Whether the capability in `b` is a child of the one in `a` (seL4's
 /// `isMDBParentOf`).
 fn is_parent_of(a: &Slot, b: &Slot) -> bool {
-    a.revocable && a.cap.same_region_as(&b.cap)
+    if !a.revocable || !a.cap.same_region_as(&b.cap) {
+        return false;
+    }
+    // A badged capability's children are the copies carrying the same
+    // badge, up to the next one that was badged afresh. An unbadged
+    // original is the parent of every badge.
+    match (a.cap.badge(), b.cap.badge()) {
+        (Some(0), _) | (None, _) => true,
+        (Some(badge), other) => other == Some(badge) && !b.first_badged,
+    }
 }
 
 /// Whether `slot` holds the last capability to its object: no neighbour on
@@ -293,6 +311,11 @@ unsafe fn finalise(cap: Cap, last: bool, depth: usize) -> Result<(), DeleteError
         Cap::Thread { ptr } if last => {
             // SAFETY: the TCB is live (see above).
             unsafe { crate::thread::finalise(ptr as *mut crate::thread::Tcb, depth) }
+        }
+        Cap::Notification { ptr, .. } if last => {
+            // SAFETY: the notification is live (see above).
+            unsafe { crate::notification::finalise(ptr as *mut crate::notification::Notification) };
+            Ok(())
         }
         Cap::Arch(a) => {
             crate::arch::finalise_cap(a, last);
