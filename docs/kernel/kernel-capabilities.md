@@ -3,6 +3,7 @@ status: implemented
 summary: Capabilities as implemented today, following seL4 - the capability representation, CNodes of 64-byte slots, the derivation tree kept as a linked list through the slots, resolving capability addresses through guarded CNodes, delete and revoke with finalisation, the CALL invocation path, CNode operations, retyping untyped memory, building address spaces from page-table and frame capabilities, and the capabilities the root task starts with.
 updated: 2026-10-13
 code: [kernel/cap.rs, kernel/cspace.rs, kernel/invocation.rs, kernel/untyped.rs, kernel/thread.rs, kernel/root_task.rs, kernel/arch/riscv/caps.rs, kernel/arch/riscv/vspace.rs, abi/lib.rs, user/libsap/sys.rs, user/libsap/cnode.rs, user/libsap/untyped.rs, user/libsap/vspace.rs, user/init/main.rs, kernel/arch/riscv/paging.rs]
+verified: 7123956
 sources: ["[[2026-10-08-22c3947b-wiki-setup]]"]
 ---
 
