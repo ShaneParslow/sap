@@ -9,6 +9,7 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use libsap::abi::{attr, error, fault, init_slot, object, recv_source, reg, rights, BootInfo};
 use libsap::cnode::SlotRef;
 use libsap::sys::Error;
+use libsap::process::{self, Parent, Slots};
 use libsap::{debug, ipc, notification, println, sys, tcb, untyped, vspace};
 
 /// Slot `i` of the root CNode.
@@ -17,7 +18,9 @@ fn slot(i: usize) -> SlotRef {
 }
 
 #[unsafe(no_mangle)]
-fn sap_main(info: &'static BootInfo) -> ! {
+fn sap_main(boot_info: usize, _: usize, _: usize) -> ! {
+    // SAFETY: the kernel passes the address of the read-only boot-info page.
+    let info = unsafe { &*(boot_info as *const BootInfo) };
     report(info);
     check_cnode_operations(info);
     check_retype(info);
@@ -27,6 +30,7 @@ fn sap_main(info: &'static BootInfo) -> ! {
     check_ipc(info);
     check_cap_transfer(info);
     check_faults(info);
+    check_process(info);
     println!("init: all checks passed");
     debug::halt(false)
 }
@@ -795,4 +799,64 @@ fn check_faults(info: &BootInfo) {
 
     expect("revoke", slot(parent).revoke(), Ok(()));
     println!("init: faults delivered, fixed, refused and unhandled behave");
+}
+
+/// The second program, built by this crate's build script.
+static PEER: &[u8] = include_bytes!(env!("PEER_ELF"));
+
+/// Load the peer into a process of its own and talk to it: a call across
+/// address spaces, and its attempt to read this process's memory, which
+/// faults and is reported here.
+fn check_process(info: &BootInfo) {
+    let base = info.empty.start + 300;
+    let (index, _) = info.untyped_list[..info.untyped.len()]
+        .iter()
+        .enumerate()
+        .find(|(_, u)| u.size_bits >= 20)
+        .expect("no untyped region of 1 MiB");
+    let parent_untyped = info.untyped.start + index;
+    let in_root = SlotRef { root: init_slot::CNODE, index: 0, depth: 0 };
+    let (ep, reply, badged) = (base, base + 1, base + 2);
+    expect("retype endpoint", untyped::retype(parent_untyped, object::ENDPOINT, 0, in_root, ep, 1), Ok(()));
+    expect("retype reply", untyped::retype(parent_untyped, object::REPLY, 0, in_root, reply, 1), Ok(()));
+    expect("badge", slot(badged).mint_from(slot(ep), rights::WRITE | rights::GRANT, 0x9ee), Ok(()));
+
+    // The scratch region is where this process fills pages; the peer will
+    // try to read it.
+    let scratch = 0x38_0000_0000;
+    let parent = Parent {
+        cnode: init_slot::CNODE,
+        vspace: init_slot::VSPACE,
+        asid_pool: init_slot::ASID_POOL,
+        authority: init_slot::TCB,
+        untyped: parent_untyped,
+        scratch,
+    };
+    let mut slots = Slots { next: base + 3, end: base + 200 };
+    // The peer's slot 1 is its endpoint, slot 2 its own thread.
+    let peer = process::load(PEER, &parent, &mut slots, 255, [1, 2, 0]);
+    peer.give(&parent, 1, badged, rights::WRITE | rights::GRANT);
+    peer.give(&parent, 2, peer.tcb, rights::ALL);
+    expect("fault handler", tcb::set_fault_handler(peer.tcb, Some(badged)), Ok(()));
+    // Something mapped at the scratch address, so the peer's read would
+    // succeed if it could see this address space.
+    expect("scratch page", untyped::retype(parent_untyped, object::FRAME_4K, 0, in_root, slots.next, 1), Ok(()));
+    let marker = slots.next;
+    expect("map scratch", vspace::map_frame(marker, init_slot::VSPACE, scratch, rights::READ | rights::WRITE, attr::EXECUTE_NEVER), Ok(()));
+    peer.start();
+
+    let mut words = [0usize; 8];
+    let first = ipc::recv(ep, reply, &mut words).expect("receive the peer's call");
+    assert_eq!((first.badge, first.info.label(), first.info.length()), (0x9ee, 1, 6), "the peer's call");
+    assert_eq!(words[..6], [1, 2, 3, 4, 5, 6], "the peer's words");
+    let doubled = [2, 4, 6, 8, 10, 12];
+    let second = ipc::reply_recv(ep, reply, 0, &doubled, &[], &mut words).expect("receive the peer's report");
+    assert_eq!((second.info.label(), words[0]), (2, 42), "the peer should report the sum of the reply");
+    let fault_msg = ipc::reply_recv(ep, reply, 0, &[], &[], &mut words).expect("receive the peer's fault");
+    assert_eq!((fault_msg.info.label(), words[fault::ADDRESS]), (fault::VM, scratch), "the peer's read should fault");
+    expect("leave it suspended", ipc::reply(reply, 1, &[], &[]), Ok(()));
+
+    expect("unmap scratch", vspace::unmap_frame(marker), Ok(()));
+    expect("revoke", slot(parent_untyped).revoke(), Ok(()));
+    println!("init: a second process, calls between address spaces and isolation behave");
 }

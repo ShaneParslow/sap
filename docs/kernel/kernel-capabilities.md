@@ -78,7 +78,7 @@ The capability's type picks the object, and the label picks the operation (`abi/
 
 Derivation follows seL4's `deriveCap` (`derive`, line 339): untyped memory can only be copied while nothing has been retyped from it (`REVOKE_FIRST` otherwise), and a copied frame capability starts unmapped. A destination that isn't empty gives `DELETE_FIRST`; an address that doesn't resolve gives `FAILED_LOOKUP`. Kernel object methods are plain constants in `sap-abi` for now; a `TODO` says to generate them from a Cap'n Proto schema (roadmap D5, [[cap-process-authority#Runtime capabilities and declared imports]]).
 
-On the user side, `libsap` (`user/libsap/`) wraps `CALL` (`sys::call`, `user/libsap/sys.rs:47`), the CNode operations (`user/libsap/cnode.rs`) and retype (`user/libsap/untyped.rs`).
+On the user side, `libsap` (`user/libsap/`) wraps `CALL` (`sys::call`, `user/libsap/sys.rs:44`), the CNode operations (`user/libsap/cnode.rs`) and retype (`user/libsap/untyped.rs`).
 
 ## Retyping untyped memory
 

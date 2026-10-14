@@ -17,7 +17,7 @@ The root task is `user/init`, its own crate. The kernel's build script (`kernel/
 
 `user/init` is linked as a **static position-independent executable** (`-C relocation-model=pie`, `--pie --no-dynamic-linker`), in line with the decision that all code is position-independent ([[prog-loading]]). Each segment starts on its own page (`-z separate-loadable-segments`), so segments can be mapped with different permissions. The precompiled `core` library for this target isn't position-independent, so its vtables need relocations in read-only segments; `-z notext` allows that, and the loader applies relocations before mapping anything (`user/init/build.rs`).
 
-It is built on **`libsap`** (`user/libsap/`), the user runtime: the `_start` entry point, which records the IPC buffer address (in the thread-pointer register, one per thread, [[kernel-ipc#Per-thread IPC buffers in userspace]]) and calls the program's `sap_main` with the boot-info page; a debug console with `print!`/`println!`; the panic handler; and wrappers for syscalls and invocations ([[kernel-capabilities#Invocation]]).
+It is built on **`libsap`** ([[prog-libsap]]), the user runtime. The kernel starts the root task by the same convention as every other thread: `tp` at its IPC buffer, and here `a0` the boot-info page's address.
 
 ## Loading it
 

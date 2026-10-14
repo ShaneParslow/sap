@@ -10,6 +10,7 @@ The chat spent several turns on what programs should look like (ASTs in the stor
 
 | Page | Status | Summary |
 |---|---|---|
+| [[prog-libsap]] | implemented | The user runtime: the thread start convention, the entry point, invocation and IPC wrappers, and the ELF loader that starts programs in their own processes. |
 | [[prog-loading]] | proposed | How code becomes a process: a userspace process manager, static ELF natively and loader components for other formats, a small per-architecture process ABI, per-process address spaces, and a boot image. |
 | [[prog-rust-toolchain]] | proposed | Why precompiled `core` forces text relocations, a sap Rust target with position-independent `core` and `alloc` built from source, and the path to `std`. |
 | [[prog-composition]] | exploring | Wiring and starting programs: resolution at launch, shared or per-client instances, eager/lazy/manual start, compositions as data, factory imports as the escape hatch, and edge cases. |

@@ -15,7 +15,7 @@ The **process manager**, a userspace component, as in seL4, where the kernel kno
 
 **Decided (2026-10-11):** the *process factory* is an RPC interface hosted by the process manager, not a kernel object. The kernel only needs threads, address spaces and capability tables, as seL4 shows. The human's reason: it makes multiple executable formats and interpreters easy, since each is just another loader behind the same interface ([[2026-10-08-22c3947b#m20|§m20]]).
 
-The kernel itself loads exactly one program, the root task, as seL4 does; it is built today as a static position-independent ELF embedded in the kernel ([[kernel-root-task]]). The process manager will be that root task.
+The kernel itself loads exactly one program, the root task, as seL4 does; it is built today as a static position-independent ELF embedded in the kernel ([[kernel-root-task]]). The process manager will be that root task. The first piece of its loader exists in `libsap`, and the root task already uses it to start a second program in its own process ([[prog-libsap#The loader]]).
 
 ## Code objects and formats
 

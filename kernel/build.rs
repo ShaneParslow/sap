@@ -35,6 +35,8 @@ fn build_init(kernel_dir: &str) {
 
     let elf = target_dir.join("riscv64gc-unknown-none-elf/release/init");
     println!("cargo:rustc-env=INIT_ELF={}", elf.display());
-    println!("cargo:rerun-if-changed={}", init_dir.display());
+    // Everything under user/ (init, its libraries, the programs it embeds)
+    // and the shared ABI.
+    println!("cargo:rerun-if-changed={kernel_dir}/../user");
     println!("cargo:rerun-if-changed={kernel_dir}/../abi");
 }

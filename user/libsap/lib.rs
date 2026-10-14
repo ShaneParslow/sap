@@ -1,7 +1,10 @@
 //! The runtime for sap user programs: the entry point, a debug console, the
-//! panic handler, and wrappers for system calls and kernel-object
-//! invocations. A program provides `sap_main`.
+//! panic handler, wrappers for system calls and kernel-object invocations,
+//! and a loader for starting other programs. A program provides `sap_main`.
 //!
+//! Every thread starts with `sp` at the top of its stack, `tp` pointing at
+//! its IPC buffer, and up to three arguments in `a0`..`a2`. For the root
+//! task, `a0` is the address of the kernel's boot-info page.
 
 #![no_std]
 
@@ -9,6 +12,7 @@ pub mod cnode;
 pub mod debug;
 pub mod ipc;
 pub mod notification;
+pub mod process;
 pub mod sys;
 pub mod tcb;
 pub mod untyped;
@@ -17,10 +21,7 @@ pub mod vspace;
 use core::panic::PanicInfo;
 
 pub use sap_abi as abi;
-use sap_abi::BootInfo;
 
-// The kernel starts a thread with sp at the top of its stack and its first
-// argument in a0; for the root task that is the boot-info address.
 core::arch::global_asm!(
     r#"
     .section .text.entry
@@ -32,15 +33,14 @@ _start:
 );
 
 unsafe extern "Rust" {
-    /// The program's entry point.
-    fn sap_main(boot_info: &'static BootInfo) -> !;
+    /// The program's entry point, with the thread's three start arguments.
+    fn sap_main(a0: usize, a1: usize, a2: usize) -> !;
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn sap_start(boot_info: &'static BootInfo) -> ! {
-    sys::set_ipc_buffer(boot_info.ipc_buffer);
+extern "C" fn sap_start(a0: usize, a1: usize, a2: usize) -> ! {
     // SAFETY: the program defines sap_main.
-    unsafe { sap_main(boot_info) }
+    unsafe { sap_main(a0, a1, a2) }
 }
 
 #[panic_handler]

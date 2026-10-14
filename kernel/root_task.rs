@@ -217,6 +217,9 @@ pub fn start(mut alloc: BootAllocator) {
     // SAFETY: tcb was initialized above.
     unsafe {
         (*tcb).context = UserContext::new_user(entry, STACK_TOP, BOOT_INFO_VA);
+        // Every thread starts with tp = its IPC buffer (the convention
+        // libsap relies on).
+        (*tcb).context.set_user_reg(sap_abi::reg::TP, IPC_BUFFER_VA);
         (*tcb).priority = MAX_PRIORITY;
         (*tcb).mcp = MAX_PRIORITY;
         crate::fault::set_root(tcb);

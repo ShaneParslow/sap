@@ -4,17 +4,14 @@ use core::arch::asm;
 
 use sap_abi::{syscall, IpcBuffer, MessageInfo, MAX_EXTRA_CAPS, MESSAGE_REGISTERS};
 
+/// This thread's IPC buffer.
+///
 /// Each thread keeps its IPC buffer's address in the thread-pointer
 /// register `tp`, which nothing else uses yet (there is no thread-local
-/// storage). A thread's creator sets it with the other start registers.
+/// storage). Whoever starts a thread sets it with the other start
+/// registers; the kernel does so for the root task.
 ///
 /// TODO: move to a real thread-local once the sap Rust target has TLS.
-pub(crate) fn set_ipc_buffer(address: usize) {
-    // SAFETY: tp is reserved for this; writing it affects only this thread.
-    unsafe { asm!("mv tp, {}", in(reg) address, options(nomem, nostack)) };
-}
-
-/// This thread's IPC buffer.
 pub fn ipc_buffer() -> &'static mut IpcBuffer {
     let address: usize;
     // SAFETY: reading a register.
