@@ -98,6 +98,37 @@ pub mod label {
     /// Extra cap 0 = an unmapped page table. Make it the root of a new
     /// address space with a free ASID.
     pub const ASID_POOL_ASSIGN: usize = 12;
+
+    // Threads.
+    /// MR0 = IPC buffer address; extra caps 0 = capability-space root
+    /// (a CNode), 1 = address-space root, 2 = IPC buffer frame (optional).
+    /// The thread keeps copies of the capabilities.
+    pub const TCB_CONFIGURE: usize = 13;
+    /// MR0 = flags (bit 0: resume afterwards), MR1 = count, MR2.. =
+    /// registers in `reg` order. Not allowed on the calling thread.
+    pub const TCB_WRITE_REGISTERS: usize = 14;
+    /// MR0 = count. Returns registers in `reg` order. Not allowed on the
+    /// calling thread.
+    pub const TCB_READ_REGISTERS: usize = 15;
+    pub const TCB_RESUME: usize = 16;
+    pub const TCB_SUSPEND: usize = 17;
+    /// MR0 = priority; extra cap 0 = an authority thread whose maximum
+    /// controlled priority must be at least the new priority.
+    pub const TCB_SET_PRIORITY: usize = 18;
+    /// MR0 = maximum controlled priority; extra cap 0 = authority, as above.
+    pub const TCB_SET_MC_PRIORITY: usize = 19;
+}
+
+/// Register order for reading and writing a thread's registers (RISC-V).
+pub mod reg {
+    pub const PC: usize = 0;
+    pub const RA: usize = 1;
+    pub const SP: usize = 2;
+    pub const GP: usize = 3;
+    pub const TP: usize = 4;
+    /// a0..a7 follow.
+    pub const A0: usize = 5;
+    pub const COUNT: usize = 13;
 }
 
 /// Frame mapping attributes.

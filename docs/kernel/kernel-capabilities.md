@@ -48,7 +48,7 @@ A capability address is resolved like a page-table walk (`resolve`, `kernel/cspa
 - a thread is taken off the CPU and its own slots are deleted (`thread::finalise`);
 - a page table that is an address-space root frees its ASID; a mapped one is unmapped.
 
-Deleting a frame capability that maps its frame unmaps it whether or not it was the last, since each frame capability is its own mapping (`kernel/arch/riscv/vspace.rs:162`). The object's memory isn't reclaimed by deletion; that happens when the untyped memory it came from is revoked.
+Deleting a frame capability that maps its frame unmaps it whether or not it was the last, since each frame capability is its own mapping (`kernel/arch/riscv/vspace.rs:167`). The object's memory isn't reclaimed by deletion; that happens when the untyped memory it came from is revoked.
 
 The slot is emptied *before* finalisation, so a CNode that contains the slot being deleted can't reach it again while its contents are deleted. seL4 instead turns the capability into a "zombie" so deletion can be preempted and doesn't recurse. sap recurses and refuses nesting deeper than 32 CNodes (`DeleteError::TooDeep`, line 54), marked `TODO`.
 
@@ -56,9 +56,9 @@ The slot is emptied *before* finalisation, so a CNode that contains the slot bei
 
 ## Invocation
 
-`CALL` (`kernel/invocation.rs:74`) takes the invoked capability's address in `a0`, a message info word in `a1` (label, number of extra capabilities, length, laid out as in seL4, `abi/lib.rs:141`), and message words 0–3 in `a2`–`a5`. Words 4 and up, and the addresses of up to three extra capabilities, are in the thread's IPC buffer (`abi/lib.rs:169`), a 1 KiB block the kernel reaches through the frame capability in the TCB. The reply's label is an error code (`abi/lib.rs:33`, numbered as seL4's) and its result words come back in the same registers.
+`CALL` (`kernel/invocation.rs:81`) takes the invoked capability's address in `a0`, a message info word in `a1` (label, number of extra capabilities, length, laid out as in seL4, `abi/lib.rs:172`), and message words 0–3 in `a2`–`a5`. Words 4 and up, and the addresses of up to three extra capabilities, are in the thread's IPC buffer (`abi/lib.rs:200`), a 1 KiB block the kernel reaches through the frame capability in the TCB. The reply's label is an error code (`abi/lib.rs:33`, numbered as seL4's) and its result words come back in the same registers.
 
-The capability's type picks the object, and the label picks the operation (`abi/lib.rs:54`). CNodes support (`kernel/invocation.rs:127`):
+The capability's type picks the object, and the label picks the operation (`abi/lib.rs:54`). Threads have their own operations, on [[kernel-threads#Thread invocations]]. CNodes support (`kernel/invocation.rs:135`):
 
 | Operation | Effect |
 |---|---|
@@ -68,13 +68,13 @@ The capability's type picks the object, and the label picks the operation (`abi/
 | `MINT` | `COPY` plus a new guard for a CNode capability |
 | `MOVE` | move a capability to an empty slot |
 
-Derivation follows seL4's `deriveCap` (line 176): untyped memory can only be copied while nothing has been retyped from it (`REVOKE_FIRST` otherwise), and a copied frame capability starts unmapped. A destination that isn't empty gives `DELETE_FIRST`; an address that doesn't resolve gives `FAILED_LOOKUP`. Kernel object methods are plain constants in `sap-abi` for now; a `TODO` says to generate them from a Cap'n Proto schema (roadmap D5, [[cap-process-authority#Runtime capabilities and declared imports]]).
+Derivation follows seL4's `deriveCap` (line 293): untyped memory can only be copied while nothing has been retyped from it (`REVOKE_FIRST` otherwise), and a copied frame capability starts unmapped. A destination that isn't empty gives `DELETE_FIRST`; an address that doesn't resolve gives `FAILED_LOOKUP`. Kernel object methods are plain constants in `sap-abi` for now; a `TODO` says to generate them from a Cap'n Proto schema (roadmap D5, [[cap-process-authority#Runtime capabilities and declared imports]]).
 
 On the user side, `libsap` (`user/libsap/`) wraps `CALL` (`sys::call`, `user/libsap/sys.rs:42`), the CNode operations (`user/libsap/cnode.rs`) and retype (`user/libsap/untyped.rs`).
 
 ## Retyping untyped memory
 
-Retyping is the only way kernel objects come into existence after boot, so every object's memory is charged to whoever held the untyped capability ([[kernel-objects-and-syscalls#Kernel memory]]). `UNTYPED_RETYPE` (`kernel/invocation.rs:101`, `kernel/untyped.rs:61`) takes an object type (`abi/lib.rs:119`), a size where the type has one, a destination CNode named by (index, depth) from a root CNode passed as an extra capability (depth 0 names the root itself, as in seL4), and a range of empty slots in it, at most 256.
+Retyping is the only way kernel objects come into existence after boot, so every object's memory is charged to whoever held the untyped capability ([[kernel-objects-and-syscalls#Kernel memory]]). `UNTYPED_RETYPE` (`kernel/invocation.rs:109`, `kernel/untyped.rs:61`) takes an object type (`abi/lib.rs:150`), a size where the type has one, a destination CNode named by (index, depth) from a root CNode passed as an extra capability (depth 0 names the root itself, as in seL4), and a range of empty slots in it, at most 256.
 
 | Type | Size of one object |
 |---|---|
@@ -90,7 +90,7 @@ Untyped memory is handed out with a **watermark**: each object goes at the next 
 
 ## Address spaces
 
-Userspace builds address spaces from capabilities, as on seL4 for RISC-V (`kernel/arch/riscv/vspace.rs:73`):
+Userspace builds address spaces from capabilities, as on seL4 for RISC-V (`kernel/arch/riscv/vspace.rs:78`):
 
 | Operation | Effect |
 |---|---|
@@ -111,13 +111,13 @@ Deleting a capability undoes what it did (see [[#Delete, finalise, revoke]]), so
 
 | Slots | Capability |
 |---|---|
-| 1–6 | its TCB, its CNode, its address space (a root page table with ASID 1), its IPC buffer frame, its boot-info frame, the ASID pool (`abi/lib.rs:183`) |
+| 1–6 | its TCB, its CNode, its address space (a root page table with ASID 1), its IPC buffer frame, its boot-info frame, the ASID pool (`abi/lib.rs:214`) |
 | a range | every frame mapped in its address space (image, stack) |
 | a range | every page table of its address space |
 | a range | all remaining free memory as untyped, split into naturally aligned power-of-two blocks of at most 2^38 bytes |
 | the rest | empty |
 
-The boot-info page (`BootInfo`, `abi/lib.rs:227`), mapped read-only, gives the ranges, the IPC buffer address, the CNode's radix, and each untyped block's address and size; its address arrives in the root task's first argument register. The kernel finds the frames and page tables by walking the address space it built (`arch::walk_user`). Creating the untyped capabilities uses up the boot allocator, so from then on all memory is the root task's to retype. On QEMU with 128 MiB (debug build): 11 frames, 4 page tables, 27 untyped blocks totalling about 126 MiB (largest 32 MiB), and 4,047 empty slots. The counts move with the size of `init`.
+The boot-info page (`BootInfo`, `abi/lib.rs:258`), mapped read-only, gives the ranges, the IPC buffer address, the CNode's radix, and each untyped block's address and size; its address arrives in the root task's first argument register. The kernel finds the frames and page tables by walking the address space it built (`arch::walk_user`). Creating the untyped capabilities uses up the boot allocator, so from then on all memory is the root task's to retype. On QEMU with 128 MiB (debug build): 11 frames, 4 page tables, 27 untyped blocks totalling about 126 MiB (largest 32 MiB), and 4,047 empty slots. The counts move with the size of `init`.
 
 ASIDs come from a fixed table of 4,096 entries in the kernel (`kernel/arch/riscv/vspace.rs:26`); a `TODO` says to retype ASID pools from untyped memory, as seL4 does.
 
@@ -129,4 +129,4 @@ ASIDs come from a fixed table of 4,096 entries in the kernel (`kernel/arch/riscv
 - Address spaces: mapping a frame before its tables (`FAILED_LOOKUP`); mapping a level-1 and a level-0 table at 1 GiB; a third table when every level is taken; mapping a frame, mapping it twice, over another mapping, unaligned, at a kernel address, write-only; writing through the mapping, unmapping, remapping read-only elsewhere and reading the value back; a 2 MiB frame in the level-1 table, whose physical address matches its untyped region; a new address space from a retyped table (refused before it has an ASID, refused a second ASID); unmapping a table, after which the frame can't be mapped until a new table is installed, and then reads the same value. Reading the first mapping after revoking the region faults.
 
 > [!todo] Not built
-> TCB invocations (next), endpoints and notifications, badges, zombie-style preemptible deletion, retyped ASID pools, remapping a frame in place to change its rights.
+> Endpoints and notifications (M4), badges, zombie-style preemptible deletion, retyped ASID pools, remapping a frame in place to change its rights.

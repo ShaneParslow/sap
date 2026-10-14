@@ -7,7 +7,7 @@
 //!
 //! Operations follow seL4's invocations of the same name.
 
-use sap_abi::{error, label, MessageInfo, MAX_EXTRA_CAPS, MESSAGE_REGISTERS};
+use sap_abi::{error, label, reg, MessageInfo, MAX_EXTRA_CAPS, MESSAGE_REGISTERS};
 
 use crate::arch::UserContext;
 use crate::cap::Cap;
@@ -28,7 +28,8 @@ impl From<LookupError> for usize {
 pub struct Message<'a> {
     info: MessageInfo,
     context: &'a mut UserContext,
-    tcb: *const Tcb,
+    /// The calling thread.
+    pub tcb: *const Tcb,
 }
 
 impl Message<'_> {
@@ -36,10 +37,16 @@ impl Message<'_> {
         self.info.label()
     }
 
-    /// Set result word `i` (registers only, for now).
-    pub fn set_result(&mut self, i: usize, value: usize) {
-        assert!(i < MESSAGE_REGISTERS, "results beyond the registers aren't supported yet");
-        self.context.set_result(2 + i, value);
+    /// Set result word `i`: in a register, or the caller's IPC buffer.
+    pub fn set_result(&mut self, i: usize, value: usize) -> Result<()> {
+        if i < MESSAGE_REGISTERS {
+            self.context.set_result(2 + i, value);
+            return Ok(());
+        }
+        // SAFETY: the calling thread's TCB is live.
+        let buffer = unsafe { thread::ipc_buffer(self.tcb) }.ok_or(error::INVALID_ARGUMENT)?;
+        buffer.msg[i] = value;
+        Ok(())
     }
 
     /// Message word `i`, or TRUNCATED_MESSAGE if the message is shorter.
@@ -93,6 +100,7 @@ fn invoke(slot: *mut Slot, cap: Cap, message: &mut Message) -> Result {
     match cap {
         Cap::CNode { .. } => cnode(cap, message),
         Cap::Untyped { .. } => untyped(slot, message),
+        Cap::Thread { ptr } => tcb(ptr as *mut Tcb, message),
         Cap::Arch(a) => crate::arch::invoke(slot, a, message),
         _ => Err(error::ILLEGAL_OPERATION),
     }
@@ -164,6 +172,115 @@ fn cnode(cnode: Cap, m: &mut Message) -> Result {
             }
             // SAFETY: both live; dest is empty.
             unsafe { cspace::insert_derived(new, src, dest) };
+            Ok(0)
+        }
+        _ => Err(error::ILLEGAL_OPERATION),
+    }
+}
+
+/// Thread invocations. `target` is the invoked TCB, which may be the
+/// caller's own; its registers are only touched when it isn't (seL4 refuses
+/// those operations on the calling thread too, and here the caller's
+/// registers are borrowed by `m`).
+fn tcb(target: *mut Tcb, m: &mut Message) -> Result {
+    let is_caller = core::ptr::eq(target, m.tcb);
+    match m.label() {
+        label::TCB_CONFIGURE => {
+            let buffer_va = m.word(0)?;
+            let (cspace_slot, cspace) = m.extra_cap(0)?;
+            let (vspace_slot, vspace) = m.extra_cap(1)?;
+            let buffer = if m.info.extra_caps() > 2 { Some(m.extra_cap(2)?) } else { None };
+            if !matches!(cspace, Cap::CNode { .. }) || !crate::arch::is_vspace_root(vspace) {
+                return Err(error::INVALID_CAPABILITY);
+            }
+            if let Some((_, frame)) = buffer
+                && crate::arch::frame_kernel_address(frame, buffer_va).is_none()
+            {
+                return Err(error::ALIGNMENT_ERROR);
+            }
+            // Everything is checked; now replace the thread's copies.
+            let mut sources = [(thread::CSPACE_SLOT, Some((cspace_slot, cspace))), (thread::VSPACE_SLOT, Some((vspace_slot, vspace))), (thread::IPC_BUFFER_SLOT, buffer)];
+            for (index, source) in &mut sources {
+                // SAFETY: target is a live TCB; its slots are live slots.
+                let dest = unsafe { &raw mut (*target).slots[*index] };
+                // SAFETY: as above.
+                unsafe { cspace::delete(dest) }.map_err(|_| error::ILLEGAL_OPERATION)?;
+                if let Some((src, cap)) = *source {
+                    let copy = derive(src, cap)?;
+                    // SAFETY: both live; dest was just emptied.
+                    unsafe { cspace::insert_derived(copy, src, dest) };
+                }
+            }
+            // SAFETY: target is live; one field.
+            unsafe { (*target).ipc_buffer = if buffer.is_some() { buffer_va } else { 0 } };
+            Ok(0)
+        }
+        label::TCB_WRITE_REGISTERS => {
+            if is_caller {
+                return Err(error::ILLEGAL_OPERATION);
+            }
+            let (flags, count) = (m.word(0)?, m.word(1)?);
+            if count > reg::COUNT {
+                return Err(error::RANGE_ERROR);
+            }
+            let mut values = [0; reg::COUNT];
+            for (i, v) in values.iter_mut().enumerate().take(count) {
+                *v = m.word(2 + i)?;
+            }
+            // SAFETY: target is a live TCB other than the caller.
+            let context = unsafe { &mut (*target).context };
+            for (i, v) in values.iter().enumerate().take(count) {
+                context.set_user_reg(i, *v);
+            }
+            context.reset_status();
+            if flags & 1 != 0 {
+                // SAFETY: target is live.
+                unsafe { crate::sched::make_runnable(target) };
+            }
+            Ok(0)
+        }
+        label::TCB_READ_REGISTERS => {
+            if is_caller {
+                return Err(error::ILLEGAL_OPERATION);
+            }
+            let count = m.word(0)?;
+            if count > reg::COUNT {
+                return Err(error::RANGE_ERROR);
+            }
+            for i in 0..count {
+                // SAFETY: target is a live TCB other than the caller.
+                let value = unsafe { (*target).context.user_reg(i) };
+                m.set_result(i, value)?;
+            }
+            Ok(count)
+        }
+        label::TCB_RESUME => {
+            // SAFETY: target is live.
+            unsafe { crate::sched::make_runnable(target) };
+            Ok(0)
+        }
+        label::TCB_SUSPEND => {
+            // SAFETY: target is live.
+            unsafe { crate::sched::make_inactive(target) };
+            Ok(0)
+        }
+        op @ (label::TCB_SET_PRIORITY | label::TCB_SET_MC_PRIORITY) => {
+            let value = m.word(0)?;
+            let Cap::Thread { ptr: authority } = m.extra_cap(0)?.1 else {
+                return Err(error::INVALID_CAPABILITY);
+            };
+            // SAFETY: a thread capability names a live TCB; one field.
+            let mcp = unsafe { (*(authority as *const Tcb)).mcp };
+            if value > mcp as usize {
+                return Err(error::RANGE_ERROR);
+            }
+            if op == label::TCB_SET_PRIORITY {
+                // SAFETY: target is live.
+                unsafe { crate::sched::set_priority(target, value as u8) };
+            } else {
+                // SAFETY: target is live; one field.
+                unsafe { (*target).mcp = value as u8 };
+            }
             Ok(0)
         }
         _ => Err(error::ILLEGAL_OPERATION),

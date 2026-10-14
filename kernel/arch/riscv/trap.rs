@@ -69,8 +69,7 @@ impl UserContext {
         context.x[2] = sp;
         context.x[A0] = arg;
         context.sepc = entry;
-        let sstatus = riscv::register::sstatus::read().bits();
-        context.sstatus = (sstatus & !(SSTATUS_SPP | SSTATUS_FS)) | SSTATUS_SPIE;
+        context.reset_status();
         context
     }
 
@@ -86,6 +85,38 @@ impl UserContext {
     /// Set syscall result `i` (0..6), returned in the argument registers.
     pub fn set_result(&mut self, i: usize, value: usize) {
         self.x[A0 + i] = value;
+    }
+
+    /// Register `i` in `sap_abi::reg` order: pc, ra, sp, gp, tp, a0..a7.
+    pub fn user_reg(&self, i: usize) -> usize {
+        match i {
+            0 => self.sepc,
+            _ => self.x[Self::reg_index(i)],
+        }
+    }
+
+    pub fn set_user_reg(&mut self, i: usize, value: usize) {
+        match i {
+            0 => self.sepc = value,
+            _ => self.x[Self::reg_index(i)] = value,
+        }
+    }
+
+    /// The `x` index of register `i` (1..13) in `sap_abi::reg` order.
+    fn reg_index(i: usize) -> usize {
+        match i {
+            1..=4 => i,           // ra, sp, gp, tp are x1..x4
+            5..=12 => A0 + i - 5, // a0..a7 are x10..x17
+            _ => panic!("no register {i}"),
+        }
+    }
+
+    /// Reset the status bits to a fresh user thread's, keeping nothing the
+    /// thread could have set: user mode, interrupts on after `sret`, FPU
+    /// off.
+    pub fn reset_status(&mut self) {
+        let sstatus = riscv::register::sstatus::read().bits();
+        self.sstatus = (sstatus & !(SSTATUS_SPP | SSTATUS_FS)) | SSTATUS_SPIE;
     }
 }
 

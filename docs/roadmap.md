@@ -1,7 +1,7 @@
 ---
 status: hub
 summary: Ordered work items - the kernel decision, the bring-up milestones on RISC-V, and design exercises that can run in parallel.
-updated: 2026-10-11
+updated: 2026-10-13
 sources: ["[[2026-09-27-future-of-computing#m9|§m9]]", "[[2026-09-27-future-of-computing#m11|§m11]]", "[[2026-09-27-future-of-computing#m28|§m28]]", "[[2026-09-27-future-of-computing#m29|§m29]]"]
 ---
 
@@ -55,3 +55,4 @@ These can happen at any time and feed the milestones above.
 - M0: own kernel (no commit; design decision).
 - M1: boots on QEMU `virt`, logs with levels through the SBI debug console, powers off through SBI reset ([[kernel-boot-riscv]]; `a4d43db`, `013eb44`).
 - M2 (2026-10-11): traps and timer ([[kernel-traps-riscv]]; `2420fdc`, `2c41a33`); boot information from the device tree and failure exit status (`4629d35`, `2799abb`), made architecture-neutral (`e875153`) ([[kernel-boot-riscv]]); Sv39 paging with the kernel in the upper half (`6325cb4`, [[kernel-memory-riscv]]); user mode with a root task loaded by the kernel (`1be5924`, [[kernel-root-task]]). CSR and SBI access moved to the `riscv` and `sbi-rt` crates (`ff1fdea`).
+- M3 (2026-10-13): threads and a priority scheduler ([[kernel-threads]]; `55838c6`); capability spaces, the derivation tree, `CALL` and CNode operations, the root task's initial capabilities (`64cda48`); untyped retype (`0c39997`); page-table, frame and ASID invocations with hardware ASIDs (`e69595e`); thread invocations, so userspace creates and schedules threads ([[kernel-capabilities]]). Shared `sap-abi` crate and `libsap` runtime.

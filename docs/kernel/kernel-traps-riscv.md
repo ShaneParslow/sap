@@ -13,23 +13,23 @@ Part of roadmap milestone M2 ([[roadmap]]): the kernel takes traps from itself a
 
 ## Trap entry and return
 
-`trap::init` (`kernel/arch/riscv/trap.rs:182`) sets `sscratch` to 0 (firmware may leave it set) and writes `stvec` in direct mode: every trap enters `trap_entry` (line 97). Vectored mode would only skip one dispatch for interrupts, since exceptions, syscalls included, always use the base address, so direct mode stays.
+`trap::init` (`kernel/arch/riscv/trap.rs:213`) sets `sscratch` to 0 (firmware may leave it set) and writes `stvec` in direct mode: every trap enters `trap_entry` (line 97). Vectored mode would only skip one dispatch for interrupts, since exceptions, syscalls included, always use the base address, so direct mode stays.
 
 `sscratch` tells the entry code where a trap came from. While a user thread runs it holds the address of that thread's saved registers, the `UserContext` (`trap.rs:36`) at the start of its thread control block ([[kernel-threads]]); while the kernel runs it is 0. `trap_entry` swaps it with `sp` and branches on the result.
 
-**From user mode** (`.Lfrom_user`, `trap.rs:134`): `sp` now points at the thread's `UserContext`. The code saves x1 and x3–x31 there, the user stack pointer from `sscratch` (line 140, which also resets `sscratch` to 0), then `sepc` and `sstatus`. It switches to the top of the kernel stack (line 150) and calls `user_trap`, which never returns. Because user registers live in the TCB, the kernel stack holds nothing between entries, and one stack serves every thread, as in seL4.
+**From user mode** (`.Lfrom_user`, `trap.rs:165`): `sp` now points at the thread's `UserContext`. The code saves x1 and x3–x31 there, the user stack pointer from `sscratch` (line 171, which also resets `sscratch` to 0), then `sepc` and `sstatus`. It switches to the top of the kernel stack (line 181) and calls `user_trap`, which never returns. Because user registers live in the TCB, the kernel stack holds nothing between entries, and one stack serves every thread, as in seL4.
 
 **From the kernel**: the code pushes a `UserContext` on the current stack, calls `kernel_trap`, restores, and returns to the interrupted kernel code. This happens in the idle loop and the boot checks, the only places the kernel enables interrupts, and on kernel bugs.
 
-**Returning to user mode** (`return_to_user`, `trap.rs:156`): given any thread's `UserContext`, it sets `sscratch` to it (line 158), so the thread's next trap saves into its own TCB, then restores `sstatus`, `sepc` and all registers, the stack pointer last, and executes `sret`. The scheduler calls it, through `arch::return_to_user`, to resume whichever thread it picks.
+**Returning to user mode** (`return_to_user`, `trap.rs:187`): given any thread's `UserContext`, it sets `sscratch` to it (line 189), so the thread's next trap saves into its own TCB, then restores `sstatus`, `sepc` and all registers, the stack pointer last, and executes `sret`. The scheduler calls it, through `arch::return_to_user`, to resume whichever thread it picks.
 
-`UserContext` is 34 words, checked by a compile-time assertion against the assembly offsets, and the assembly is commented line by line. It also gives generic code an architecture-neutral view of syscalls: `syscall_number` (`a7`), `arg(i)` and `set_result(i)` (`a0`–`a5`) (lines 77–87). `UserContext::new_user` (line 67) builds a new thread's registers: user mode, interrupts on after `sret`, and the FPU off. A `TODO` there notes the kernel doesn't save floating-point registers on a switch, so a thread that uses the FPU faults until lazy FP save and restore exists.
+`UserContext` is 34 words, checked by a compile-time assertion against the assembly offsets, and the assembly is commented line by line. It also gives generic code an architecture-neutral view of syscalls: `syscall_number` (`a7`), `arg(i)` and `set_result(i)` (`a0`–`a5`) (lines 76–86). `UserContext::new_user` (line 67) builds a new thread's registers: user mode, interrupts on after `sret`, and the FPU off. A `TODO` there notes the kernel doesn't save floating-point registers on a switch, so a thread that uses the FPU faults until lazy FP save and restore exists.
 
 On trap entry the hardware clears `sstatus.SIE`, so kernel code always runs with interrupts disabled; it is never preempted. In user mode, supervisor interrupts are always taken.
 
 ## Dispatch
 
-`user_trap` (`trap.rs:198`) handles traps from user mode, then calls the scheduler, which picks the thread to resume ([[kernel-threads#Scheduler]]):
+`user_trap` (`trap.rs:229`) handles traps from user mode, then calls the scheduler, which picks the thread to resume ([[kernel-threads#Scheduler]]):
 
 | Cause | Handling |
 |---|---|
@@ -39,7 +39,7 @@ On trap entry the hardware clears `sstatus.SIE`, so kernel code always runs with
 
 A `TODO` marks delivering user faults to a fault handler over IPC, as seL4 does (M4).
 
-`kernel_trap` (`trap.rs:222`) handles the timer, breakpoints (logged, and `sepc` advanced past the `ebreak` using the instruction's real length, since `ebreak` may be the 2-byte `c.ebreak`), and panics on anything else.
+`kernel_trap` (`trap.rs:253`) handles the timer, breakpoints (logged, and `sepc` advanced past the `ebreak` using the instruction's real length, since `ebreak` may be the 2-byte `c.ebreak`), and panics on anything else.
 
 ## Timer
 
@@ -51,7 +51,7 @@ Each interrupt increments a tick counter, programs the next deadline, which also
 
 ## Boot check
 
-`boot_checks` (`kernel/main.rs:45`) triggers an `ebreak` and confirms execution resumes, then waits in the idle loop (`arch::idle_once`, `kernel/arch/riscv/mod.rs:90`) for ten ticks, which takes about 100 ms.
+`boot_checks` (`kernel/main.rs:45`) triggers an `ebreak` and confirms execution resumes, then waits in the idle loop (`arch::idle_once`, `kernel/arch/riscv/mod.rs:95`) for ten ticks, which takes about 100 ms.
 
 > [!todo] Not built
 > Floating-point state save and restore; external interrupts (PLIC); fault delivery over IPC.

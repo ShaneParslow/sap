@@ -57,6 +57,11 @@ fn vspace_of(cap: Cap) -> Option<(usize, u16)> {
     }
 }
 
+/// Whether `cap` is a live address-space root.
+pub fn is_root(cap: Cap) -> bool {
+    vspace_of(cap).is_some()
+}
+
 /// Switch to the address space a thread's address-space capability names.
 /// Returns false if the capability isn't a live address-space root.
 pub fn activate(cap: Cap) -> bool {
@@ -130,7 +135,7 @@ pub fn invoke(slot: *mut Slot, cap: ArchCap, m: &mut Message) -> Result<usize, u
             Ok(0)
         }
         (ArchCap::Frame { pa, .. }, label::FRAME_GET_ADDRESS) => {
-            m.set_result(0, pa);
+            m.set_result(0, pa)?;
             Ok(1)
         }
         (ArchCap::AsidPool, label::ASID_POOL_ASSIGN) => {

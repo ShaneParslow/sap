@@ -63,6 +63,11 @@ pub fn finalise_cap(cap: ArchCap, last: bool) {
     vspace::finalise(cap, last)
 }
 
+/// Whether `cap` is a live address-space root.
+pub fn is_vspace_root(cap: crate::cap::Cap) -> bool {
+    vspace::is_root(cap)
+}
+
 /// Physical address of a kernel object at kernel address `ptr`.
 pub fn kernel_to_phys(ptr: usize) -> usize {
     paging::virt_to_phys(ptr)

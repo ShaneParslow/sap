@@ -45,6 +45,10 @@ pub struct Tcb {
     pub slots: [Slot; TCB_SLOTS],
     pub state: ThreadState,
     pub priority: u8,
+    /// Maximum controlled priority: the highest priority this thread may
+    /// give itself or another thread when used as the authority, as in
+    /// seL4. 0 for new threads; 255 for the root task.
+    pub mcp: u8,
     /// User address of the IPC buffer, inside the frame in `IPC_BUFFER_SLOT`.
     pub ipc_buffer: usize,
     /// Links in the scheduler's ready queue.

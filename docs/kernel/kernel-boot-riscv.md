@@ -61,11 +61,11 @@ Sizes are logged with `Bytes` (`kernel/boot.rs:104`): the smallest binary unit t
 
 The kernel log (`kernel/log.rs`) adds levels: `error!`, `warn!`, `info!`, `debug!`, `trace!` print `[level] message`. `MAX_LEVEL` (`kernel/log.rs:13`) is `Debug` in debug builds and `Info` in release; suppressed levels compile away.
 
-`console_write` (`kernel/arch/riscv/mod.rs:105`) probes the SBI Debug Console extension (DBCN) on first use. With DBCN, a whole buffer is written per call (`kernel/arch/riscv/sbi.rs:16`); the firmware reads it by physical address, so the buffer's address is translated first. Anything the kernel prints is in the image or the direct map, which are physically contiguous. Without DBCN, it falls back to the legacy one-byte `putchar` (`sbi.rs:30`). SBI calls go through the `sbi-rt` crate; `sbi.rs` adapts it to what the kernel needs.
+`console_write` (`kernel/arch/riscv/mod.rs:110`) probes the SBI Debug Console extension (DBCN) on first use. With DBCN, a whole buffer is written per call (`kernel/arch/riscv/sbi.rs:16`); the firmware reads it by physical address, so the buffer's address is translated first. Anything the kernel prints is in the image or the direct map, which are physically contiguous. Without DBCN, it falls back to the legacy one-byte `putchar` (`sbi.rs:30`). SBI calls go through the `sbi-rt` crate; `sbi.rs` adapts it to what the kernel needs.
 
 ## Shutdown and panics
 
-`arch::shutdown(failure)` (`kernel/arch/riscv/mod.rs:118`) first tries QEMU's test device (`kernel/arch/riscv/test_device.rs:24`): it writes `0x5555` (pass) or `0x3333 | code << 16` (fail, code 1), and QEMU exits with status 0 or the code. OpenSBI's own shutdown can't report failure under QEMU, which is why the test device exists; it only serves automated test runs. Without it, shutdown uses the SBI System Reset extension (`sbi.rs:35`) with reason "none" or "system failure", and halts if that returns.
+`arch::shutdown(failure)` (`kernel/arch/riscv/mod.rs:123`) first tries QEMU's test device (`kernel/arch/riscv/test_device.rs:24`): it writes `0x5555` (pass) or `0x3333 | code << 16` (fail, code 1), and QEMU exits with status 0 or the code. OpenSBI's own shutdown can't report failure under QEMU, which is why the test device exists; it only serves automated test runs. Without it, shutdown uses the SBI System Reset extension (`sbi.rs:35`) with reason "none" or "system failure", and halts if that returns.
 
 The panic handler (`kernel/main.rs:61`) logs at error level and shuts down with failure. Panics abort; there is no unwinding. A `TODO` there is a frame-pointer backtrace for debug builds.
 

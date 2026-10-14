@@ -9,6 +9,7 @@
 pub mod cnode;
 pub mod debug;
 pub mod sys;
+pub mod tcb;
 pub mod untyped;
 pub mod vspace;
 

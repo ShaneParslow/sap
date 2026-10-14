@@ -71,6 +71,24 @@ pub unsafe fn make_inactive(tcb: *mut Tcb) {
     }
 }
 
+/// Change a thread's priority, moving it to the new priority's queue if it
+/// is runnable.
+///
+/// # Safety
+/// `tcb` must point at a live TCB.
+pub unsafe fn set_priority(tcb: *mut Tcb, priority: u8) {
+    // SAFETY: per the caller's guarantee.
+    let running = unsafe { (*tcb).state } == ThreadState::Running;
+    if running {
+        dequeue(tcb);
+    }
+    // SAFETY: as above.
+    unsafe { (*tcb).priority = priority };
+    if running {
+        enqueue(tcb);
+    }
+}
+
 /// The thread on the CPU, or null when idle.
 pub fn current() -> *mut Tcb {
     sched().current

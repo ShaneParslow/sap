@@ -4,10 +4,12 @@
 #![no_std]
 #![no_main]
 
-use libsap::abi::{attr, error, init_slot, object, rights, BootInfo};
+use core::sync::atomic::{AtomicUsize, Ordering};
+
+use libsap::abi::{attr, error, init_slot, object, reg, rights, BootInfo};
 use libsap::cnode::SlotRef;
 use libsap::sys::Error;
-use libsap::{debug, println, untyped, vspace};
+use libsap::{debug, println, sys, tcb, untyped, vspace};
 
 /// Slot `i` of the root CNode.
 fn slot(i: usize) -> SlotRef {
@@ -20,6 +22,7 @@ fn sap_main(info: &'static BootInfo) -> ! {
     check_cnode_operations(info);
     check_retype(info);
     check_mapping(info);
+    check_threads(info);
     println!("init: all checks passed");
     debug::halt(false)
 }
@@ -208,4 +211,98 @@ fn check_mapping(info: &BootInfo) {
     // unmapped, and the new address space's ASID is freed.
     expect("revoke", slot(parent).revoke(), Ok(()));
     println!("init: page tables, frames, ASIDs and unmapping behave");
+}
+
+/// Counted up by the second thread; both threads share this address space.
+static COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+extern "C" fn worker(step: usize) -> ! {
+    loop {
+        COUNTER.fetch_add(step, Ordering::Relaxed);
+    }
+}
+
+/// Spin, without yielding, until the counter moves or `limit` iterations
+/// pass. Returns whether it moved.
+fn counter_moves(limit: usize) -> bool {
+    let start = COUNTER.load(Ordering::Relaxed);
+    (0..limit).any(|_| COUNTER.load(Ordering::Relaxed) != start)
+}
+
+/// Start a second thread in this address space and check priorities,
+/// preemption, suspension, register access and deletion.
+fn check_threads(info: &BootInfo) {
+    let base = info.empty.start + 48;
+    let (index, _) = info.untyped_list[..info.untyped.len()]
+        .iter()
+        .enumerate()
+        .find(|(_, u)| u.size_bits >= 16)
+        .expect("no untyped region of 64 KiB");
+    let parent = info.untyped.start + index;
+    let in_root = SlotRef { root: init_slot::CNODE, index: 0, depth: 0 };
+    let (me, my_tcb) = (init_slot::VSPACE, init_slot::TCB);
+
+    // The thread, two page tables and a 16 KiB stack at 0x5000_0000.
+    let (thread, tables, stack) = (base, base + 1, base + 3);
+    expect("retype tcb", untyped::retype(parent, object::TCB, 0, in_root, thread, 1), Ok(()));
+    expect("retype tables", untyped::retype(parent, object::PAGE_TABLE, 0, in_root, tables, 2), Ok(()));
+    expect("retype stack", untyped::retype(parent, object::FRAME_4K, 0, in_root, stack, 4), Ok(()));
+    let stack_va: usize = 0x5000_0000;
+    expect("map table", vspace::map_page_table(tables, me, stack_va), Ok(()));
+    expect("map table", vspace::map_page_table(tables + 1, me, stack_va), Ok(()));
+    for i in 0..4 {
+        let rw = rights::READ | rights::WRITE;
+        expect("map stack", vspace::map_frame(stack + i, me, stack_va + i * 0x1000, rw, attr::EXECUTE_NEVER), Ok(()));
+    }
+
+    expect("configure with a non-root", tcb::configure(thread, init_slot::CNODE, tables, None), Err(error::INVALID_CAPABILITY));
+    expect("configure", tcb::configure(thread, init_slot::CNODE, me, None), Ok(()));
+    expect("priority above authority", tcb::set_priority(thread, thread, 255), Err(error::RANGE_ERROR));
+    expect("priority 100", tcb::set_priority(thread, my_tcb, 100), Ok(()));
+    expect("registers of self", tcb::write_registers(my_tcb, false, &[0; reg::COUNT]), Err(error::ILLEGAL_OPERATION));
+
+    let mut regs = [0; reg::COUNT];
+    regs[reg::PC] = worker as *const () as usize;
+    regs[reg::SP] = stack_va + 0x4000;
+    regs[reg::A0] = 1;
+    expect("start", tcb::write_registers(thread, true, &regs), Ok(()));
+
+    // A lower-priority thread never runs while this one is runnable, even
+    // across yields.
+    for _ in 0..5 {
+        sys::yield_now();
+    }
+    assert_eq!(COUNTER.load(Ordering::Relaxed), 0, "a lower-priority thread ran");
+
+    // At equal priority the threads share the CPU by time slice: this one
+    // never yields, so the counter can only move through preemption.
+    expect("priority 255", tcb::set_priority(thread, my_tcb, 255), Ok(()));
+    assert!(counter_moves(1 << 30), "the other thread never ran");
+
+    // Suspended, it stops.
+    expect("suspend", tcb::suspend(thread), Ok(()));
+    let stopped = COUNTER.load(Ordering::Relaxed);
+    for _ in 0..5 {
+        sys::yield_now();
+    }
+    assert_eq!(COUNTER.load(Ordering::Relaxed), stopped, "a suspended thread ran");
+
+    // Its registers show where it stopped: inside `worker`, on its stack.
+    let regs = tcb::read_registers(thread).expect("read registers");
+    let (pc, sp) = (regs[reg::PC], regs[reg::SP]);
+    let entry = worker as *const () as usize;
+    assert!((entry..entry + 0x100).contains(&pc), "pc {pc:#x} not in worker at {entry:#x}");
+    assert!((stack_va..=stack_va + 0x4000).contains(&sp), "sp {sp:#x} not on its stack");
+
+    // Resumed, it runs again; deleted, it is gone for good.
+    expect("resume", tcb::resume(thread), Ok(()));
+    assert!(counter_moves(1 << 30), "the resumed thread never ran");
+    expect("delete", slot(thread).delete(), Ok(()));
+    let after = COUNTER.load(Ordering::Relaxed);
+    for _ in 0..5 {
+        sys::yield_now();
+    }
+    assert_eq!(COUNTER.load(Ordering::Relaxed), after, "a deleted thread ran");
+    expect("revoke", slot(parent).revoke(), Ok(()));
+    println!("init: threads, priorities, preemption, suspension and deletion behave");
 }

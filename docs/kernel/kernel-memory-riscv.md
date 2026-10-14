@@ -2,7 +2,7 @@
 status: implemented
 summary: How the kernel manages memory on RISC-V today - Sv39 with the kernel in the upper half, a boot page table built in assembly, the kernel's own address space with per-section permissions and a direct map of RAM, free memory computed from the device tree, a boot-only bump allocator, user address spaces that share the kernel half, and hardware ASIDs.
 updated: 2026-10-13
-code: [kernel/arch/riscv/entry.rs, kernel/arch/riscv/linker.ld, kernel/arch/riscv/paging.rs, kernel/arch/riscv/mod.rs, kernel/mm.rs, kernel/boot.rs]
+code: [kernel/arch/riscv/entry.rs, kernel/arch/riscv/linker.ld, kernel/arch/riscv/paging.rs, kernel/mm.rs, kernel/boot.rs]
 verified: 0c39997
 sources: ["[[2026-10-08-22c3947b-wiki-setup]]"]
 ---

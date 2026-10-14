@@ -7,6 +7,9 @@ sources: ["[[2026-09-27-future-of-computing#m7|§m7]]", "[[2026-09-27-future-of-
 
 # Kernel objects and syscalls
 
+> [!note] Implemented so far
+> Untyped memory, frames, page tables (address spaces), CNodes, threads and `CALL` exist as of M3 ([[kernel-capabilities]], [[kernel-threads]]); endpoints, notifications, the other IPC syscalls and scheduling contexts don't yet. This page remains the design.
+
 The kernel is just another set of objects invoked through capabilities. The design is modeled on seL4 and holds whether sap writes its own kernel or uses seL4 ([[kernel-choice]]).
 
 ## Kernel object types
