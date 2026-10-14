@@ -22,9 +22,9 @@ A `Tcb` (`kernel/thread.rs:50`) occupies a block of `1 << TCB_BITS` = 1 KiB (lin
 - `ipc_buffer`: the user address of its IPC buffer, inside the frame in its slot;
 - the links of its ready queue.
 
-`Tcb::init` (line 90) zeroes the block, which is an inactive TCB with empty slots. The root task's TCB is placed in a frame from the boot allocator ([[kernel-root-task]]); every other TCB is retyped from untyped memory ([[kernel-capabilities#Retyping untyped memory]]). Deleting the last capability to a TCB takes the thread off the CPU and deletes its slots (`thread::finalise`, line 189).
+`Tcb::init` (line 94) zeroes the block, which is an inactive TCB with empty slots. The root task's TCB is placed in a frame from the boot allocator ([[kernel-root-task]]); every other TCB is retyped from untyped memory ([[kernel-capabilities#Retyping untyped memory]]). Deleting the last capability to a TCB takes the thread off the CPU and deletes its slots (`thread::finalise`, line 193).
 
-The syscall path holds `&mut` to a thread's registers, which live inside its TCB, so `thread::cspace` and `thread::ipc_buffer` (lines 107, 116) read single fields through a raw pointer rather than borrowing the whole TCB.
+The syscall path holds `&mut` to a thread's registers, which live inside its TCB, so `thread::cspace` and `thread::ipc_buffer` (lines 111, 120) read single fields through a raw pointer rather than borrowing the whole TCB.
 
 ## Thread invocations
 

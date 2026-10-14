@@ -73,6 +73,15 @@ fn slot_at(cnode: usize, i: usize) -> *mut Slot {
     (cnode + (i << SLOT_BITS)) as *mut Slot
 }
 
+/// Slot `index` of the CNode capability `cnode`, if it is one and the index
+/// is in range.
+pub fn cnode_slot(cnode: Cap, index: usize) -> Option<*mut Slot> {
+    match cnode {
+        Cap::CNode { ptr, radix, .. } if index < 1 << radix => Some(slot_at(ptr, index)),
+        _ => None,
+    }
+}
+
 /// Resolve `depth` bits of `cptr` starting at CNode capability `root`.
 /// Returns the slot reached and the number of bits left unresolved, which
 /// is nonzero when the walk stopped at a capability that isn't a CNode.

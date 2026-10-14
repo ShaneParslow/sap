@@ -18,7 +18,10 @@
 
 use core::ptr;
 
-use sap_abi::{error, recv_source, MessageInfo, MAX_MESSAGE_LENGTH, MESSAGE_REGISTERS};
+use sap_abi::{error, recv_source, MessageInfo, MAX_EXTRA_CAPS, MAX_MESSAGE_LENGTH, MESSAGE_REGISTERS};
+
+use crate::cap::Cap;
+use crate::cspace;
 
 use crate::sched;
 use crate::thread::{self, Tcb, ThreadState};
@@ -26,7 +29,7 @@ use crate::thread::{self, Tcb, ThreadState};
 /// log2 of an endpoint's size in memory.
 pub const ENDPOINT_BITS: usize = 4;
 /// log2 of a reply object's size in memory.
-pub const REPLY_BITS: usize = 4;
+pub const REPLY_BITS: usize = 5;
 
 #[repr(C)]
 pub struct Endpoint {
@@ -41,6 +44,9 @@ const _: () = assert!(core::mem::size_of::<Endpoint>() <= 1 << ENDPOINT_BITS);
 pub struct Reply {
     /// The caller waiting for an answer through this object.
     caller: *mut Tcb,
+    /// Whether the answer may carry capabilities: the caller's capability
+    /// had GRANT_REPLY.
+    grant: bool,
     /// The receiver this object is lent to while it waits in RECV.
     receiver: *mut Tcb,
 }
@@ -66,8 +72,9 @@ pub unsafe fn set_error(tcb: *mut Tcb, code: usize) {
 /// Move `from`'s message to `to`, with `badge`, and complete `to`'s
 /// receive: the message registers go register to register, the rest from
 /// `from`'s IPC buffer to `to`'s. A message longer than the registers is cut
-/// to them if either thread lacks an IPC buffer.
-unsafe fn transfer(from: *mut Tcb, to: *mut Tcb, badge: usize) {
+/// to them if either thread lacks an IPC buffer. If `grant`, the
+/// capabilities the message names go too (`transfer_caps`).
+unsafe fn transfer(from: *mut Tcb, to: *mut Tcb, badge: usize, grant: bool) {
     // SAFETY: both are live TCBs (callers' guarantee); their IPC buffers,
     // if valid, are kernel-mapped frames they hold; `ptr::copy` allows the
     // two buffers to overlap if userspace made them the same memory.
@@ -89,22 +96,62 @@ unsafe fn transfer(from: *mut Tcb, to: *mut Tcb, badge: usize) {
                 _ => length = MESSAGE_REGISTERS,
             }
         }
+        let caps = if grant { transfer_caps(from, to, info.extra_caps()) } else { 0 };
         let c = &mut (*to).context;
         c.set_result(BADGE, badge);
-        c.set_result(INFO, MessageInfo::new(info.label(), 0, length).0);
+        c.set_result(INFO, MessageInfo::new(info.label(), caps, length).0);
         c.set_result(SOURCE, recv_source::MESSAGE);
         c.set_result(ERROR, error::OK);
+    }
+}
+
+/// Move or copy up to `requested` capabilities named in `from`'s IPC buffer
+/// into the receive window of `to`'s, in order, stopping at the first that
+/// doesn't resolve or can't be copied, or the first full or out-of-range
+/// slot. Returns how many arrived; they are in the window's first slots.
+unsafe fn transfer_caps(from: *mut Tcb, to: *mut Tcb, requested: usize) -> usize {
+    // SAFETY: both TCBs are live; their IPC buffers are kernel-mapped
+    // frames they hold, read through raw pointers since they may coincide.
+    unsafe {
+        let (Some(src), Some(dst)) = (thread::ipc_buffer_ptr(from), thread::ipc_buffer_ptr(to)) else {
+            return 0;
+        };
+        let (from_root, to_root) = (thread::cspace(from), thread::cspace(to));
+        let Ok((_, window)) = cspace::lookup_cap(to_root, (*dst).receive_cnode) else {
+            return 0;
+        };
+        if !matches!(window, Cap::CNode { .. }) {
+            return 0;
+        }
+        let (first, room, moves) = ((*dst).receive_index, (*dst).receive_count, (*src).caps_move);
+        let mut sent = 0;
+        while sent < requested.min(MAX_EXTRA_CAPS).min(room) {
+            let Some(dest) = first.checked_add(sent).and_then(|i| cspace::cnode_slot(window, i)) else { break };
+            if !(*dest).cap.is_null() {
+                break;
+            }
+            let Ok((slot, cap)) = cspace::lookup_cap(from_root, (*src).caps[sent]) else { break };
+            if moves & (1 << sent) != 0 {
+                cspace::move_cap(slot, dest);
+            } else {
+                let Ok(copy) = crate::invocation::derive(slot, cap) else { break };
+                cspace::insert_derived(copy, slot, dest);
+            }
+            sent += 1;
+        }
+        sent
     }
 }
 
 /// After `sender`'s message was delivered: a CALL links the sender to
 /// `reply` and blocks it there; without a reply object it can't be
 /// answered, so it continues with NO_REPLY. A plain send completes.
-unsafe fn after_delivery(sender: *mut Tcb, call: bool, reply: *mut Reply, sender_was_running: bool) {
+unsafe fn after_delivery(sender: *mut Tcb, call: bool, grant_reply: bool, reply: *mut Reply, sender_was_running: bool) {
     // SAFETY: sender is live; reply is null or live (callers' guarantee).
     unsafe {
         if call && !reply.is_null() {
             (*reply).caller = sender;
+            (*reply).grant = grant_reply;
             if sender_was_running {
                 sched::block(sender, ThreadState::BlockedOnReply, reply as usize);
             } else {
@@ -120,11 +167,20 @@ unsafe fn after_delivery(sender: *mut Tcb, call: bool, reply: *mut Reply, sender
     }
 }
 
+/// What the sender's endpoint capability allows beyond sending.
+#[derive(Clone, Copy)]
+pub struct Rights {
+    /// The message may carry capabilities.
+    pub grant: bool,
+    /// The reply to this call may carry capabilities.
+    pub grant_reply: bool,
+}
+
 /// SEND, NB_SEND or the sending half of CALL, by the running `sender`.
 ///
 /// # Safety
 /// `ep` must be a live endpoint and `sender` the live, running thread.
-pub unsafe fn send(ep: *mut Endpoint, sender: *mut Tcb, badge: usize, call: bool, blocking: bool) {
+pub unsafe fn send(ep: *mut Endpoint, sender: *mut Tcb, badge: usize, rights: Rights, call: bool, blocking: bool) {
     // SAFETY: per the caller's guarantee; queued TCBs and lent reply
     // objects are live.
     unsafe {
@@ -136,12 +192,14 @@ pub unsafe fn send(ep: *mut Endpoint, sender: *mut Tcb, badge: usize, call: bool
             if !reply.is_null() {
                 (*reply).receiver = ptr::null_mut();
             }
-            transfer(sender, receiver, badge);
+            transfer(sender, receiver, badge, rights.grant);
             sched::make_runnable(receiver);
-            after_delivery(sender, call, reply, true);
+            after_delivery(sender, call, rights.grant_reply, reply, true);
         } else if blocking || call {
             (*sender).ipc_badge = badge;
             (*sender).ipc_call = call;
+            (*sender).ipc_grant = rights.grant;
+            (*sender).ipc_grant_reply = rights.grant_reply;
             sched::block(sender, ThreadState::BlockedOnSend, ep as usize);
             enqueue(e, sender);
         } else {
@@ -177,8 +235,8 @@ pub unsafe fn recv(ep: *mut Endpoint, receiver: *mut Tcb, reply: *mut Reply, blo
         let sender = e.head;
         if !sender.is_null() && (*sender).state == ThreadState::BlockedOnSend {
             dequeue(e, sender);
-            transfer(sender, receiver, (*sender).ipc_badge);
-            after_delivery(sender, (*sender).ipc_call, reply, false);
+            transfer(sender, receiver, (*sender).ipc_badge, (*sender).ipc_grant);
+            after_delivery(sender, (*sender).ipc_call, (*sender).ipc_grant_reply, reply, false);
         } else if blocking {
             (*receiver).ipc_reply = reply;
             if !reply.is_null() {
@@ -239,7 +297,7 @@ pub unsafe fn reply(reply: *mut Reply, replier: *mut Tcb) {
             return;
         }
         (*caller).blocked_on = 0;
-        transfer(replier, caller, 0);
+        transfer(replier, caller, 0, (*reply).grant);
         sched::make_runnable(caller);
     }
 }

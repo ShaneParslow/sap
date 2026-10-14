@@ -39,7 +39,7 @@ Options, in order of preference:
 2. **Capabilities only on endpoint calls.** Any message carrying capabilities goes over the endpoint instead of the ring. Simplest, and enough for M4–M5, but a ring message can't refer to a capability sent on the endpoint without extra ordering rules.
 3. **Kernel-copied channels,** as in Fuchsia: the kernel copies message bytes and handles together. Correct but gives up the zero-copy ring.
 
-Option 2 is the starting point; option 1 replaces it when capability-carrying messages on rings become common (M6).
+Option 2 is the starting point; option 1 replaces it when capability-carrying messages on rings become common (M6). The endpoint path is built: up to 16 capabilities per message, moved or copied, into a receive window the receiver names ([[kernel-ipc#Capability transfer]]). The per-connection receive range for rings is not.
 
 ## Details of the proposed transfer
 

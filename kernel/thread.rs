@@ -74,6 +74,10 @@ pub struct Tcb {
     /// is a CALL.
     pub(crate) ipc_badge: usize,
     pub(crate) ipc_call: bool,
+    /// While blocked on send: whether the capability used may send
+    /// capabilities (GRANT) and whether a reply may (GRANT_REPLY).
+    pub(crate) ipc_grant: bool,
+    pub(crate) ipc_grant_reply: bool,
     /// While blocked on receive: the reply object lent for a CALL.
     pub(crate) ipc_reply: *mut crate::endpoint::Reply,
 }

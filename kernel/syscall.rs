@@ -142,7 +142,11 @@ fn ipc(number: usize, context: &mut UserContext) {
         if receiving {
             endpoint::recv(ptr, tcb, reply, number != NB_RECV);
         } else {
-            endpoint::send(ptr, tcb, badge, number == CALL, number == SEND);
+            let grants = endpoint::Rights {
+                grant: cap_rights & rights::GRANT != 0,
+                grant_reply: cap_rights & rights::GRANT_REPLY != 0,
+            };
+            endpoint::send(ptr, tcb, badge, grants, number == CALL, number == SEND);
         }
     }
 }

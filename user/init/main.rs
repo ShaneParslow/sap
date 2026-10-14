@@ -25,6 +25,7 @@ fn sap_main(info: &'static BootInfo) -> ! {
     check_threads(info);
     check_notifications(info);
     check_ipc(info);
+    check_cap_transfer(info);
     println!("init: all checks passed");
     debug::halt(false)
 }
@@ -474,7 +475,7 @@ extern "C" fn server(ep: usize, reply: usize, me: usize) -> ! {
                     *a = w + 1;
                 }
                 // Replying to a plain send finds no caller and does nothing.
-                ipc::reply_recv(ep, reply, m.badge, &answer[..n], &mut words)
+                ipc::reply_recv(ep, reply, m.badge, &answer[..n], &[], &mut words)
             }
         };
     }
@@ -495,7 +496,7 @@ static CALL_RESULT: AtomicUsize = AtomicUsize::new(usize::MAX);
 
 /// Call `ep` once and record the error code it ends with, then stop.
 extern "C" fn caller(ep: usize, me: usize, _: usize) -> ! {
-    let code = match ipc::call(ep, 3, &[], &mut []) {
+    let code = match ipc::call(ep, 3, &[], &[], &mut []) {
         Ok(_) => 0,
         Err(e) => e.0,
     };
@@ -529,25 +530,25 @@ fn check_ipc(info: &BootInfo) {
 
     // A call with six words: two travel through the IPC buffers each way.
     let mut out = [0usize; 8];
-    let r = ipc::call(badged, 42, &[1, 2, 3, 4, 5, 6], &mut out).expect("call");
+    let r = ipc::call(badged, 42, &[1, 2, 3, 4, 5, 6], &[], &mut out).expect("call");
     assert_eq!((r.info.label(), r.info.length(), r.badge), (7, 6, 0), "reply label, length or badge");
     assert_eq!(out[..6], [2, 3, 4, 5, 6, 7], "reply words");
 
     // A plain send completes without waiting for an answer.
-    expect("send", ipc::send(badged, SEND_LABEL, &[10]).map(drop), Ok(()));
+    expect("send", ipc::send(badged, SEND_LABEL, &[10], &[]).map(drop), Ok(()));
     sys::yield_now();
     assert_eq!(SENDS.load(Ordering::Relaxed), 1, "the server didn't count the send");
 
     // Rights.
     let wrong = |r: Result<ipc::Received, sys::Error>| r.map(drop).map_err(|e| e.0);
     assert_eq!(wrong(ipc::recv(badged, 0, &mut [])), Err(error::INVALID_CAPABILITY), "recv on a send-only cap");
-    assert_eq!(wrong(ipc::call(read_only, 1, &[], &mut [])), Err(error::INVALID_CAPABILITY), "call on a receive-only cap");
+    assert_eq!(wrong(ipc::call(read_only, 1, &[], &[], &mut [])), Err(error::INVALID_CAPABILITY), "call on a receive-only cap");
 
     // Non-blocking variants on an endpoint nobody uses.
     expect("retype endpoint 2", untyped::retype(parent, object::ENDPOINT, 0, in_root, ep2, 1), Ok(()));
     let nothing = ipc::nb_recv(ep2, 0, &mut []).expect("nb_recv");
     assert_eq!(nothing.source, recv_source::NOTHING, "nb_recv found something");
-    expect("nb_send with nobody waiting", ipc::nb_send(ep2, 1, &[]).map(drop), Ok(()));
+    expect("nb_send with nobody waiting", ipc::nb_send(ep2, 1, &[], &[]).map(drop), Ok(()));
     assert_eq!(ipc::nb_recv(ep2, 0, &mut []).expect("nb_recv").source, recv_source::NOTHING, "nb_send was kept");
 
     // A notification bound to the server wakes it from RECV.
@@ -563,7 +564,7 @@ fn check_ipc(info: &BootInfo) {
     // message is delivered, and the call ends with NO_REPLY.
     let _listener = spawn(parent, base + 20, region(1), listener, [ep2, 0, 0]);
     sys::yield_now();
-    let unanswered = ipc::call(ep2, 9, &[], &mut []).map(drop).map_err(|e| e.0);
+    let unanswered = ipc::call(ep2, 9, &[], &[], &mut []).map(drop).map_err(|e| e.0);
     assert_eq!(unanswered, Err(error::NO_REPLY), "a call to a receiver without a reply object");
     sys::yield_now();
     assert_eq!(LISTENED.load(Ordering::Relaxed), 9, "the listener didn't get the message");
@@ -590,4 +591,118 @@ fn check_ipc(info: &BootInfo) {
 
     expect("revoke", slot(parent).revoke(), Ok(()));
     println!("init: endpoints, calls, replies, bound notifications and deletion behave");
+}
+
+/// The keeper's receive window and what it last received.
+static KEEP_INDEX: AtomicUsize = AtomicUsize::new(0);
+static KEEP_COUNT: AtomicUsize = AtomicUsize::new(0);
+static KEPT: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+/// Receive on `ep` into the window in KEEP_INDEX/KEEP_COUNT and record how
+/// many capabilities arrived. A message labelled 2 is answered by moving
+/// the first capability received back to the caller.
+extern "C" fn keeper(ep: usize, reply: usize, _: usize) -> ! {
+    loop {
+        ipc::set_receive_window(init_slot::CNODE, KEEP_INDEX.load(Ordering::Relaxed), KEEP_COUNT.load(Ordering::Relaxed));
+        let Ok(m) = ipc::recv(ep, reply, &mut []) else { continue };
+        KEPT.store(m.info.extra_caps(), Ordering::Relaxed);
+        if m.info.label() == 2 {
+            let back = [ipc::Give::moved(KEEP_INDEX.load(Ordering::Relaxed))];
+            let _ = ipc::reply(reply, 0, &[], &back);
+        } else {
+            let _ = ipc::reply(reply, 0, &[], &[]);
+        }
+    }
+}
+
+/// Capabilities in messages: copies and moves into a receive window, the
+/// grant right, a window too small or already occupied, and replies that
+/// carry capabilities (with and without GRANT_REPLY).
+fn check_cap_transfer(info: &BootInfo) {
+    let base = info.empty.start + 160;
+    let (index, _) = info.untyped_list[..info.untyped.len()]
+        .iter()
+        .enumerate()
+        .find(|(_, u)| u.size_bits >= 18)
+        .expect("no untyped region of 256 KiB");
+    let parent = info.untyped.start + index;
+    let in_root = SlotRef { root: init_slot::CNODE, index: 0, depth: 0 };
+    let (ep, reply, granting, plain, no_reply_grant, ntfn, frame, spare) =
+        (base, base + 1, base + 2, base + 3, base + 4, base + 5, base + 6, base + 7);
+    let window = base + 20; // keeper's window: base + 20 .. base + 30
+    let mine = base + 40; // init's own window
+
+    expect("retype endpoint", untyped::retype(parent, object::ENDPOINT, 0, in_root, ep, 1), Ok(()));
+    expect("retype reply", untyped::retype(parent, object::REPLY, 0, in_root, reply, 1), Ok(()));
+    expect("retype notification", untyped::retype(parent, object::NOTIFICATION, 0, in_root, ntfn, 1), Ok(()));
+    expect("retype frame", untyped::retype(parent, object::FRAME_4K, 0, in_root, frame, 1), Ok(()));
+    expect("retype spare endpoint", untyped::retype(parent, object::ENDPOINT, 0, in_root, spare, 1), Ok(()));
+    let all = rights::WRITE | rights::GRANT | rights::GRANT_REPLY;
+    expect("granting cap", slot(granting).mint_from(slot(ep), all, 1), Ok(()));
+    expect("plain cap", slot(plain).mint_from(slot(ep), rights::WRITE, 2), Ok(()));
+    expect("no grant-reply cap", slot(no_reply_grant).mint_from(slot(ep), rights::WRITE | rights::GRANT, 3), Ok(()));
+    // The keeper reads its window between receives, and the kernel uses
+    // the window set when the keeper blocked; an empty message makes it
+    // pick up a new one.
+    let set_window = |count: usize| {
+        KEEP_INDEX.store(window, Ordering::Relaxed);
+        KEEP_COUNT.store(count, Ordering::Relaxed);
+        let _ = ipc::send(plain, 1, &[], &[]);
+        sys::yield_now();
+    };
+    let kept = || KEPT.load(Ordering::Relaxed);
+    let filled = |s: usize| slot(base + 50).copy_from(slot(s), rights::ALL).map(|_| slot(base + 50).delete());
+    let clear = || {
+        for i in 0..10 {
+            let _ = slot(window + i).delete();
+        }
+    };
+    KEEP_INDEX.store(window, Ordering::Relaxed);
+    KEEP_COUNT.store(10, Ordering::Relaxed);
+    let _keeper = spawn(parent, base + 60, 0x20_0000_0000, keeper, [ep, reply, 0]);
+    sys::yield_now(); // it waits in RECV
+
+    // Two copies and a move arrive in order; the moved capability's slot
+    // here is empty afterwards, and the copies work.
+    let gives = [ipc::Give::copy(ntfn), ipc::Give::copy(frame), ipc::Give::moved(spare)];
+    expect("send three", ipc::send(granting, 1, &[], &gives), Ok(()));
+    sys::yield_now();
+    assert_eq!(kept(), 3, "three capabilities should have arrived");
+    assert!(filled(window + 2).is_ok(), "the moved capability isn't in the window");
+    assert!(filled(spare).is_err(), "a moved capability stayed with the sender");
+    expect("use a received copy", notification::signal(window), Ok(()));
+    assert_eq!(notification::poll(ntfn).map_err(|e| e.0), Ok(0), "unbadged copy signals 0");
+    clear();
+
+    // Without GRANT nothing travels; the message still does.
+    expect("send without grant", ipc::send(plain, 1, &[], &[ipc::Give::copy(ntfn)]), Ok(()));
+    sys::yield_now();
+    assert_eq!(kept(), 0, "capabilities crossed without GRANT");
+
+    // A window of one takes one; an occupied first slot takes none.
+    set_window(1);
+    expect("send to a small window", ipc::send(granting, 1, &[], &[ipc::Give::copy(ntfn), ipc::Give::copy(frame)]), Ok(()));
+    sys::yield_now();
+    assert_eq!(kept(), 1, "a one-slot window should take one capability");
+    set_window(10); // slot `window` is still occupied
+    expect("send to an occupied window", ipc::send(granting, 1, &[], &[ipc::Give::copy(frame)]), Ok(()));
+    sys::yield_now();
+    assert_eq!(kept(), 0, "transfer should stop at an occupied slot");
+    clear();
+
+    // A reply can carry capabilities back if the caller's capability has
+    // GRANT_REPLY: the keeper moves what it received back into this
+    // thread's window.
+    ipc::set_receive_window(init_slot::CNODE, mine, 4);
+    let back = ipc::call(granting, 2, &[], &[ipc::Give::copy(ntfn)], &mut []).expect("call with a capability");
+    assert_eq!(back.info.extra_caps(), 1, "the reply should carry the capability back");
+    assert!(filled(mine).is_ok(), "the returned capability isn't in this thread's window");
+    assert!(filled(window).is_err(), "the keeper kept the capability it moved back");
+    let _ = slot(mine).delete();
+    let refused = ipc::call(no_reply_grant, 2, &[], &[ipc::Give::copy(ntfn)], &mut []).expect("call without grant-reply");
+    assert_eq!(refused.info.extra_caps(), 0, "a reply carried capabilities without GRANT_REPLY");
+    clear();
+
+    expect("revoke", slot(parent).revoke(), Ok(()));
+    println!("init: capability transfer, grant rights and receive windows behave");
 }

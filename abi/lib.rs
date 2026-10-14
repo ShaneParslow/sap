@@ -196,7 +196,8 @@ pub mod attr {
 ///
 /// For notifications: WRITE = may signal, READ = may wait or poll.
 /// For endpoints: WRITE = may send or call, READ = may receive, GRANT = may
-/// send capabilities.
+/// send capabilities, GRANT_REPLY = replies to this caller's calls may carry
+/// capabilities.
 pub mod rights {
     pub const WRITE: usize = 1 << 0;
     pub const READ: usize = 1 << 1;
@@ -226,20 +227,20 @@ pub mod object {
     pub const MAX_RETYPE_COUNT: usize = 256;
 }
 
-/// The message info word: label (bits 12..), extra capabilities (7..9) and
-/// length in words (0..7).
+/// The message info word: label (bits 12..), extra capabilities (7..12)
+/// and length in words (0..7).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct MessageInfo(pub usize);
 
 impl MessageInfo {
     pub const fn new(label: usize, extra_caps: usize, length: usize) -> Self {
-        Self(label << 12 | (extra_caps & 0b11) << 7 | (length & 0x7f))
+        Self(label << 12 | (extra_caps & 0x1f) << 7 | (length & 0x7f))
     }
     pub const fn label(self) -> usize {
         self.0 >> 12
     }
     pub const fn extra_caps(self) -> usize {
-        (self.0 >> 7) & 0b11
+        (self.0 >> 7) & 0x1f
     }
     pub const fn length(self) -> usize {
         self.0 & 0x7f
@@ -250,25 +251,35 @@ impl MessageInfo {
 pub const MESSAGE_REGISTERS: usize = 4;
 /// The longest message, in words.
 pub const MAX_MESSAGE_LENGTH: usize = 120;
-/// The most extra capabilities one message names.
-pub const MAX_EXTRA_CAPS: usize = 3;
+/// The most capabilities one message carries. The receiver can't be flooded
+/// (capabilities land only in the window it set); the bound keeps the
+/// kernel's work per message, which can't be preempted, small.
+pub const MAX_EXTRA_CAPS: usize = 16;
 
-/// The per-thread IPC buffer, one page-aligned 1 KiB block in the thread's
-/// address space. Message words beyond the registers go in `msg` at the
-/// same index (`msg[4]` is message word 4).
+/// The per-thread IPC buffer: a 2 KiB block, aligned to its size, in the
+/// thread's address space. Message words beyond the registers go in `msg`
+/// at the same index (`msg[4]` is message word 4).
 #[repr(C)]
 pub struct IpcBuffer {
     pub tag: usize,
     pub msg: [usize; MAX_MESSAGE_LENGTH],
     pub user_data: usize,
-    /// Addresses of the extra capabilities sent with a message.
+    /// Addresses of the capabilities sent with a message (or, for a kernel
+    /// invocation, its extra capability arguments).
     pub caps: [usize; MAX_EXTRA_CAPS],
+    /// Bit `i` set: capability `i` is moved (the sender's slot ends empty);
+    /// clear: a copy is derived.
+    pub caps_move: usize,
+    /// Where received capabilities go: slots `receive_index..receive_index +
+    /// receive_count` of the CNode whose capability is at `receive_cnode` in
+    /// this thread's space. Transfer stops at the first full slot.
     pub receive_cnode: usize,
     pub receive_index: usize,
-    pub receive_depth: usize,
+    pub receive_count: usize,
+    pub _reserved: [usize; 114],
 }
 
-const _: () = assert!(core::mem::size_of::<IpcBuffer>() == 1024);
+const _: () = assert!(core::mem::size_of::<IpcBuffer>() == 2048);
 
 /// Slots of the root task's CNode that the kernel fills at boot.
 pub mod init_slot {

@@ -318,7 +318,7 @@ fn tcb(target: *mut Tcb, m: &mut Message) -> Result {
 /// The capability a copy of `cap` (in `slot`) gets, following seL4's
 /// `deriveCap`: an untyped capability can only be copied while nothing has
 /// been retyped from it, and a copied frame capability starts unmapped.
-fn derive(slot: *mut Slot, cap: Cap) -> Result<Cap> {
+pub(crate) fn derive(slot: *mut Slot, cap: Cap) -> Result<Cap> {
     match cap {
         // SAFETY: slot is live.
         Cap::Untyped { .. } if unsafe { cspace::has_children(slot) } => Err(error::REVOKE_FIRST),
