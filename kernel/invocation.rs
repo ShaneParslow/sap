@@ -264,6 +264,34 @@ fn tcb(target: *mut Tcb, m: &mut Message) -> Result {
             unsafe { thread::suspend(target) };
             Ok(0)
         }
+        label::TCB_BIND_NOTIFICATION => {
+            let Cap::Notification { ptr, rights, .. } = m.extra_cap(0)?.1 else {
+                return Err(error::INVALID_CAPABILITY);
+            };
+            if rights as usize & sap_abi::rights::READ == 0 {
+                return Err(error::INVALID_CAPABILITY);
+            }
+            let ntfn = ptr as *mut crate::notification::Notification;
+            // SAFETY: target and the notification are live; one field each.
+            unsafe {
+                if !(*target).bound_notification.is_null() || !(*ntfn).bound.is_null() {
+                    return Err(error::ILLEGAL_OPERATION);
+                }
+                (*target).bound_notification = ntfn;
+                (*ntfn).bound = target;
+            }
+            Ok(0)
+        }
+        label::TCB_UNBIND_NOTIFICATION => {
+            // SAFETY: target is live; a bound notification is live.
+            unsafe {
+                let ntfn = core::mem::replace(&mut (*target).bound_notification, core::ptr::null_mut());
+                if !ntfn.is_null() {
+                    (*ntfn).bound = core::ptr::null_mut();
+                }
+            }
+            Ok(0)
+        }
         op @ (label::TCB_SET_PRIORITY | label::TCB_SET_MC_PRIORITY) => {
             let value = m.word(0)?;
             let Cap::Thread { ptr: authority } = m.extra_cap(0)?.1 else {
@@ -303,7 +331,7 @@ fn derive(slot: *mut Slot, cap: Cap) -> Result<Cap> {
 
 /// Apply MINT's data word: a new guard for a CNode capability (bits 0..6 =
 /// guard size, the rest = guard value), or a badge for an unbadged
-/// notification capability.
+/// notification or endpoint capability.
 fn mint(cap: Cap, data: usize) -> Result<Cap> {
     match cap {
         Cap::CNode { ptr, radix, .. } => {
@@ -314,8 +342,9 @@ fn mint(cap: Cap, data: usize) -> Result<Cap> {
             Ok(Cap::CNode { ptr, radix, guard_bits, guard: data >> 6 })
         }
         Cap::Notification { rights, ptr, badge: 0 } => Ok(Cap::Notification { rights, ptr, badge: data }),
+        Cap::Endpoint { rights, ptr, badge: 0 } => Ok(Cap::Endpoint { rights, ptr, badge: data }),
         // A badge can't be changed once set.
-        Cap::Notification { .. } => Err(error::ILLEGAL_OPERATION),
+        Cap::Notification { .. } | Cap::Endpoint { .. } => Err(error::ILLEGAL_OPERATION),
         other => Ok(other),
     }
 }

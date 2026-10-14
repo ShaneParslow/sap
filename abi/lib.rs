@@ -14,12 +14,39 @@ pub mod syscall {
     /// Invoke a capability and wait for the reply. Arguments: `a0` = the
     /// capability's address (CPtr), `a1` = message info, `a2`..`a5` =
     /// message registers 0..3; the rest of the message and the extra
-    /// capabilities' addresses are in the IPC buffer. Results come back in
-    /// the same registers: `a1` = message info whose label is an `error`
-    /// code, `a2`.. = result words.
+    /// capabilities' addresses are in the IPC buffer.
+    ///
+    /// On a kernel object, the results come back in the same registers:
+    /// `a1` = message info whose label is an `error` code, `a2`.. = result
+    /// words. On an endpoint, the call is delivered to a receiver and the
+    /// caller waits for its reply, which arrives as a received message (see
+    /// RECV); `a7` = an `error` code for the call itself.
     pub const CALL: usize = 0;
+
+    // Endpoint IPC. Sending: `a0` = endpoint, `a1` = message info, `a2`..
+    // `a5` = message registers 0..3, the rest in the IPC buffer. Receiving:
+    // `a0` = endpoint, `a6` = a reply object for answering a CALL. A
+    // received message arrives as `a0` = the sender's badge, `a1` = message
+    // info (the sender's label, the length delivered), `a2`..`a5` = message
+    // registers 0..3 (the rest in the IPC buffer), `a6` = what woke the
+    // receiver (`recv_source`). Every IPC syscall returns `a7` = an `error`
+    // code.
+    /// Send, blocking until a receiver takes the message.
+    pub const SEND: usize = 1;
+    /// Send if a receiver is waiting; otherwise drop the message.
+    pub const NB_SEND: usize = 2;
+    /// Block until a message (or a signal on the bound notification).
+    pub const RECV: usize = 3;
+    /// Receive if a message is waiting; otherwise return at once.
+    pub const NB_RECV: usize = 4;
+    /// `a6` = reply object, `a1`.. = the reply message. Answer the caller
+    /// waiting on the reply object; nothing happens if none is.
+    pub const REPLY: usize = 5;
     /// Give up the rest of the time slice.
     pub const YIELD: usize = 6;
+    /// REPLY through `a6`, then RECV on `a0` with the same reply object:
+    /// a server's loop in one system call.
+    pub const REPLY_RECV: usize = 7;
 
     /// Notifications: `a0` = the notification capability's address.
     /// Results: `a0` = badge bits (WAIT, POLL), `a1` = an `error` code.
@@ -58,6 +85,19 @@ pub mod error {
     /// The capability has children that must be revoked first.
     pub const REVOKE_FIRST: usize = 9;
     pub const NOT_ENOUGH_MEMORY: usize = 10;
+    /// A CALL was delivered, but the receiver can't reply: it gave no reply
+    /// object, or the reply object was deleted before it replied.
+    pub const NO_REPLY: usize = 11;
+}
+
+/// What woke a receiver, returned in `a6`.
+pub mod recv_source {
+    /// A message from a sender.
+    pub const MESSAGE: usize = 0;
+    /// A signal on the receiver's bound notification; `a0` = its bits.
+    pub const NOTIFICATION: usize = 1;
+    /// Nothing was waiting (NB_RECV only).
+    pub const NOTHING: usize = 2;
 }
 
 /// Invocation labels: the operation requested on the invoked capability.
@@ -128,6 +168,10 @@ pub mod label {
     pub const TCB_SET_PRIORITY: usize = 18;
     /// MR0 = maximum controlled priority; extra cap 0 = authority, as above.
     pub const TCB_SET_MC_PRIORITY: usize = 19;
+    /// Extra cap 0 = a notification (with the read right). Signals on it
+    /// also wake the thread from RECV on any endpoint.
+    pub const TCB_BIND_NOTIFICATION: usize = 20;
+    pub const TCB_UNBIND_NOTIFICATION: usize = 21;
 }
 
 /// Register order for reading and writing a thread's registers (RISC-V).
@@ -151,6 +195,8 @@ pub mod attr {
 /// Capability rights, as in seL4.
 ///
 /// For notifications: WRITE = may signal, READ = may wait or poll.
+/// For endpoints: WRITE = may send or call, READ = may receive, GRANT = may
+/// send capabilities.
 pub mod rights {
     pub const WRITE: usize = 1 << 0;
     pub const READ: usize = 1 << 1;

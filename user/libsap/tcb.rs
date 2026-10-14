@@ -52,3 +52,13 @@ pub fn set_priority(tcb: usize, authority: usize, priority: usize) -> Result<(),
 pub fn set_mc_priority(tcb: usize, authority: usize, mcp: usize) -> Result<(), Error> {
     invoke(tcb, label::TCB_SET_MC_PRIORITY, &[mcp], &[authority]).map(drop)
 }
+
+/// Bind the notification at `ntfn` to the thread: its signals also wake the
+/// thread from RECV.
+pub fn bind_notification(tcb: usize, ntfn: usize) -> Result<(), Error> {
+    invoke(tcb, label::TCB_BIND_NOTIFICATION, &[], &[ntfn]).map(drop)
+}
+
+pub fn unbind_notification(tcb: usize) -> Result<(), Error> {
+    invoke(tcb, label::TCB_UNBIND_NOTIFICATION, &[], &[]).map(drop)
+}

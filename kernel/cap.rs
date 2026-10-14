@@ -11,6 +11,7 @@
 
 use crate::arch::{self, ArchCap};
 use crate::cspace::SLOT_BITS;
+use crate::endpoint::{ENDPOINT_BITS, REPLY_BITS};
 use crate::notification::NOTIFICATION_BITS;
 use crate::thread::TCB_BITS;
 
@@ -32,6 +33,13 @@ pub enum Cap {
     /// capability ORs `badge` into the notification's word; `rights` (abi
     /// `rights` bits) say whether it may signal (WRITE) and wait (READ).
     Notification { rights: u8, ptr: usize, badge: usize },
+    /// An endpoint at kernel address `ptr`. Messages sent through this
+    /// capability carry `badge` to the receiver; `rights` say whether it may
+    /// send (WRITE), receive (READ) and send capabilities (GRANT).
+    Endpoint { rights: u8, ptr: usize, badge: usize },
+    /// A reply object at kernel address `ptr`, which a receiver lends to
+    /// RECV so it can answer a CALL.
+    Reply { ptr: usize },
     Arch(ArchCap),
 }
 
@@ -48,6 +56,8 @@ impl Cap {
             Cap::CNode { ptr, radix, .. } => Some((arch::kernel_to_phys(ptr), radix + SLOT_BITS as u8)),
             Cap::Thread { ptr } => Some((arch::kernel_to_phys(ptr), TCB_BITS as u8)),
             Cap::Notification { ptr, .. } => Some((arch::kernel_to_phys(ptr), NOTIFICATION_BITS as u8)),
+            Cap::Endpoint { ptr, .. } => Some((arch::kernel_to_phys(ptr), ENDPOINT_BITS as u8)),
+            Cap::Reply { ptr } => Some((arch::kernel_to_phys(ptr), REPLY_BITS as u8)),
             Cap::Arch(a) => a.extent(),
             Cap::Null => None,
         }
@@ -68,6 +78,8 @@ impl Cap {
             (Cap::CNode { ptr, radix, .. }, Cap::CNode { ptr: p2, radix: r2, .. }) => ptr == p2 && radix == r2,
             (Cap::Thread { ptr }, Cap::Thread { ptr: p2 }) => ptr == p2,
             (Cap::Notification { ptr, .. }, Cap::Notification { ptr: p2, .. }) => ptr == p2,
+            (Cap::Endpoint { ptr, .. }, Cap::Endpoint { ptr: p2, .. }) => ptr == p2,
+            (Cap::Reply { ptr }, Cap::Reply { ptr: p2 }) => ptr == p2,
             (Cap::Arch(a), Cap::Arch(b)) => a.same_region_as(&b),
             _ => false,
         }
@@ -94,10 +106,10 @@ impl Cap {
         }
     }
 
-    /// The badge of a notification (or, later, endpoint) capability.
+    /// The badge of a notification or endpoint capability.
     pub fn badge(&self) -> Option<usize> {
         match *self {
-            Cap::Notification { badge, .. } => Some(badge),
+            Cap::Notification { badge, .. } | Cap::Endpoint { badge, .. } => Some(badge),
             _ => None,
         }
     }
@@ -108,6 +120,7 @@ impl Cap {
         match *self {
             Cap::Arch(a) => Cap::Arch(a.masked(rights)),
             Cap::Notification { rights: r, ptr, badge } => Cap::Notification { rights: r & rights as u8, ptr, badge },
+            Cap::Endpoint { rights: r, ptr, badge } => Cap::Endpoint { rights: r & rights as u8, ptr, badge },
             other => other,
         }
     }

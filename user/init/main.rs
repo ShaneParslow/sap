@@ -6,10 +6,10 @@
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use libsap::abi::{attr, error, init_slot, object, reg, rights, BootInfo};
+use libsap::abi::{attr, error, init_slot, object, recv_source, reg, rights, BootInfo};
 use libsap::cnode::SlotRef;
 use libsap::sys::Error;
-use libsap::{debug, notification, println, sys, tcb, untyped, vspace};
+use libsap::{debug, ipc, notification, println, sys, tcb, untyped, vspace};
 
 /// Slot `i` of the root CNode.
 fn slot(i: usize) -> SlotRef {
@@ -24,6 +24,7 @@ fn sap_main(info: &'static BootInfo) -> ! {
     check_mapping(info);
     check_threads(info);
     check_notifications(info);
+    check_ipc(info);
     println!("init: all checks passed");
     debug::halt(false)
 }
@@ -411,4 +412,182 @@ fn check_notifications(info: &BootInfo) {
 
     expect("revoke", slot(parent).revoke(), Ok(()));
     println!("init: notifications, badges, waiting, suspension and deletion behave");
+}
+
+/// Start a thread in this address space at `entry(args)`, with a 4 KiB
+/// stack and an IPC buffer in a fresh 1 GiB-aligned region at `va`. Uses
+/// six slots from `slots` and memory from `untyped`. Returns the TCB slot.
+fn spawn(untyped: usize, slots: usize, va: usize, entry: extern "C" fn(usize, usize, usize) -> !, args: [usize; 3]) -> usize {
+    let in_root = SlotRef { root: init_slot::CNODE, index: 0, depth: 0 };
+    let (thread, tables, frames) = (slots, slots + 1, slots + 3);
+    let me = init_slot::VSPACE;
+    let rw = rights::READ | rights::WRITE;
+    expect("spawn: tcb", untyped::retype(untyped, object::TCB, 0, in_root, thread, 1), Ok(()));
+    expect("spawn: tables", untyped::retype(untyped, object::PAGE_TABLE, 0, in_root, tables, 2), Ok(()));
+    expect("spawn: frames", untyped::retype(untyped, object::FRAME_4K, 0, in_root, frames, 2), Ok(()));
+    expect("spawn: map", vspace::map_page_table(tables, me, va), Ok(()));
+    expect("spawn: map", vspace::map_page_table(tables + 1, me, va), Ok(()));
+    expect("spawn: stack", vspace::map_frame(frames, me, va, rw, attr::EXECUTE_NEVER), Ok(()));
+    let buffer = va + 0x2000;
+    expect("spawn: buffer", vspace::map_frame(frames + 1, me, buffer, rw, attr::EXECUTE_NEVER), Ok(()));
+    expect("spawn: configure", tcb::configure(thread, init_slot::CNODE, me, Some((frames + 1, buffer))), Ok(()));
+    expect("spawn: priority", tcb::set_priority(thread, init_slot::TCB, 255), Ok(()));
+    let mut regs = [0; reg::COUNT];
+    regs[reg::PC] = entry as *const () as usize;
+    regs[reg::SP] = va + 0x1000;
+    regs[reg::TP] = buffer;
+    regs[reg::A0..reg::A0 + 3].copy_from_slice(&args);
+    expect("spawn: start", tcb::write_registers(thread, true, &regs), Ok(()));
+    thread
+}
+
+/// Server state, read by the checks.
+static SENDS: AtomicUsize = AtomicUsize::new(0);
+static SIGNALS: AtomicUsize = AtomicUsize::new(0);
+static SERVER_ERROR: AtomicUsize = AtomicUsize::new(0);
+const SEND_LABEL: usize = 5;
+
+/// Answer each call on `ep` with its words incremented and the caller's
+/// badge as the label; count plain sends and bound-notification signals.
+/// When receiving fails, record why and suspend itself (`me`).
+extern "C" fn server(ep: usize, reply: usize, me: usize) -> ! {
+    let mut words = [0usize; 8];
+    let mut received = ipc::recv(ep, reply, &mut words);
+    loop {
+        received = match received {
+            Err(e) => {
+                SERVER_ERROR.store(e.0, Ordering::Relaxed);
+                let _ = tcb::suspend(me);
+                continue;
+            }
+            Ok(m) if m.source == recv_source::NOTIFICATION => {
+                SIGNALS.fetch_add(m.badge, Ordering::Relaxed);
+                ipc::recv(ep, reply, &mut words)
+            }
+            Ok(m) => {
+                if m.info.label() == SEND_LABEL {
+                    SENDS.fetch_add(1, Ordering::Relaxed);
+                }
+                let n = m.info.length();
+                let mut answer = [0usize; 8];
+                for (a, w) in answer.iter_mut().zip(&words[..n]) {
+                    *a = w + 1;
+                }
+                // Replying to a plain send finds no caller and does nothing.
+                ipc::reply_recv(ep, reply, m.badge, &answer[..n], &mut words)
+            }
+        };
+    }
+}
+
+static LISTENED: AtomicUsize = AtomicUsize::new(0);
+
+/// Receive on `ep` without a reply object, recording each label.
+extern "C" fn listener(ep: usize, _: usize, _: usize) -> ! {
+    loop {
+        if let Ok(m) = ipc::recv(ep, 0, &mut []) {
+            LISTENED.store(m.info.label(), Ordering::Relaxed);
+        }
+    }
+}
+
+static CALL_RESULT: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+/// Call `ep` once and record the error code it ends with, then stop.
+extern "C" fn caller(ep: usize, me: usize, _: usize) -> ! {
+    let code = match ipc::call(ep, 3, &[], &mut []) {
+        Ok(_) => 0,
+        Err(e) => e.0,
+    };
+    CALL_RESULT.store(code, Ordering::Relaxed);
+    loop {
+        let _ = tcb::suspend(me);
+    }
+}
+
+/// Endpoints and reply objects: calls with long messages and badges, plain
+/// sends, rights, non-blocking variants, a bound notification waking a
+/// receiver, calls nobody can answer, and deleting objects under waiters.
+fn check_ipc(info: &BootInfo) {
+    let base = info.empty.start + 96;
+    let (index, _) = info.untyped_list[..info.untyped.len()]
+        .iter()
+        .enumerate()
+        .find(|(_, u)| u.size_bits >= 18)
+        .expect("no untyped region of 256 KiB");
+    let parent = info.untyped.start + index;
+    let in_root = SlotRef { root: init_slot::CNODE, index: 0, depth: 0 };
+    let (ep, reply, badged, read_only, ep2, ntfn) = (base, base + 1, base + 2, base + 3, base + 4, base + 5);
+    let region = |k: usize| 0x10_0000_0000 + k * 0x4000_0000;
+
+    expect("retype endpoints", untyped::retype(parent, object::ENDPOINT, 0, in_root, ep, 1), Ok(()));
+    expect("retype reply", untyped::retype(parent, object::REPLY, 0, in_root, reply, 1), Ok(()));
+    expect("badge 7", slot(badged).mint_from(slot(ep), rights::WRITE, 7), Ok(()));
+    expect("read-only copy", slot(read_only).copy_from(slot(ep), rights::READ), Ok(()));
+    let server_tcb = spawn(parent, base + 10, region(0), server, [ep, reply, base + 10]);
+    sys::yield_now(); // the server runs and waits in RECV
+
+    // A call with six words: two travel through the IPC buffers each way.
+    let mut out = [0usize; 8];
+    let r = ipc::call(badged, 42, &[1, 2, 3, 4, 5, 6], &mut out).expect("call");
+    assert_eq!((r.info.label(), r.info.length(), r.badge), (7, 6, 0), "reply label, length or badge");
+    assert_eq!(out[..6], [2, 3, 4, 5, 6, 7], "reply words");
+
+    // A plain send completes without waiting for an answer.
+    expect("send", ipc::send(badged, SEND_LABEL, &[10]).map(drop), Ok(()));
+    sys::yield_now();
+    assert_eq!(SENDS.load(Ordering::Relaxed), 1, "the server didn't count the send");
+
+    // Rights.
+    let wrong = |r: Result<ipc::Received, sys::Error>| r.map(drop).map_err(|e| e.0);
+    assert_eq!(wrong(ipc::recv(badged, 0, &mut [])), Err(error::INVALID_CAPABILITY), "recv on a send-only cap");
+    assert_eq!(wrong(ipc::call(read_only, 1, &[], &mut [])), Err(error::INVALID_CAPABILITY), "call on a receive-only cap");
+
+    // Non-blocking variants on an endpoint nobody uses.
+    expect("retype endpoint 2", untyped::retype(parent, object::ENDPOINT, 0, in_root, ep2, 1), Ok(()));
+    let nothing = ipc::nb_recv(ep2, 0, &mut []).expect("nb_recv");
+    assert_eq!(nothing.source, recv_source::NOTHING, "nb_recv found something");
+    expect("nb_send with nobody waiting", ipc::nb_send(ep2, 1, &[]).map(drop), Ok(()));
+    assert_eq!(ipc::nb_recv(ep2, 0, &mut []).expect("nb_recv").source, recv_source::NOTHING, "nb_send was kept");
+
+    // A notification bound to the server wakes it from RECV.
+    expect("retype notification", untyped::retype(parent, object::NOTIFICATION, 0, in_root, ntfn, 1), Ok(()));
+    expect("bind", tcb::bind_notification(server_tcb, ntfn), Ok(()));
+    expect("bind twice", tcb::bind_notification(server_tcb, ntfn), Err(error::ILLEGAL_OPERATION));
+    expect("signal badge", slot(base + 6).mint_from(slot(ntfn), rights::WRITE, 0b100), Ok(()));
+    expect("signal", notification::signal(base + 6), Ok(()));
+    sys::yield_now();
+    assert_eq!(SIGNALS.load(Ordering::Relaxed), 0b100, "the bound notification didn't wake the server");
+
+    // A receiver that lends no reply object can't answer: the caller's
+    // message is delivered, and the call ends with NO_REPLY.
+    let _listener = spawn(parent, base + 20, region(1), listener, [ep2, 0, 0]);
+    sys::yield_now();
+    let unanswered = ipc::call(ep2, 9, &[], &mut []).map(drop).map_err(|e| e.0);
+    assert_eq!(unanswered, Err(error::NO_REPLY), "a call to a receiver without a reply object");
+    sys::yield_now();
+    assert_eq!(LISTENED.load(Ordering::Relaxed), 9, "the listener didn't get the message");
+
+    // This thread receives a call and deletes its reply object instead of
+    // answering: the caller wakes with NO_REPLY.
+    let (ep4, reply4) = (base + 7, base + 8);
+    expect("retype endpoint 4", untyped::retype(parent, object::ENDPOINT, 0, in_root, ep4, 1), Ok(()));
+    expect("retype reply 4", untyped::retype(parent, object::REPLY, 0, in_root, reply4, 1), Ok(()));
+    let _caller = spawn(parent, base + 30, region(2), caller, [ep4, base + 30, 0]);
+    sys::yield_now(); // it calls and waits to send
+    let got = ipc::recv(ep4, reply4, &mut []).expect("recv the call");
+    assert_eq!(got.info.label(), 3, "wrong call received");
+    expect("delete the reply object", slot(reply4).delete(), Ok(()));
+    sys::yield_now();
+    assert_eq!(CALL_RESULT.load(Ordering::Relaxed), error::NO_REPLY, "the caller didn't get NO_REPLY");
+
+    // Deleting the endpoint under the waiting server restarts its RECV,
+    // which then fails instead of waiting forever.
+    expect("revoke endpoint", slot(ep).revoke(), Ok(()));
+    expect("delete endpoint", slot(ep).delete(), Ok(()));
+    sys::yield_now();
+    assert_eq!(SERVER_ERROR.load(Ordering::Relaxed), error::FAILED_LOOKUP, "the server's RECV didn't fail");
+
+    expect("revoke", slot(parent).revoke(), Ok(()));
+    println!("init: endpoints, calls, replies, bound notifications and deletion behave");
 }

@@ -13,18 +13,18 @@ Part of roadmap milestone M3 ([[roadmap]]): user threads are kernel objects with
 
 ## Thread control block
 
-A `Tcb` (`kernel/thread.rs:43`) occupies a block of `1 << TCB_BITS` = 1 KiB (line 19, as in seL4 on RISC-V; a compile-time assertion checks it fits). It holds:
+A `Tcb` (`kernel/thread.rs:50`) occupies a block of `1 << TCB_BITS` = 1 KiB (line 19, as in seL4 on RISC-V; a compile-time assertion checks it fits). It holds:
 - `context`: the thread's saved user registers, first, so the trap entry code finds them at the TCB's own address ([[kernel-traps-riscv#Trap entry and return]]);
 - three capability slots (lines 24–26): the root of its capability space, the root of its address space, and its IPC buffer frame. They hold copies, as in seL4, so deleting the address space or capability space also removes the thread's reference ([[kernel-capabilities]]);
-- `state`: `Inactive` (never started, or suspended), `Running`, meaning runnable whether or not it is the thread on the CPU, or blocked (so far only on a notification, [[kernel-ipc#Blocking and cancellation]]), with the object it is blocked on and its links in that object's queue;
+- `state`: `Inactive` (never started, or suspended), `Running`, meaning runnable whether or not it is the thread on the CPU, or blocked on a notification, an endpoint or a reply ([[kernel-ipc#Blocking and cancellation]]), with the object it is blocked on and its links in that object's queue;
 - `priority`: 0–255, with 255 the highest (the root task's);
 - `mcp`, the maximum controlled priority: the highest priority this thread may grant when used as the authority for setting priorities, as in seL4; 0 for new threads, 255 for the root task;
 - `ipc_buffer`: the user address of its IPC buffer, inside the frame in its slot;
 - the links of its ready queue.
 
-`Tcb::init` (line 77) zeroes the block, which is an inactive TCB with empty slots. The root task's TCB is placed in a frame from the boot allocator ([[kernel-root-task]]); every other TCB is retyped from untyped memory ([[kernel-capabilities#Retyping untyped memory]]). Deleting the last capability to a TCB takes the thread off the CPU and deletes its slots (`thread::finalise`, line 164).
+`Tcb::init` (line 90) zeroes the block, which is an inactive TCB with empty slots. The root task's TCB is placed in a frame from the boot allocator ([[kernel-root-task]]); every other TCB is retyped from untyped memory ([[kernel-capabilities#Retyping untyped memory]]). Deleting the last capability to a TCB takes the thread off the CPU and deletes its slots (`thread::finalise`, line 189).
 
-The syscall path holds `&mut` to a thread's registers, which live inside its TCB, so `thread::cspace` and `thread::ipc_buffer` (lines 94, 103) read single fields through a raw pointer rather than borrowing the whole TCB.
+The syscall path holds `&mut` to a thread's registers, which live inside its TCB, so `thread::cspace` and `thread::ipc_buffer` (lines 107, 116) read single fields through a raw pointer rather than borrowing the whole TCB.
 
 ## Thread invocations
 
@@ -68,4 +68,4 @@ Scheduler state is a `Global` (`kernel/global.rs:13`), a cell that hands out `&m
 `sap-abi` (`abi/lib.rs`), a crate shared by the kernel and user programs, defines the syscall numbers and the layouts both sides read, so the two can't drift. The kernel dispatches in `syscall::handle` (`kernel/syscall.rs`): `CALL`, the capability invocation ([[kernel-capabilities#Invocation]]), `YIELD`, and the two debug calls `DEBUG_PUTCHAR` and `DEBUG_HALT`.
 
 > [!todo] Not built
-> Blocking states for IPC (M4); fault handlers; scheduling contexts and donation; floating-point state; copying registers between threads; multiple harts.
+> Fault handlers; scheduling contexts and donation; floating-point state; copying registers between threads; multiple harts.

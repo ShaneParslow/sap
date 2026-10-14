@@ -2,12 +2,12 @@
 //! panic handler, and wrappers for system calls and kernel-object
 //! invocations. A program provides `sap_main`.
 //!
-//! TODO: one thread per program for now: the IPC buffer pointer is global.
 
 #![no_std]
 
 pub mod cnode;
 pub mod debug;
+pub mod ipc;
 pub mod notification;
 pub mod sys;
 pub mod tcb;

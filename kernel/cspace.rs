@@ -317,6 +317,16 @@ unsafe fn finalise(cap: Cap, last: bool, depth: usize) -> Result<(), DeleteError
             unsafe { crate::notification::finalise(ptr as *mut crate::notification::Notification) };
             Ok(())
         }
+        Cap::Endpoint { ptr, .. } if last => {
+            // SAFETY: the endpoint is live (see above).
+            unsafe { crate::endpoint::finalise_endpoint(ptr as *mut crate::endpoint::Endpoint) };
+            Ok(())
+        }
+        Cap::Reply { ptr } if last => {
+            // SAFETY: the reply object is live (see above).
+            unsafe { crate::endpoint::finalise_reply(ptr as *mut crate::endpoint::Reply) };
+            Ok(())
+        }
         Cap::Arch(a) => {
             crate::arch::finalise_cap(a, last);
             Ok(())

@@ -14,6 +14,7 @@ use sap_abi::{error, object, rights};
 use crate::arch;
 use crate::cap::Cap;
 use crate::cspace::{self, Slot, SLOT_BITS};
+use crate::endpoint::{ENDPOINT_BITS, REPLY_BITS};
 use crate::notification::NOTIFICATION_BITS;
 use crate::thread::{Tcb, TCB_BITS};
 
@@ -48,8 +49,8 @@ fn object_bits(object_type: usize, size_bits: usize) -> Result<usize, usize> {
             Ok(size_bits + SLOT_BITS)
         }
         object::NOTIFICATION => Ok(NOTIFICATION_BITS),
-        // TODO: endpoints and reply objects arrive in the next M4 step.
-        object::ENDPOINT | object::REPLY => Err(error::INVALID_ARGUMENT),
+        object::ENDPOINT => Ok(ENDPOINT_BITS),
+        object::REPLY => Ok(REPLY_BITS),
         other => arch::object_bits(other).ok_or(error::INVALID_ARGUMENT),
     }
 }
@@ -128,6 +129,8 @@ fn create(object_type: usize, size_bits: usize, pa: usize, device: bool) -> Cap 
         object::TCB => Cap::Thread { ptr: unsafe { Tcb::init(ptr) } as usize },
         object::CNODE => Cap::CNode { radix: size_bits as u8, guard_bits: 0, ptr, guard: 0 },
         object::NOTIFICATION => Cap::Notification { rights: rights::ALL as u8, ptr, badge: 0 },
+        object::ENDPOINT => Cap::Endpoint { rights: rights::ALL as u8, ptr, badge: 0 },
+        object::REPLY => Cap::Reply { ptr },
         other => Cap::Arch(arch::create_object(other, pa)),
     }
 }

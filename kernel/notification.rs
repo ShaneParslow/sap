@@ -20,7 +20,8 @@ pub struct Notification {
     word: usize,
     head: *mut Tcb,
     tail: *mut Tcb,
-    /// A thread bound to this notification (later: wakes from `Recv`).
+    /// The thread bound to this notification: a signal wakes it from RECV
+    /// on any endpoint.
     pub bound: *mut Tcb,
 }
 
@@ -35,6 +36,11 @@ pub unsafe fn signal(ntfn: *mut Notification, badge: usize) {
     // SAFETY: per the caller's guarantee; queued TCBs are live.
     unsafe {
         let n = &mut *ntfn;
+        // A bound thread waiting in RECV on an endpoint takes the signal.
+        if !n.bound.is_null() && (*n.bound).state == ThreadState::BlockedOnReceive {
+            crate::endpoint::wake_bound(n.bound, badge | core::mem::take(&mut n.word));
+            return;
+        }
         if n.head.is_null() {
             n.word |= badge;
             return;

@@ -37,6 +37,13 @@ pub enum ThreadState {
     Running,
     /// Waiting on the notification at `blocked_on`.
     BlockedOnNotification,
+    /// Waiting to send on the endpoint at `blocked_on`; the message is in
+    /// its registers and IPC buffer.
+    BlockedOnSend,
+    /// Waiting to receive on the endpoint at `blocked_on`.
+    BlockedOnReceive,
+    /// Waiting for an answer through the reply object at `blocked_on`.
+    BlockedOnReply,
 }
 
 #[repr(C)]
@@ -63,6 +70,12 @@ pub struct Tcb {
     pub(crate) ipc_prev: *mut Tcb,
     /// The notification bound to this thread, if any.
     pub(crate) bound_notification: *mut crate::notification::Notification,
+    /// While blocked on send: the badge the message carries and whether it
+    /// is a CALL.
+    pub(crate) ipc_badge: usize,
+    pub(crate) ipc_call: bool,
+    /// While blocked on receive: the reply object lent for a CALL.
+    pub(crate) ipc_reply: *mut crate::endpoint::Reply,
 }
 
 const _: () = assert!(core::mem::size_of::<Tcb>() <= 1 << TCB_BITS);
@@ -101,13 +114,23 @@ pub unsafe fn cspace(tcb: *const Tcb) -> Cap {
 /// # Safety
 /// `tcb` must point at a live TCB.
 pub unsafe fn ipc_buffer(tcb: *const Tcb) -> Option<&'static mut IpcBuffer> {
+    // SAFETY: per the caller's guarantee; the pointer is valid (see
+    // `ipc_buffer_ptr`).
+    unsafe { ipc_buffer_ptr(tcb).map(|b| &mut *b) }
+}
+
+/// The thread's IPC buffer as a raw pointer, for copying between two
+/// threads' buffers (which userspace may have made the same memory).
+///
+/// # Safety
+/// `tcb` must point at a live TCB.
+pub unsafe fn ipc_buffer_ptr(tcb: *const Tcb) -> Option<*mut IpcBuffer> {
     // SAFETY: per the caller's guarantee; reads two fields.
     let (frame, va) = unsafe { ((*tcb).slots[IPC_BUFFER_SLOT].cap, (*tcb).ipc_buffer) };
-    let at = arch::frame_kernel_address(frame, va)?;
-    // SAFETY: the frame capability in the TCB keeps the frame from being
-    // reused while the thread exists, and `frame_kernel_address` checked
-    // that a whole IpcBuffer fits inside it.
-    Some(unsafe { &mut *(at as *mut IpcBuffer) })
+    // The frame capability in the TCB keeps the frame from being reused
+    // while the thread exists, and `frame_kernel_address` checks that a
+    // whole IpcBuffer fits inside it.
+    arch::frame_kernel_address(frame, va).map(|at| at as *mut IpcBuffer)
 }
 
 /// Take a blocked thread off whatever it is blocked on. Returns whether it
@@ -120,6 +143,8 @@ unsafe fn cancel_blocking(tcb: *mut Tcb) -> bool {
     unsafe {
         match (*tcb).state {
             ThreadState::BlockedOnNotification => crate::notification::cancel(tcb),
+            ThreadState::BlockedOnSend | ThreadState::BlockedOnReceive => crate::endpoint::cancel(tcb),
+            ThreadState::BlockedOnReply => crate::endpoint::cancel_reply(tcb),
             ThreadState::Inactive | ThreadState::Running => return false,
         }
         (*tcb).state = ThreadState::Inactive;

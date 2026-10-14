@@ -1,22 +1,27 @@
 //! System calls and the IPC buffer.
 
 use core::arch::asm;
-use core::sync::atomic::{AtomicUsize, Ordering};
 
 use sap_abi::{syscall, IpcBuffer, MessageInfo, MAX_EXTRA_CAPS, MESSAGE_REGISTERS};
 
-static IPC_BUFFER: AtomicUsize = AtomicUsize::new(0);
-
+/// Each thread keeps its IPC buffer's address in the thread-pointer
+/// register `tp`, which nothing else uses yet (there is no thread-local
+/// storage). A thread's creator sets it with the other start registers.
+///
+/// TODO: move to a real thread-local once the sap Rust target has TLS.
 pub(crate) fn set_ipc_buffer(address: usize) {
-    IPC_BUFFER.store(address, Ordering::Relaxed);
+    // SAFETY: tp is reserved for this; writing it affects only this thread.
+    unsafe { asm!("mv tp, {}", in(reg) address, options(nomem, nostack)) };
 }
 
 /// This thread's IPC buffer.
 pub fn ipc_buffer() -> &'static mut IpcBuffer {
-    let address = IPC_BUFFER.load(Ordering::Relaxed);
+    let address: usize;
+    // SAFETY: reading a register.
+    unsafe { asm!("mv {}, tp", out(reg) address, options(nomem, nostack)) };
     assert!(address != 0, "no IPC buffer");
-    // SAFETY: the kernel mapped a page-aligned IPC buffer here for this
-    // thread, and only this thread uses it.
+    // SAFETY: the kernel mapped an IPC buffer here for this thread, and only
+    // this thread uses it.
     unsafe { &mut *(address as *mut IpcBuffer) }
 }
 
@@ -41,11 +46,15 @@ pub fn yield_now() {
 /// result words.
 pub fn call(cptr: usize, label: usize, words: &[usize], caps: &[usize]) -> (MessageInfo, [usize; MESSAGE_REGISTERS]) {
     assert!(caps.len() <= MAX_EXTRA_CAPS);
-    let buffer = ipc_buffer();
-    for (i, &w) in words.iter().enumerate().skip(MESSAGE_REGISTERS) {
-        buffer.msg[i] = w;
+    // Only touch the IPC buffer when the message needs it, so threads
+    // without one can still make short invocations.
+    if words.len() > MESSAGE_REGISTERS || !caps.is_empty() {
+        let buffer = ipc_buffer();
+        for (i, &w) in words.iter().enumerate().skip(MESSAGE_REGISTERS) {
+            buffer.msg[i] = w;
+        }
+        buffer.caps[..caps.len()].copy_from_slice(caps);
     }
-    buffer.caps[..caps.len()].copy_from_slice(caps);
     let mut mr = [0; MESSAGE_REGISTERS];
     for (r, &w) in mr.iter_mut().zip(words) {
         *r = w;

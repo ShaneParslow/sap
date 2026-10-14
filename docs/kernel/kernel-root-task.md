@@ -3,7 +3,6 @@ status: implemented
 summary: The one program the kernel starts by itself, as in seL4 - user/init, built on the libsap runtime as a static position-independent ELF and embedded in the kernel; how the kernel loads it (contiguous frames, relative relocations, W^X segments, a stack, IPC buffer and boot-info page) and starts it as a thread; and the debug syscalls it still uses.
 updated: 2026-10-13
 code: [kernel/build.rs, kernel/root_task.rs, kernel/syscall.rs, abi/lib.rs, user/init/main.rs, user/init/build.rs, user/init/.cargo/config.toml, user/libsap/lib.rs, user/libsap/debug.rs]
-verified: ed24f74
 sources: ["[[2026-10-08-22c3947b-wiki-setup]]"]
 ---
 
@@ -17,7 +16,7 @@ The root task is `user/init`, its own crate. The kernel's build script (`kernel/
 
 `user/init` is linked as a **static position-independent executable** (`-C relocation-model=pie`, `--pie --no-dynamic-linker`), in line with the decision that all code is position-independent ([[prog-loading]]). Each segment starts on its own page (`-z separate-loadable-segments`), so segments can be mapped with different permissions. The precompiled `core` library for this target isn't position-independent, so its vtables need relocations in read-only segments; `-z notext` allows that, and the loader applies relocations before mapping anything (`user/init/build.rs`).
 
-It is built on **`libsap`** (`user/libsap/`), the user runtime: the `_start` entry point, which records the IPC buffer address and calls the program's `sap_main` with the boot-info page; a debug console with `print!`/`println!`; the panic handler; and wrappers for syscalls and invocations ([[kernel-capabilities#Invocation]]).
+It is built on **`libsap`** (`user/libsap/`), the user runtime: the `_start` entry point, which records the IPC buffer address (in the thread-pointer register, one per thread, [[kernel-ipc#Per-thread IPC buffers in userspace]]) and calls the program's `sap_main` with the boot-info page; a debug console with `print!`/`println!`; the panic handler; and wrappers for syscalls and invocations ([[kernel-capabilities#Invocation]]).
 
 ## Loading it
 

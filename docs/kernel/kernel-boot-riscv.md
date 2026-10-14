@@ -30,7 +30,7 @@ A successful run prints the OpenSBI banner, the kernel log, the root task's gree
    - builds the kernel's own page tables from free memory and switches to them ([[kernel-memory-riscv]]);
    - gives the timer its frequency;
    - calls `kmain` with the boot information and the boot allocator.
-4. **`kmain`** (`kernel/main.rs:29`), the architecture-neutral kernel: logs the boot information and free memory, starts the timer at 100 Hz, runs `boot_checks` (line 46), loads the root task ([[kernel-root-task]]), and starts the scheduler ([[kernel-threads]]). The boot checks exercise each implemented piece so `cargo run` shows it working (currently a breakpoint trap and ten timer ticks, [[kernel-traps-riscv]]).
+4. **`kmain`** (`kernel/main.rs:30`), the architecture-neutral kernel: logs the boot information and free memory, starts the timer at 100 Hz, runs `boot_checks` (line 47), loads the root task ([[kernel-root-task]]), and starts the scheduler ([[kernel-threads]]). The boot checks exercise each implemented piece so `cargo run` shows it working (currently a breakpoint trap and ten timer ticks, [[kernel-traps-riscv]]).
 
 ## Boot information
 
@@ -67,7 +67,7 @@ The kernel log (`kernel/log.rs`) adds levels: `error!`, `warn!`, `info!`, `debug
 
 `arch::shutdown(failure)` (`kernel/arch/riscv/mod.rs:123`) first tries QEMU's test device (`kernel/arch/riscv/test_device.rs:24`): it writes `0x5555` (pass) or `0x3333 | code << 16` (fail, code 1), and QEMU exits with status 0 or the code. OpenSBI's own shutdown can't report failure under QEMU, which is why the test device exists; it only serves automated test runs. Without it, shutdown uses the SBI System Reset extension (`sbi.rs:35`) with reason "none" or "system failure", and halts if that returns.
 
-The panic handler (`kernel/main.rs:62`) logs at error level and shuts down with failure. Panics abort; there is no unwinding. A `TODO` there is a frame-pointer backtrace for debug builds.
+The panic handler (`kernel/main.rs:63`) logs at error level and shuts down with failure. Panics abort; there is no unwinding. A `TODO` there is a frame-pointer backtrace for debug builds.
 
 > [!todo] Not built
 > Starting the other harts (SMP); honoring `no-map` reservations ([[kernel-memory-riscv]]); a backtrace on panic.
