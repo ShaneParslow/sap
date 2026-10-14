@@ -65,7 +65,35 @@ def stale(page, paths, verified=None):
     return None
 
 
+CITATION = re.compile(r"`([\w/.-]+\.\w+):(\d+)(?:-\d+)?`")
+
+
+def show_citations():
+    """Print the code line each `path:line` citation in an implemented page
+    points at, for a human or agent to eyeball after code moves."""
+    for page in sorted(p for p in DOCS.rglob("*.md") if ".obsidian" not in p.parts and "raw" not in p.parts):
+        text = page.read_text()
+        fm = frontmatter(text)
+        if fm.get("status") != "implemented":
+            continue
+        # Short citations (`sbi.rs:30`) name a file in the page's `code:` list.
+        code = fm.get("code") or []
+        for m in CITATION.finditer(text):
+            name, n = m.group(1), int(m.group(2))
+            matches = [c for c in code if c == name or c.endswith("/" + name)]
+            path = REPO / (matches[0] if len(matches) == 1 else name)
+            if not path.exists():
+                print(f"{page.stem}: {m.group(1)}: no such file")
+                continue
+            lines = path.read_text().split("\n")
+            line = lines[n - 1].strip() if n <= len(lines) else "<past the end>"
+            print(f"{page.stem}: {m.group(1)}:{n}: {line[:80]}")
+
+
 def main():
+    if "--citations" in sys.argv:
+        show_citations()
+        return
     pages = sorted(p for p in DOCS.rglob("*.md") if ".obsidian" not in p.parts)
     by_name, problems = {}, []
     for p in pages:
