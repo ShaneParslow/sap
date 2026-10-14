@@ -44,7 +44,7 @@ Option 2 is the starting point; option 1 replaces it when capability-carrying me
 ## Details of the proposed transfer
 
 - **Flags per capability:** `move` (the sender's slot is emptied atomically), `copy` (a derived copy; the sender keeps the original), or `borrow` (a derived child capability the sender's runtime revokes when the reply arrives). The kernel doesn't need to know where a call ends: the lender holds the parent and revokes through the derivation tree ([[cap-revocation]]).
-- **Batching:** a whole Cap'n Proto message's capabilities in one syscall, unlike seL4, which delivers one per message ([[kernel-sel4-differences]]).
+- **Batching:** up to 16 capabilities per message, unlike seL4, which delivers one ([[kernel-sel4-differences]]). Decided 2026-10-13 ([[2026-10-08-22c3947b#m34|§m34]]). The receiver can't be flooded, since capabilities only land in the slot range it named; the bound exists because each capability costs kernel work in a call that can't be preempted, so an unbounded count would let one process stall the kernel. Bigger batches go as one CNode holding them, or several messages.
 - **Backpressure:** the receive range is finite and counts against the receiver's quotas ([[ipc-resource-limits]]). When it is full the transfer fails and the sender waits, like a full ring. The receiver's runtime frees slots by moving capabilities into its import table's storage or deleting them.
 - **Validation:** the receiver checks that every capability index in a message lies in its receive range and that the kernel object type matches the interface the schema expects ([[ipc-validation]]).
 

@@ -37,12 +37,15 @@ A very small set, all operating on capabilities ([[2026-09-27-future-of-computin
 
 | Syscall | Purpose |
 |---|---|
-| `Call(cap, msg)` | Send and wait for the reply (with timeslice donation). |
+| `Call(cap, msg)` | Send and wait for the reply (with timeslice donation, once scheduling contexts exist). |
 | `Send` / `NBSend` | Send, blocking or non-blocking. |
-| `Recv` | Wait for a message. |
-| `ReplyRecv` | Reply to the last caller and wait for the next: the server loop in one trap. |
-| `Signal` / `Wait` | Notifications. |
+| `Recv(ep, reply)` / `NBRecv` | Wait for a message; a caller's reply goes to the reply object passed in. |
+| `Reply(reply)` | Answer the caller linked to a reply object. |
+| `ReplyRecv(ep, reply)` | Reply and wait for the next message: the server loop in one trap. |
+| `Signal` / `Wait` / `Poll` | Notifications: set bits, block until bits are set, or check without blocking. |
 | `Yield` | Give up the CPU. |
+
+**Replies use reply objects, as in seL4's MCS configuration** (decided 2026-10-13, [[2026-10-08-22c3947b#m34|§m34]]): a server passes a reply object to `Recv`, and a `Call` that it receives links the caller to that object until the server replies through it. Unlike classic seL4, where the reply right sits in the server's thread, this lets one thread hold several pending replies and is what time donation builds on ([[kernel-scheduling]]). Notifications have their own syscalls rather than reusing `Send`/`Recv` as seL4 does. A user fault is delivered as a message to the thread's fault-handler endpoint, as an implicit `Call`; the handler replies to resume the thread.
 
 **Everything else is a `Call` on a capability to a kernel object:** retyping untyped memory into objects, mapping and unmapping frames, configuring and resuming threads, copying, minting, moving, revoking and deleting capabilities, acknowledging IRQs, binding scheduling contexts.
 
