@@ -13,6 +13,7 @@ pub mod debug;
 pub mod ipc;
 pub mod notification;
 pub mod process;
+pub mod ring;
 pub mod sys;
 pub mod tcb;
 pub mod untyped;

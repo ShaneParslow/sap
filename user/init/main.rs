@@ -10,6 +10,7 @@ use libsap::abi::{attr, error, fault, init_slot, object, recv_source, reg, right
 use libsap::cnode::SlotRef;
 use libsap::sys::Error;
 use libsap::process::{self, Parent, Slots};
+use libsap::ring::{Consumer, Producer};
 use libsap::{debug, ipc, notification, println, sys, tcb, untyped, vspace};
 
 /// Slot `i` of the root CNode.
@@ -31,6 +32,7 @@ fn sap_main(boot_info: usize, _: usize, _: usize) -> ! {
     check_cap_transfer(info);
     check_faults(info);
     check_process(info);
+    check_ring(info);
     println!("init: all checks passed");
     debug::halt(false)
 }
@@ -859,4 +861,97 @@ fn check_process(info: &BootInfo) {
     expect("unmap scratch", vspace::unmap_frame(marker), Ok(()));
     expect("revoke", slot(parent_untyped).revoke(), Ok(()));
     println!("init: a second process, calls between address spaces and isolation behave");
+}
+
+/// Two processes over a pair of shared-memory rings with notifications as
+/// doorbells: 10,000 messages echoed by a second instance of the peer, with
+/// at most 48 in flight.
+fn check_ring(info: &BootInfo) {
+    let base = info.empty.start + 520;
+    let (index, _) = info.untyped_list[..info.untyped.len()]
+        .iter()
+        .enumerate()
+        .find(|(_, u)| u.size_bits >= 20)
+        .expect("no untyped region of 1 MiB");
+    let parent_untyped = info.untyped.start + index;
+    let in_root = SlotRef { root: init_slot::CNODE, index: 0, depth: 0 };
+    let (mine, theirs, my_bell, their_bell, frames, copies) = (base, base + 1, base + 2, base + 3, base + 4, base + 8);
+    let parent = Parent {
+        cnode: init_slot::CNODE,
+        vspace: init_slot::VSPACE,
+        asid_pool: init_slot::ASID_POOL,
+        authority: init_slot::TCB,
+        untyped: parent_untyped,
+        scratch: 0x38_0000_0000,
+    };
+    let mut slots = Slots { next: base + 20, end: base + 300 };
+
+    // A notification each, and a badged capability to signal the other.
+    expect("notifications", untyped::retype(parent_untyped, object::NOTIFICATION, 0, in_root, mine, 2), Ok(()));
+    expect("my doorbell", slot(my_bell).mint_from(slot(mine), rights::WRITE, 1), Ok(()));
+    expect("their doorbell", slot(their_bell).mint_from(slot(theirs), rights::WRITE, 1), Ok(()));
+
+    // Four pages: ring A (init to peer) data and control, ring B (peer to
+    // init) data and control. Each side maps them with complementary
+    // rights: a page is writable only by the side that owns its contents.
+    expect("ring pages", untyped::retype(parent_untyped, object::FRAME_4K, 0, in_root, frames, 4), Ok(()));
+    for i in 0..4 {
+        expect("copy for the peer", slot(copies + i).copy_from(slot(frames + i), rights::ALL), Ok(()));
+    }
+    let (ro, rw) = (rights::READ, rights::READ | rights::WRITE);
+    let here = 0x28_0000_0000;
+    let peer_base = 0x20_0000_0000;
+    let mine_rights = [rw, ro, ro, rw];
+    let theirs_rights = [ro, rw, rw, ro];
+    let peer = process::load(PEER, &parent, &mut slots, 255, [0, 2, 1]);
+    for i in 0..4 {
+        let va = here + i * 0x1000;
+        if i == 0 {
+            // Page tables for this process's ring region.
+            for _ in 0..2 {
+                let table = slots.next;
+                slots.next += 1;
+                let _ = untyped::retype(parent_untyped, object::PAGE_TABLE, 0, in_root, table, 1);
+                let _ = vspace::map_page_table(table, init_slot::VSPACE, va);
+            }
+        }
+        expect("map here", vspace::map_frame(frames + i, init_slot::VSPACE, va, mine_rights[i], attr::EXECUTE_NEVER), Ok(()));
+        peer.map_frame(&parent, &mut slots, copies + i, peer_base + i * 0x1000, theirs_rights[i]);
+    }
+    peer.give(&parent, 1, theirs, rights::READ);
+    peer.give(&parent, 2, peer.tcb, rights::ALL);
+    peer.give(&parent, 3, my_bell, rights::WRITE);
+    peer.start();
+
+    // SAFETY: the four pages are mapped here with the rights the ring needs,
+    // and this thread is the only user of this end.
+    let (mut out, mut back) = unsafe {
+        (Producer::new(here, here + 0x1000, their_bell, mine), Consumer::new(here + 0x2000, here + 0x3000, their_bell, mine))
+    };
+    const MESSAGES: usize = 10_000;
+    const WINDOW: usize = 48;
+    let (mut sent, mut received, mut checksum) = (0, 0, 0usize);
+    let mut words = [0usize; 7];
+    while received < MESSAGES {
+        while sent < MESSAGES && sent - received < WINDOW {
+            out.send(&[sent, sent * 3]);
+            sent += 1;
+        }
+        let n = back.recv(&mut words);
+        assert_eq!(n, 2, "echo length");
+        assert_eq!((words[0], words[1]), (received + 1, received * 3 + 1), "echo out of order or corrupted");
+        checksum = checksum.wrapping_add(words[0]);
+        received += 1;
+    }
+    out.send(&[usize::MAX]);
+    assert_eq!(back.recv(&mut words), 1, "the peer should echo the stop message");
+    assert_eq!(checksum, MESSAGES * (MESSAGES + 1) / 2, "checksum");
+    sys::yield_now(); // let the peer report and stop
+    println!(
+        "init: {MESSAGES} messages round trip over shared-memory rings; init slept {} time(s) waiting for echoes, {} for space",
+        back.sleeps, out.sleeps
+    );
+
+    expect("revoke", slot(parent_untyped).revoke(), Ok(()));
+    println!("init: shared-memory rings between processes behave");
 }

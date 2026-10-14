@@ -79,6 +79,14 @@ impl Process {
     pub fn start(&self) {
         tcb::resume(self.tcb).expect("loader: start");
     }
+
+    /// Map the caller's frame capability `frame` at `va` in the process's
+    /// address space (adding page tables as needed). The capability is then
+    /// that mapping; copy it first to map the frame elsewhere too.
+    pub fn map_frame(&self, parent: &Parent, slots: &mut Slots, frame: usize, va: usize, granted: usize) {
+        ensure_tables(parent, slots, self.vspace, va);
+        vspace::map_frame(frame, self.vspace, va, granted, attr::EXECUTE_NEVER).expect("loader: map a frame");
+    }
 }
 
 fn retype(parent: &Parent, slots: &mut Slots, object_type: usize, size_bits: usize) -> usize {

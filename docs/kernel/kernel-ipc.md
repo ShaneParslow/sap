@@ -104,7 +104,7 @@ Several threads of one program each need their own IPC buffer. Every thread star
 
 `user/init` (`check_notifications`) checks: minting two badges and refusing a re-badge; two signals with nobody waiting accumulating, so one poll returns both bits and the next returns none; a send-only capability being refused a `WAIT`; a second thread blocked in `WAIT` waking once per signal with the right badge; a signal sent while that thread is suspended being taken by its restarted `WAIT` after `RESUME`; revoking one badge deleting its copies while the badge itself keeps working; and deleting the notification with the thread waiting, after which its restarted `WAIT` reports `FAILED_LOOKUP`.
 
-`check_ipc` uses a `spawn` helper (`spawn_with`) (`user/init/main.rs:427`) to start threads with their own stack and IPC buffer, and checks:
+`check_ipc` uses a `spawn` helper (`spawn_with`) (`user/init/main.rs:429`) to start threads with their own stack and IPC buffer, and checks:
 - a server thread answering with `REPLY_RECV`: a six-word `CALL` through a badged capability comes back with the badge as the label and every word incremented, so two words crossed the IPC buffers each way, and the reply carries no badge;
 - a plain `SEND` completing without an answer, counted by the server;
 - `RECV` on a send-only capability and `CALL` on a receive-only one refused;
@@ -121,6 +121,6 @@ Several threads of one program each need their own IPC buffer. Every thread star
 - a `CALL` through a capability with grant-reply gets a capability moved back in its reply, into `init`'s own window; through one without grant-reply, the reply arrives with none.
 
 > [!todo] Not built
-> The two-process ring demo, the IPC fast path, scheduling contexts donated on `CALL`, timeout faults, and handlers writing the faulting thread's registers in their reply.
+> The IPC fast path, scheduling contexts donated on `CALL`, timeout faults, and handlers writing the faulting thread's registers in their reply.
 
 `check_faults` checks that a thread reading unmapped memory reports a `VM` fault with the right address, pc and badge; that its handler (`init`) can map a page there, write a value and reply 0, after which the thread's read completes with that value; that an illegal instruction answered with a nonzero label leaves the thread stopped at the instruction; and that a thread without a handler is suspended inside the faulting function while `init` carries on.

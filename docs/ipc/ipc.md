@@ -12,6 +12,7 @@ sap's IPC is Cap'n Proto messages in shared-memory channels, with the kernel inv
 |---|---|---|
 | [[ipc-transports]] | decided | Direct call, shared-memory channel, network: chosen per connection by trust domain. |
 | [[ipc-channels]] | proposed | Ring layout, publishing, backpressure, message size, streaming, and copy versus page transfer. |
+| [[ipc-rings]] | implemented | The first channel as built: producer-owned data pages and consumer-owned control pages, release/acquire publication, wake-up flags with fences, notifications as doorbells, and a 10,000-message run. |
 | [[ipc-cap-transfer]] | proposed | Endpoints and notifications versus rings, and how capabilities travel with ring messages through a per-connection receive range. |
 | [[ipc-validation]] | proposed | What a receiver must still check, double fetch, Rust soundness, and keeping validation cheap. |
 | [[ipc-shared-buffers]] | proposed | Raw shared memory (graphics, audio, GPU) as capabilities with a declared layout and explicit sync. |

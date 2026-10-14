@@ -9,6 +9,10 @@ sources: ["[[2026-09-27-future-of-computing#m13|§m13]]", "[[2026-09-27-future-o
 
 A channel connects two trust domains on one machine. That shared-memory channels carry sap's messages is decided; the layout below is the chat's proposal. Notifications (doorbells) and frame mapping come from the kernel ([[kernel-objects-and-syscalls]]); everything else is a userspace convention.
 
+
+> [!note] Built
+> A first version exists: rings of up to seven-word messages between two processes, with the layout and waiting described here ([[ipc-rings]]).
+
 ## Layout
 
 Each direction is a separate **single-producer/single-consumer ring** ([[2026-09-27-future-of-computing#m25|§m25]]):
