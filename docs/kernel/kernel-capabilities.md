@@ -50,7 +50,12 @@ A capability address is resolved like a page-table walk (`resolve`, `kernel/cspa
 
 Deleting a frame capability that maps its frame unmaps it whether or not it was the last, since each frame capability is its own mapping (`kernel/arch/riscv/vspace.rs:167`). The object's memory isn't reclaimed by deletion; that happens when the untyped memory it came from is revoked.
 
-The slot is emptied *before* finalisation, so a CNode that contains the slot being deleted can't reach it again while its contents are deleted. seL4 instead turns the capability into a "zombie" so deletion can be preempted and doesn't recurse. sap recurses and refuses nesting deeper than 32 CNodes (`DeleteError::TooDeep`, line 54), marked `TODO`.
+**Nesting and cycles.** The CNode graph is built by userspace, and the kernel can't trust its shape. Anyone holding a CNode capability with the right to copy can put a capability to a CNode inside itself, directly or through others, so cycles and arbitrarily long chains are possible ([[2026-10-08-22c3947b#m30|§m30]]). They are harmless for lookups, which consume at least one address bit per level and so stop after at most 64. Deletion is where they matter, because deleting the last capability to a CNode deletes everything in it:
+- **Cycles.** The slot is emptied *before* the object is finalised, so a CNode that contains (directly or not) the slot being deleted can't reach it again: a cycle ends instead of looping.
+- **Depth.** A chain in which each CNode holds the only capability to the next makes deletion recurse once per link, on a fixed-size kernel stack. sap refuses to go deeper than 32 (`DeleteError::TooDeep`, `kernel/cspace.rs:54`, marked `TODO`). The capabilities below that depth stay in place and on the derivation tree, so repeating the revoke continues where it stopped; nothing is lost, but one call may not finish.
+- **Time.** One CNode can have 2^26 slots, and deleting it visits each slot in a single system call, with interrupts off. A process can make the kernel unresponsive for a long time this way.
+
+seL4 solves all three with "zombie" capabilities: a capability being finalised becomes a zombie in its slot, deletion proceeds iteratively rather than recursively, and long deletions stop at preemption points and resume on the next call. sap should adopt that before untrusted programs run (`TODO` in `cspace.rs`).
 
 `revoke` (line 310) deletes the children that follow a capability until the next capability isn't one.
 
@@ -85,6 +90,13 @@ Retyping is the only way kernel objects come into existence after boot, so every
 | Frame | 4 KiB, 2 MiB or 1 GiB |
 
 Endpoints and notifications are accepted as types but refused until IPC exists (M4). Device untyped memory can only become frames or smaller untyped regions.
+
+**How the kernel takes memory, and why reuse is safe.** The kernel never takes memory from a process. A process retypes untyped memory it holds into, say, a TCB; the TCB then lives in that memory, and the process can no longer touch those bytes as memory, because the only capability it has to them is the TCB capability ([[2026-10-08-22c3947b#m30|§m30]]). Policy (who gets which memory, when to take it back) is entirely userspace's: the root task holds all memory as untyped at boot, hands regions to the processes it starts, and takes them back by revoking. The kernel only enforces that memory is never in two uses at once:
+- an object is placed only above its region's watermark, in memory nothing else uses;
+- every capability to an object made from a region is in the region's derivation subtree, including copies, copies in threads' own slots, and mappings recorded in frame capabilities;
+- so revoking the region finds and deletes all of them (stopping threads, unmapping frames, freeing ASIDs) before the region can be reused, and reuse is only allowed once it has no children at all.
+
+A thread of another process using an object that is revoked simply sees a broken capability or is stopped; it can't observe the memory being reused. Concurrency inside the kernel isn't an issue, because system calls run to completion with interrupts off (and, with more harts, will run under a big lock, as in seL4). seL4 additionally lets long revocations stop at preemption points and resume, which sap doesn't yet ([[#Delete, finalise, revoke]]).
 
 Untyped memory is handed out with a **watermark**: each object goes at the next address aligned to its size, and the capability's `free_index` advances past it. Memory below the watermark is never handed out again while anything retyped from the region still exists. Once everything has been revoked, so the capability has no children (line 92), the next retype starts from zero. That is the only way memory is reclaimed, and why revoking untyped memory is how a parent takes back everything a child built from it. New objects are zeroed (except in device memory), and their capabilities are inserted as originals right after the untyped capability, so they are its children (`create`, line 121). Every check happens before anything changes, so a failed retype leaves no partial result: `NOT_ENOUGH_MEMORY` past the end of the region, `DELETE_FIRST` for an occupied slot, `RANGE_ERROR` for bad sizes or counts, `INVALID_ARGUMENT` for an unknown type.
 

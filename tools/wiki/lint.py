@@ -90,7 +90,25 @@ def show_citations():
             print(f"{page.stem}: {m.group(1)}:{n}: {line[:80]}")
 
 
+COMMIT = re.compile(r"`([0-9a-f]{7,40})`|^verified:\s*([0-9a-f]{7,40})", re.M)
+
+
+def show_unknown_commits():
+    """List commit hashes the wiki mentions that this repository doesn't
+    have. After a rebase or other history rewrite, these are the references
+    to fix. Hashes of other repositories (seL4's, say) are listed too, so
+    read the output rather than treating it as errors."""
+    for page in sorted(p for p in DOCS.rglob("*.md") if ".obsidian" not in p.parts and "raw" not in p.parts):
+        for m in COMMIT.finditer(page.read_text()):
+            h = m.group(1) or m.group(2)
+            if git("cat-file", "-e", f"{h}^{{commit}}") is None:
+                print(f"{page.relative_to(DOCS)}: {h} is not a commit in this repository")
+
+
 def main():
+    if "--commits" in sys.argv:
+        show_unknown_commits()
+        return
     if "--citations" in sys.argv:
         show_citations()
         return

@@ -35,3 +35,7 @@ New [[prog-composition]] from [[2026-10-08-22c3947b#m24|§m24]]. Renamed "persis
 ## [2026-10-11] session | M2 complete: paging and user mode
 
 New [[kernel-memory-riscv]] and [[kernel-root-task]]; rewrote [[kernel-boot-riscv]] and [[kernel-traps-riscv]] (verified `1be5924`); roadmap M2 done; user-interface stack added to [[open-questions]].
+
+## [2026-10-13] session | M3 complete; toolchain, deletion depth, memory reuse, ASIDs
+
+M3 pages: [[kernel-threads]], [[kernel-capabilities]]. Answers to §m30 filed: new [[prog-rust-toolchain]]; sections in [[kernel-capabilities]], [[kernel-memory-riscv]], [[hw-cheri]], [[workflows]]; roadmap infrastructure items I1–I3. Lint gained `--citations` and `--commits`.

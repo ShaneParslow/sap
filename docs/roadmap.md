@@ -50,6 +50,12 @@ These can happen at any time and feed the milestones above.
 - **D5. Write the kernel interface as a schema:** object types and their methods in Cap'n Proto, the syscall ABI, and the process ABI, with each deliberate difference from seL4 noted. Feeds M2–M7 ([[kernel-sel4-differences]], [[cap-process-authority]], [[prog-loading]]).
 - **D6. Read the OCapN specifications** (CapTP, netlayers, sturdy refs, three-party handoff) before designing the network bridge ([[ipc-network-rpc]]).
 
+## Infrastructure
+
+- **I1. A sap Rust target:** a target specification with position-independent code, a pinned nightly, and `core`/`alloc` built from source, removing the `-z notext` workaround. Before M7 ([[prog-rust-toolchain]]).
+- **I2. A `std` platform layer** for sap, once notifications (M4) and a log service exist ([[prog-rust-toolchain#The standard library]]).
+- **I3. seL4-style zombie capabilities:** iterative, preemptible deletion, before untrusted programs run ([[kernel-capabilities#Delete, finalise, revoke]]).
+
 ## Done
 
 - M0: own kernel (no commit; design decision).
