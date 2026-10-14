@@ -3,7 +3,7 @@ status: implemented
 summary: How the kernel takes traps on RISC-V today - one direct-mode vector that saves user registers straight into the current thread's TCB (found through sscratch) and kernel-mode traps on the stack, separate Rust handlers for each, a return path that resumes any thread, and periodic timer interrupts through the SBI TIME extension.
 updated: 2026-10-13
 code: [kernel/arch/riscv/trap.rs, kernel/arch/riscv/timer.rs, kernel/arch/riscv/sbi.rs, kernel/arch/riscv/mod.rs, kernel/main.rs, kernel/syscall.rs, kernel/sched.rs]
-verified: 0c39997
+verified: a7e19d3
 sources: ["[[2026-10-08-22c3947b-wiki-setup]]"]
 ---
 
