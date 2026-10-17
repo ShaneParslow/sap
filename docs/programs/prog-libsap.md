@@ -3,6 +3,7 @@ status: implemented
 summary: The user-side runtime every sap program links today - the thread start convention, the entry point, a debug console and panic handler, wrappers for system calls and kernel-object invocations, IPC with capability transfer, and the ELF loader the root task uses to start other programs in their own processes.
 updated: 2026-10-16
 code: [user/libsap/lib.rs, user/libsap/sys.rs, user/libsap/ipc.rs, user/libsap/process.rs, user/libsap/ring.rs, user/libsap/debug.rs, user/peer/main.rs, user/init/main.rs, user/init/build.rs, kernel/root_task.rs]
+verified: bed195a
 sources: ["[[2026-10-08-22c3947b-wiki-setup]]"]
 ---
 
