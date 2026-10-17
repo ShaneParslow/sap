@@ -1,7 +1,7 @@
 ---
 status: implemented
 summary: The first shared-memory channel as built - a pair of single-producer/single-consumer rings between two processes, each direction a producer-owned data page and a consumer-owned control page, publication by release store, wake-up flags with sequentially consistent fences, notifications as doorbells, and what 10,000 round trips on one CPU showed.
-updated: 2026-10-13
+updated: 2026-10-16
 code: [user/libsap/ring.rs, user/libsap/process.rs, user/peer/main.rs, user/init/main.rs]
 sources: ["[[2026-10-08-22c3947b#m33|§m33]]", "[[2026-10-08-22c3947b#m34|§m34]]"]
 ---
@@ -19,11 +19,11 @@ Each direction of a channel is two pages, so that each side writes only what it 
 | data | the producer's index, its "waiting for space" flag, and 63 slots of 64 bytes (`SLOTS`, `user/libsap/ring.rs:35`) | read-write | read-only |
 | control | the consumer's index and its "waiting for messages" flag | read-only | read-write |
 
-A slot is a length word and up to seven message words. Neither side can move the other's index, so a misbehaving peer can garble message contents but not the ring's bookkeeping on the other side. This follows the design's rule that the consumer index sits on a page the reader writes and the writer only reads ([[ipc-channels#Layout]]).
+A slot is a length word and up to seven message words. Neither side can move the other's index, so a misbehaving peer can garble message contents but not the ring's bookkeeping on the other side. Each side also treats the other's index as untrusted: the producer computes the ring's fill with wrapping arithmetic, so a consumer index pushed past the producer's reads as a full ring instead of overflowing (`user/libsap/ring.rs:102`), which is no worse than a consumer that stops reading. This follows the design's rule that the consumer index sits on a page the reader writes and the writer only reads ([[ipc-channels#Layout]]).
 
 ## Sending and receiving
 
-`Producer::send` (`user/libsap/ring.rs:90`) waits while the ring is full, writes the slot, and publishes it with a **release store** of its index. `Consumer::recv` (line 134) reads the producer's index with an **acquire load**, copies the slot out (reading the length word once and bounding it, so a producer rewriting the slot can't change what was checked; the single-fetch rule of [[ipc-validation]]), and releases the slot with a release store of its own index.
+`Producer::send` (`user/libsap/ring.rs:90`) waits while the ring is full, writes the slot, and publishes it with a **release store** of its index. `Consumer::recv` (line 138) reads the producer's index with an **acquire load**, copies the slot out (reading the length word once and bounding it, so a producer rewriting the slot can't change what was checked; the single-fetch rule of [[ipc-validation]]), and releases the slot with a release store of its own index.
 
 **Sleeping and waking without losing a signal.** A consumer that finds the ring empty polls briefly (`SPINS`, line 37), then sets its "waiting" flag, issues a sequentially consistent fence, and looks once more before sleeping on its notification. A producer, after publishing, fences and signals the consumer's notification only if that flag is set. The fences on both sides ensure that either the producer sees the flag or the consumer sees the new message, so a wake-up can't fall between the consumer's last check and its sleep. The producer waits for space the same way, with the roles swapped. A side signals only when the other has said it is waiting, so neither makes a system call while the other keeps up ([[ipc-channels#Waiting]], [[kernel-scheduling#Waiting]]). A notification's bits accumulate, so a stale signal only causes one extra check.
 

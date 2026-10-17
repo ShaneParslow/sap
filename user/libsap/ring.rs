@@ -95,11 +95,15 @@ impl Producer {
         loop {
             let produced = data.produced.load(Ordering::Relaxed);
             let consumed = control.consumed.load(Ordering::Acquire);
-            if produced - consumed < SLOTS {
+            // The consumer writes `consumed`, so it can't be trusted: one
+            // ahead of `produced` must not underflow (a panic in debug
+            // builds). It wraps to a huge count, which reads as full, the
+            // same as a consumer that stops reading.
+            if produced.wrapping_sub(consumed) < SLOTS {
                 let slot = &mut data.slots[produced % SLOTS];
                 slot[0] = words.len();
                 slot[1..=words.len()].copy_from_slice(words);
-                data.produced.store(produced + 1, Ordering::Release);
+                data.produced.store(produced.wrapping_add(1), Ordering::Release);
                 fence(Ordering::SeqCst);
                 if control.consumer_waiting.load(Ordering::Relaxed) != 0 {
                     let _ = notification::signal(self.doorbell);
@@ -146,7 +150,7 @@ impl Consumer {
                 // be writing; volatile so it is read exactly once.
                 let len = unsafe { core::ptr::read_volatile(&slot[0]) }.min(MAX_WORDS).min(out.len());
                 out[..len].copy_from_slice(&slot[1..=len]);
-                control.consumed.store(consumed + 1, Ordering::Release);
+                control.consumed.store(consumed.wrapping_add(1), Ordering::Release);
                 fence(Ordering::SeqCst);
                 if data.producer_waiting.load(Ordering::Relaxed) != 0 {
                     let _ = notification::signal(self.doorbell);
