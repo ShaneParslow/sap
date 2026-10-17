@@ -50,12 +50,15 @@ pub mod syscall {
 
     /// Notifications: `a0` = the notification capability's address.
     /// Results: `a0` = badge bits (WAIT, POLL), `a1` = an `error` code.
-    /// OR the capability's badge into the notification's word, waking a
-    /// waiter if there is one.
+    /// Hand the capability's badge to a waiter, or add it to the pending
+    /// bits. A signal through an unbadged capability (badge 0) still
+    /// counts.
     pub const SIGNAL: usize = 8;
-    /// Block until the word is nonzero, then return and clear it.
+    /// Block until a signal is pending, then take the pending bits.
     pub const WAIT: usize = 9;
-    /// Return and clear the word without blocking (0 if nothing pending).
+    /// Take the pending bits without blocking. `a2` = 1 if a signal was
+    /// pending, 0 if not: signals through unbadged capabilities leave no
+    /// bits, so `a0` alone can't tell.
     pub const POLL: usize = 10;
 
     /// TODO: debug-only calls, like seL4's; compile them out of release

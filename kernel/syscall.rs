@@ -43,7 +43,8 @@ pub fn handle(context: &mut UserContext) {
     }
 }
 
-/// SIGNAL, WAIT and POLL. Results: `a0` = badge bits, `a1` = error code.
+/// SIGNAL, WAIT and POLL. Results: `a0` = badge bits, `a1` = error code;
+/// for POLL, `a2` = whether a signal was pending.
 fn notification_call(number: usize, context: &mut UserContext) {
     let tcb = sched::current();
     // SAFETY: the current thread is live; one field.
@@ -59,21 +60,25 @@ fn notification_call(number: usize, context: &mut UserContext) {
     }
     // SAFETY: a notification capability names a live notification; the
     // current thread is live.
-    let bits = unsafe {
+    unsafe {
         match number {
             SIGNAL => {
                 notification::signal(ptr, badge);
-                Some(0)
+                context.set_result(0, 0);
             }
-            WAIT => notification::wait(ptr, tcb),
-            _ => Some(notification::poll(ptr)),
+            WAIT => match notification::wait(ptr, tcb) {
+                Some(bits) => context.set_result(0, bits),
+                // Blocked: the results arrive when a signal wakes it.
+                None => return,
+            },
+            _ => {
+                let pending = notification::poll(ptr);
+                context.set_result(0, pending.unwrap_or(0));
+                context.set_result(2, pending.is_some() as usize);
+            }
         }
-    };
-    // A blocked WAIT gets its results when it is woken.
-    if let Some(bits) = bits {
-        context.set_result(0, bits);
-        context.set_result(1, error::OK);
     }
+    context.set_result(1, error::OK);
 }
 
 fn fail(context: &mut UserContext, code: usize) {

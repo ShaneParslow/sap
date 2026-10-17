@@ -362,8 +362,15 @@ fn check_notifications(info: &BootInfo) {
     // With nobody waiting, signals accumulate and a poll takes them all.
     expect("signal 1", notification::signal(one), Ok(()));
     expect("signal 2", notification::signal(two), Ok(()));
-    assert_eq!(notification::poll(ntfn).map_err(|e| e.0), Ok(0b11), "poll should see both badges");
-    assert_eq!(notification::poll(ntfn).map_err(|e| e.0), Ok(0), "poll should have cleared the word");
+    assert_eq!(notification::poll(ntfn).map_err(|e| e.0), Ok(Some(0b11)), "poll should see both badges");
+    assert_eq!(notification::poll(ntfn).map_err(|e| e.0), Ok(None), "poll should have cleared the bits");
+    // A signal through the unbadged original carries no bits but still
+    // counts, and a badged one after it adds its bits.
+    expect("unbadged signal", notification::signal(ntfn), Ok(()));
+    assert_eq!(notification::poll(ntfn).map_err(|e| e.0), Ok(Some(0)), "an unbadged signal should be pending");
+    expect("unbadged signal again", notification::signal(ntfn), Ok(()));
+    expect("signal 2 after it", notification::signal(two), Ok(()));
+    assert_eq!(notification::wait(ntfn).map_err(|e| e.0), Ok(0b10), "wait should take both without blocking");
     let denied = notification::wait(one).map_err(|e| e.0);
     assert_eq!(denied, Err(error::INVALID_CAPABILITY), "a send-only capability can't wait");
 
@@ -683,7 +690,7 @@ fn check_cap_transfer(info: &BootInfo) {
     assert!(filled(window + 2).is_ok(), "the moved capability isn't in the window");
     assert!(filled(spare).is_err(), "a moved capability stayed with the sender");
     expect("use a received copy", notification::signal(window), Ok(()));
-    assert_eq!(notification::poll(ntfn).map_err(|e| e.0), Ok(0), "unbadged copy signals 0");
+    assert_eq!(notification::poll(ntfn).map_err(|e| e.0), Ok(Some(0)), "a received copy should signal");
     clear();
 
     // Without GRANT nothing travels; the message still does.

@@ -1,7 +1,11 @@
-//! Notifications: a word of pending signal bits and a queue of waiting
-//! threads, as in seL4. `Signal` ORs the signaller's badge into the word, or
-//! hands it straight to a waiter; `Wait` takes and clears the word, blocking
-//! while it is zero; `Poll` takes it without blocking.
+//! Notifications, as in seL4: a notification is idle, has threads waiting
+//! on it, or is active with signals nobody has taken yet. `Signal` hands the
+//! signaller's badge to the first waiter, or ORs it into the pending bits;
+//! `Wait` takes the pending bits, blocking while there are none; `Poll`
+//! takes them without blocking.
+//!
+//! "Active" is a state of its own rather than "the bits are nonzero", so a
+//! signal through an unbadged capability (badge 0) is still pending.
 //!
 //! The waiter queue is threaded through the waiting threads' TCBs, so a
 //! notification is a fixed 32 bytes however many threads wait on it.
@@ -16,76 +20,99 @@ pub const NOTIFICATION_BITS: usize = 5;
 
 #[repr(C)]
 pub struct Notification {
-    /// Pending badge bits, nonzero only while no thread waits.
-    word: usize,
-    head: *mut Tcb,
-    tail: *mut Tcb,
+    state: State,
     /// The thread bound to this notification: a signal wakes it from RECV
     /// on any endpoint.
     pub bound: *mut Tcb,
 }
 
+/// Waiters and pending signals never coexist: a signal that finds a thread
+/// waiting goes straight to it. `Idle` is zero, so a zeroed notification is
+/// idle.
+#[repr(usize)]
+#[derive(Clone, Copy)]
+enum State {
+    Idle = 0,
+    /// Threads blocked in `Wait`, first to last.
+    Waiting { head: *mut Tcb, tail: *mut Tcb },
+    /// Signals nobody has taken: the OR of their badges, possibly 0.
+    Active { bits: usize },
+}
+
 const _: () = assert!(core::mem::size_of::<Notification>() <= 1 << NOTIFICATION_BITS);
 
-/// Signal `ntfn` with `badge`: wake the first waiter with it, or OR it into
-/// the word.
+/// Signal `ntfn` with `badge`: wake the first waiter with it, or add it to
+/// the pending bits.
 ///
 /// # Safety
 /// `ntfn` must be a live notification.
 pub unsafe fn signal(ntfn: *mut Notification, badge: usize) {
-    // SAFETY: per the caller's guarantee; queued TCBs are live.
+    // SAFETY: per the caller's guarantee; queued and bound TCBs are live.
     unsafe {
         let n = &mut *ntfn;
+        let pending = match n.state {
+            State::Idle => badge,
+            State::Active { bits } => bits | badge,
+            State::Waiting { head, .. } => {
+                dequeue(n, head);
+                (*head).context.set_result(0, badge);
+                (*head).context.set_result(1, 0);
+                sched::make_runnable(head);
+                return;
+            }
+        };
         // A bound thread waiting in RECV on an endpoint takes the signal.
         if !n.bound.is_null() && (*n.bound).state == ThreadState::BlockedOnReceive {
-            crate::endpoint::wake_bound(n.bound, badge | core::mem::take(&mut n.word));
-            return;
+            n.state = State::Idle;
+            crate::endpoint::wake_bound(n.bound, pending);
+        } else {
+            n.state = State::Active { bits: pending };
         }
-        if n.head.is_null() {
-            n.word |= badge;
-            return;
-        }
-        let waiter = n.head;
-        dequeue(n, waiter);
-        (*waiter).context.set_result(0, badge);
-        (*waiter).context.set_result(1, 0);
-        sched::make_runnable(waiter);
     }
 }
 
-/// Take the pending bits for `tcb`'s `Wait`. Returns them if nonzero;
-/// otherwise blocks `tcb` on the notification and returns None, and the
-/// bits arrive in its registers when it is woken.
+/// Take the pending bits for `tcb`'s `Wait`. Returns them if a signal is
+/// pending; otherwise blocks `tcb` on the notification and returns None,
+/// and the bits arrive in its registers when it is woken.
 ///
 /// # Safety
 /// Both must be live.
 pub unsafe fn wait(ntfn: *mut Notification, tcb: *mut Tcb) -> Option<usize> {
-    // SAFETY: per the caller's guarantee.
+    // SAFETY: per the caller's guarantee; queued TCBs are live.
     unsafe {
         let n = &mut *ntfn;
-        if n.word != 0 {
-            return Some(core::mem::take(&mut n.word));
+        if let Some(bits) = poll(ntfn) {
+            return Some(bits);
         }
         sched::block(tcb, ThreadState::BlockedOnNotification, ntfn as usize);
-        (*tcb).ipc_prev = n.tail;
         (*tcb).ipc_next = ptr::null_mut();
-        if n.tail.is_null() {
-            n.head = tcb;
-        } else {
-            (*n.tail).ipc_next = tcb;
-        }
-        n.tail = tcb;
+        n.state = match n.state {
+            State::Waiting { head, tail } => {
+                (*tcb).ipc_prev = tail;
+                (*tail).ipc_next = tcb;
+                State::Waiting { head, tail: tcb }
+            }
+            _ => {
+                (*tcb).ipc_prev = ptr::null_mut();
+                State::Waiting { head: tcb, tail: tcb }
+            }
+        };
         None
     }
 }
 
-/// Take and clear the pending bits without blocking.
+/// Take the pending bits without blocking: None if no signal is pending.
 ///
 /// # Safety
 /// `ntfn` must be a live notification.
-pub unsafe fn poll(ntfn: *mut Notification) -> usize {
+pub unsafe fn poll(ntfn: *mut Notification) -> Option<usize> {
     // SAFETY: per the caller's guarantee.
-    unsafe { core::mem::take(&mut (*ntfn).word) }
+    unsafe {
+        let n = &mut *ntfn;
+        let State::Active { bits } = n.state else { return None };
+        n.state = State::Idle;
+        Some(bits)
+    }
 }
 
 /// Take `tcb` off the waiter queue of the notification it is blocked on.
@@ -110,12 +137,12 @@ pub unsafe fn finalise(ntfn: *mut Notification) {
     // SAFETY: per the caller's guarantee; queued and bound TCBs are live.
     unsafe {
         let n = &mut *ntfn;
-        while !n.head.is_null() {
-            let waiter = n.head;
-            dequeue(n, waiter);
-            (*waiter).context.restart_syscall();
-            sched::make_runnable(waiter);
+        while let State::Waiting { head, .. } = n.state {
+            dequeue(n, head);
+            (*head).context.restart_syscall();
+            sched::make_runnable(head);
         }
+        n.state = State::Idle;
         if !n.bound.is_null() {
             (*n.bound).bound_notification = ptr::null_mut();
             n.bound = ptr::null_mut();
@@ -124,19 +151,23 @@ pub unsafe fn finalise(ntfn: *mut Notification) {
 }
 
 unsafe fn dequeue(n: &mut Notification, tcb: *mut Tcb) {
+    let State::Waiting { mut head, mut tail } = n.state else {
+        unreachable!("dequeue from a notification nobody waits on");
+    };
     // SAFETY: tcb is in n's queue (caller's guarantee); neighbours are live.
     unsafe {
         let t = &mut *tcb;
         match t.ipc_prev.is_null() {
-            true => n.head = t.ipc_next,
+            true => head = t.ipc_next,
             false => (*t.ipc_prev).ipc_next = t.ipc_next,
         }
         match t.ipc_next.is_null() {
-            true => n.tail = t.ipc_prev,
+            true => tail = t.ipc_prev,
             false => (*t.ipc_next).ipc_prev = t.ipc_prev,
         }
         t.ipc_next = ptr::null_mut();
         t.ipc_prev = ptr::null_mut();
         t.blocked_on = 0;
     }
+    n.state = if head.is_null() { State::Idle } else { State::Waiting { head, tail } };
 }

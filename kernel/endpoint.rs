@@ -244,8 +244,7 @@ pub unsafe fn recv(ep: *mut Endpoint, receiver: *mut Tcb, reply: *mut Reply, blo
         // Pending signals on the bound notification come first.
         let bound = (*receiver).bound_notification;
         if !bound.is_null() {
-            let bits = crate::notification::poll(bound);
-            if bits != 0 {
+            if let Some(bits) = crate::notification::poll(bound) {
                 deliver_signal(receiver, bits);
                 return;
             }
