@@ -5,3 +5,6 @@ edition = "2024"
 
 [lib]
 path = "lib.rs"
+# No test harness on a bare-metal target.
+test = false
+bench = false

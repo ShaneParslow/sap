@@ -33,10 +33,32 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "784a4df722dc6267a04af36895398f59d21d07dce47232adf31ec0ff2fa45e67"
 
 [[package]]
+name = "init"
+version = "0.1.0"
+dependencies = [
+ "libsap",
+]
+
+[[package]]
+name = "libsap"
+version = "0.1.0"
+dependencies = [
+ "elf",
+ "sap-abi",
+]
+
+[[package]]
 name = "pastey"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2ee67f1008b1ba2321834326597b8e186293b049a023cdef258527550b9935b4"
+
+[[package]]
+name = "peer"
+version = "0.1.0"
+dependencies = [
+ "libsap",
+]
 
 [[package]]
 name = "riscv"

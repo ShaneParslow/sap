@@ -1,0 +1,16 @@
+# Every crate in one workspace: one lockfile, one set of profiles, and one
+# project for rust-analyzer. `cargo build` and `cargo run` here (or in
+# kernel/) build and boot the kernel, whose build script builds and embeds
+# the user programs. Building the user crates directly (`--workspace`) is
+# fine for checking, but their images only link correctly from user/, where
+# user/.cargo/config.toml makes them position-independent.
+[workspace]
+resolver = "3"
+members = ["abi", "kernel", "user/libsap", "user/init", "user/peer"]
+default-members = ["kernel"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"

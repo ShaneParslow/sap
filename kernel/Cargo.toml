@@ -17,9 +17,3 @@ fdt = "=0.1.5"
 riscv = { version = "0.16.1", default-features = false }
 sap-abi = { version = "0.1.0", path = "../abi" }
 sbi-rt = { version = "0.0.4", features = ["legacy"] }
-
-[profile.dev]
-panic = "abort"
-
-[profile.release]
-panic = "abort"

@@ -1,0 +1,6 @@
+# User programs are static position-independent executables; the linker
+# arguments are in each program's build.rs. Applies to builds run from
+# inside user/, which is how kernel/build.rs and user/init/build.rs build
+# them, not to the kernel.
+[build]
+rustflags = ["-C", "relocation-model=pie"]
