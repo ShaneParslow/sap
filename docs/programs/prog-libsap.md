@@ -1,7 +1,7 @@
 ---
 status: implemented
 summary: The user-side runtime every sap program links today - the thread start convention, the entry point, a debug console and panic handler, wrappers for system calls and kernel-object invocations, IPC with capability transfer, and the ELF loader the root task uses to start other programs in their own processes.
-updated: 2026-10-13
+updated: 2026-10-16
 code: [user/libsap/lib.rs, user/libsap/sys.rs, user/libsap/ipc.rs, user/libsap/process.rs, user/libsap/ring.rs, user/libsap/debug.rs, user/peer/main.rs, user/init/main.rs, user/init/build.rs, kernel/root_task.rs]
 sources: ["[[2026-10-08-22c3947b-wiki-setup]]"]
 ---
@@ -50,7 +50,7 @@ The loader handles exactly what sap programs are built as: static position-indep
 
 ## The second program
 
-`user/peer` is a small program the root task loads with `process::load` to check IPC between address spaces. `user/init/build.rs` builds it and embeds it, as the kernel embeds `init`. `check_process` in `init` (`user/init/main.rs:812`) gives the peer a badged endpoint capability and its own thread capability, sets `init` as its fault handler, and starts it. Then it checks:
+`user/peer` is a small program the root task loads with `process::load` to check IPC between address spaces. `user/init/build.rs` builds it and embeds it, as the kernel embeds `init`, and rebuilds it whenever the peer, `libsap` or the ABI crate changes. `check_process` in `init` (`user/init/main.rs:812`) gives the peer a badged endpoint capability and its own thread capability, sets `init` as its fault handler, and starts it. Then it checks:
 - the peer's six-word `CALL` arrives with the badge;
 - the reply's words reach the peer, which reports their sum back;
 - the peer's read of an address mapped only in `init`'s address space faults, and the fault comes back to `init` as a `VM` fault at that address.

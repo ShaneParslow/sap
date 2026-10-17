@@ -1,7 +1,7 @@
 ---
 status: implemented
 summary: The one program the kernel starts by itself, as in seL4 - user/init, built on the libsap runtime as a static position-independent ELF and embedded in the kernel; how the kernel loads it (contiguous frames, relative relocations, W^X segments, a stack, IPC buffer and boot-info page) and starts it as a thread; and the debug syscalls it still uses.
-updated: 2026-10-13
+updated: 2026-10-16
 code: [kernel/build.rs, kernel/root_task.rs, kernel/syscall.rs, abi/lib.rs, user/init/main.rs, user/init/build.rs, user/init/.cargo/config.toml, user/libsap/lib.rs, user/libsap/debug.rs]
 verified: 7123956
 sources: ["[[2026-10-08-22c3947b-wiki-setup]]"]
@@ -13,7 +13,7 @@ The kernel loads exactly one program, the **root task**, as seL4 does. Every oth
 
 ## Building it
 
-The root task is `user/init`, its own crate. The kernel's build script (`kernel/build.rs`) runs Cargo on it, always in release mode, with the build directory inside the kernel's build output, and passes the result's path to the kernel, which embeds it with `include_bytes!` (`kernel/root_task.rs:25`). The script runs Cargo from the init crate's directory so that crate's `.cargo/config.toml` applies, and clears the outer build's compiler flags, which would otherwise override it.
+The root task is `user/init`, its own crate. The kernel's build script (`kernel/build.rs`) runs Cargo on it, always in release mode, with the build directory inside the kernel's build output, and passes the result's path to the kernel, which embeds it with `include_bytes!` (`kernel/root_task.rs:25`). The script runs Cargo from the init crate's directory so that crate's `.cargo/config.toml` applies, and clears the outer build's compiler flags, which would otherwise override it. It reruns whenever anything under `user/` or `abi/` changes; `user/init/build.rs` builds the second program the same way ([[prog-libsap#The second program]]).
 
 `user/init` is linked as a **static position-independent executable** (`-C relocation-model=pie`, `--pie --no-dynamic-linker`), in line with the decision that all code is position-independent ([[prog-loading]]). Each segment starts on its own page (`-z separate-loadable-segments`), so segments can be mapped with different permissions. The precompiled `core` library for this target isn't position-independent, so its vtables need relocations in read-only segments; `-z notext` allows that, and the loader applies relocations before mapping anything (`user/init/build.rs`).
 

@@ -35,6 +35,9 @@ fn main() {
     assert!(status.success(), "building user/peer failed");
     let elf = target_dir.join("riscv64gc-unknown-none-elf/release/peer");
     println!("cargo:rustc-env=PEER_ELF={}", elf.display());
+    // The peer and everything it builds on: a change to any of them must
+    // rebuild the embedded image.
     println!("cargo:rerun-if-changed={}", peer_dir.display());
     println!("cargo:rerun-if-changed={here}/../libsap");
+    println!("cargo:rerun-if-changed={here}/../../abi");
 }
