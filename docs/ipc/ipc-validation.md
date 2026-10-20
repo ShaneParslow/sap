@@ -1,7 +1,7 @@
 ---
 status: proposed
 summary: The kernel guarantees a buffer exists, not that its contents match the spec, so receivers validate structure at trust boundaries. Covers what needs checking, double fetch and the single-fetch rule, Rust soundness, and making validation cheap with copy, page transfer and memfd-style sealing.
-updated: 2026-10-08
+updated: 2026-10-19
 sources: ["[[2026-09-27-future-of-computing#m13|§m13]]", "[[2026-09-27-future-of-computing#m14|§m14]]", "[[2026-09-27-future-of-computing#m15|§m15]]", "[[2026-09-27-future-of-computing#m19|§m19]]", "[[2026-09-27-future-of-computing#m25|§m25]]", "[[2026-09-27-future-of-computing#m29|§m29]]"]
 ---
 
@@ -34,7 +34,9 @@ With Cap'n Proto, each individual access reads a pointer word, checks it, and us
 
 Whether the C++ and Rust internals are robust to concurrent malicious mutation is to be verified in their code, not assumed ([[2026-09-27-future-of-computing#m25|§m25]]).
 
-**Rust makes this stricter.** Reading memory through `&[u8]` or `&str` while another process writes it is undefined behavior in Rust regardless of bounds checks, and capnproto-rust returns exactly such references (its text accessor validates UTF-8 and returns `&str`). So in Rust, immutable or transferred buffers are required for soundness, not just hygiene ([[2026-09-27-future-of-computing#m29|§m29]]).
+**Rust makes this stricter.** Reading memory through `&[u8]` or `&str` while another process writes it is undefined behavior in Rust regardless of bounds checks, and capnproto-rust returns exactly such references (its text accessor validates UTF-8 and returns `&str`). So in Rust, immutable or transferred buffers are required for soundness, not just hygiene ([[2026-09-27-future-of-computing#m29|§m29]]). The risk is concrete, not only formal: given a reference, the compiler may assume the memory can't change and load a checked length a second time instead of keeping it in a register, which is exactly the double fetch the rule forbids, introduced by the compiler. capnproto-rust reads segments with ordinary loads and returns ordinary references, so it is sound only on memory nobody else can write: a private copy, transferred pages, or a trusted peer that never writes what it has published.
+
+The single-fetch rule can still be kept in Rust without the copy, by a reader that loads every word with volatile or atomic accesses, keeps each structural field in a local, and copies out only the text and data a program asks for. That needs a Cap'n Proto reader or code generator of sap's own, so it is worth building only if measurement shows the copy matters ([[ipc-channels#Size and streaming]]).
 
 ## Making validation cheap
 
