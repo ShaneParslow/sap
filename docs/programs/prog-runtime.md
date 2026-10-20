@@ -2,7 +2,7 @@
 status: implemented
 summary: The user-side crates every sap program links today - sap-sys (stateless system-call and invocation wrappers), sap-rt (the thread start convention, entry point, debug console, panic handler, and a runtime with a slot allocator, notification-backed mutexes and an optional heap for alloc), sap-ring, and sap-loader, the ELF loader the root task uses to start other programs in their own processes.
 updated: 2026-10-19
-code: [user/sys/address.rs, clippy.toml, user/rt/lib.rs, user/rt/runtime.rs, user/rt/Cargo.toml, user/sys/lib.rs, user/rt/slots.rs, user/rt/sync.rs, user/rt/heap.rs, user/sys/vspace.rs, user/sys/sys.rs, user/sys/ipc.rs, user/loader/lib.rs, user/ring/lib.rs, user/rt/debug.rs, user/peer/main.rs, user/init/main.rs, user/init/build.rs, kernel/root_task.rs]
+code: [user/sys/arch/riscv.rs, user/rt/arch/riscv.rs, user/loader/arch/riscv.rs, user/sys/address.rs, clippy.toml, user/rt/lib.rs, user/rt/runtime.rs, user/rt/Cargo.toml, user/sys/lib.rs, user/rt/slots.rs, user/rt/sync.rs, user/rt/heap.rs, user/sys/vspace.rs, user/sys/sys.rs, user/sys/ipc.rs, user/loader/lib.rs, user/ring/lib.rs, user/rt/debug.rs, user/peer/main.rs, user/init/main.rs, user/init/build.rs, kernel/root_task.rs]
 sources: ["[[2026-10-08-22c3947b-wiki-setup]]"]
 ---
 
@@ -17,7 +17,7 @@ Every thread starts with:
 - `tp` pointing at its IPC buffer;
 - up to three arguments in `a0`–`a2`.
 
-The kernel follows it for the root task, whose `a0` is the address of the boot-info page (`kernel/root_task.rs:222`), and every thread `sap-rt` starts follows it too. `tp` is free because there is no thread-local storage yet, so it serves as the per-thread pointer to the IPC buffer (`ipc_buffer`, `user/sys/sys.rs:15`); a `TODO` moves it to a real thread-local once the Rust target has TLS.
+The kernel follows it for the root task, whose `a0` is the address of the boot-info page (`kernel/root_task.rs:222`), and every thread `sap-rt` starts follows it too. `tp` is free because there is no thread-local storage yet, so it serves as the per-thread pointer to the IPC buffer (`ipc_buffer`, `user/sys/sys.rs:13`); a `TODO` moves it to a real thread-local once the Rust target has TLS.
 
 `_start` calls the program's `sap_main(a0, a1, a2)` (`user/rt/lib.rs`). There is no bootstrap message yet: a program started by another gets three words and capabilities in agreed slots, a stand-in for the typed bootstrap of [[kernel-process-model]] (M7).
 
@@ -29,6 +29,8 @@ The kernel follows it for the root task, whose `a0` is the address of the boot-i
 | `sap-rt` (`user/rt/`) | the entry point, the panic handler (prints and halts with failure), the `debug` console (`print!`, `println!`), and the runtime: `runtime`, `slots`, `sync` and, behind the `heap` feature (on by default), `heap`; it re-exports `sap-sys`'s modules | resources given to `runtime::start` |
 | `sap-ring` (`user/ring/`) | shared-memory rings between processes ([[ipc-rings]]) | `sap-sys` |
 | `sap-loader` (`user/loader/`) | the ELF loader, below | `sap-sys`, the `elf` crate |
+
+Each crate keeps its architecture-specific code in `arch/riscv.rs`, as the kernel does ([[system-portability]]): in `sap-sys` the system-call instruction, with arguments and results in `a0`–`a7`, and the thread pointer (`user/sys/arch/riscv.rs`), so every wrapper above it is architecture-neutral; in `sap-rt` the `_start` entry; in `sap-loader` the ELF machine and relocation type. Porting the user side means adding those three files and a target specification.
 
 A program that doesn't allocate turns the `heap` feature off, as `user/peer` does, and then carries no allocator; using `alloc` without it fails to link. The split (roadmap I4) keeps state, allocation and policy out of the system-call layer, so anything can build on `sap-sys` alone.
 
@@ -49,10 +51,10 @@ A program hands the runtime what it may use on the program's behalf, once, befor
 
 ## The loader
 
-`sap_loader::load` (`user/loader/lib.rs:134`) starts a program in a new process, given an ELF image, untyped memory to build it from, free slots in the caller's CNode, and an unused 1 GiB region of the caller's address space for scratch mappings (`Parent`, line 40). It is the first piece of the process manager (M7, [[prog-loading]]), doing in userspace what the kernel does once for the root task ([[kernel-root-task]]):
+`sap_loader::load` (`user/loader/lib.rs:136`) starts a program in a new process, given an ELF image, untyped memory to build it from, free slots in the caller's CNode, and an unused 1 GiB region of the caller's address space for scratch mappings (`Parent`, line 42). It is the first piece of the process manager (M7, [[prog-loading]]), doing in userspace what the kernel does once for the root task ([[kernel-root-task]]):
 
 1. Retypes a page table and makes it the root of a new address space with an ASID; retypes a CNode (64 slots, `CNODE_RADIX`, line 37) and a TCB.
-2. For each page of each loadable segment, retypes a frame, maps it at the scratch address in the caller's space, fills it with the file bytes that fall in that page plus the relative relocations whose targets do, unmaps it, and maps it into the new address space with the segment's permissions (writable and executable together is refused). Page tables are added as needed (`ensure_tables`, line 105), installing whatever levels are missing.
+2. For each page of each loadable segment, retypes a frame, maps it at the scratch address in the caller's space, fills it with the file bytes that fall in that page plus the relative relocations whose targets do, unmaps it, and maps it into the new address space with the segment's permissions (writable and executable together is refused). Page tables are added as needed (`ensure_tables`, line 107), installing whatever levels are missing.
 3. Maps a 16 KiB stack and an IPC buffer at the same addresses the root task uses.
 4. Configures the thread with a guarded copy of the new CNode (so full-width addresses name its slots directly), the new address space and the IPC buffer; sets its priority and start registers per the convention; leaves it stopped.
 

@@ -1,7 +1,5 @@
 //! Endpoint IPC: send, receive, call and reply.
 
-use core::arch::asm;
-
 use sap_abi::{syscall, MessageInfo, MAX_EXTRA_CAPS, MESSAGE_REGISTERS};
 
 use crate::sys::{ipc_buffer, Error};
@@ -20,28 +18,19 @@ pub struct Received {
 /// One IPC system call: `a0` = endpoint, `a1` = info, `a2`..`a5` = the first
 /// words (the rest are already in the IPC buffer), `a6` = reply object.
 fn raw(number: usize, ep: usize, info: MessageInfo, reply: usize, out: &mut [usize]) -> Result<Received, Error> {
-    let mut mr = [0usize; MESSAGE_REGISTERS];
     let buffer = ipc_buffer();
-    for (r, w) in mr.iter_mut().zip(buffer.msg.iter()) {
-        *r = *w;
-    }
-    let (badge, info_out, source, code): (usize, usize, usize, usize);
-    // SAFETY: the kernel reads and writes a0..a7 and preserves the rest.
-    unsafe {
-        asm!("ecall",
-             inlateout("a0") ep => badge, inlateout("a1") info.0 => info_out,
-             inlateout("a2") mr[0] => mr[0], inlateout("a3") mr[1] => mr[1],
-             inlateout("a4") mr[2] => mr[2], inlateout("a5") mr[3] => mr[3],
-             inlateout("a6") reply => source, inlateout("a7") number => code,
-             options(nostack));
-    }
+    let mut regs = [ep, info.0, 0, 0, 0, 0, reply];
+    regs[2..2 + MESSAGE_REGISTERS].copy_from_slice(&buffer.msg[..MESSAGE_REGISTERS]);
+    // SAFETY: IPC writes only result registers, the IPC buffer (read
+    // below) and, for received capabilities, slots, not memory.
+    let code = unsafe { crate::arch::syscall(number, &mut regs) };
     if code != 0 {
         return Err(Error(code));
     }
-    let info = MessageInfo(info_out);
+    let (badge, info, source) = (regs[0], MessageInfo(regs[1]), regs[6]);
     let n = info.length().min(out.len());
     for (i, w) in out.iter_mut().enumerate().take(n) {
-        *w = if i < MESSAGE_REGISTERS { mr[i] } else { buffer.msg[i] };
+        *w = if i < MESSAGE_REGISTERS { regs[2 + i] } else { buffer.msg[i] };
     }
     Ok(Received { badge, info, source })
 }

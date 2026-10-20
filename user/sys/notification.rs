@@ -1,7 +1,5 @@
 //! Notifications: signal, wait, poll.
 
-use core::arch::asm;
-
 use sap_abi::syscall;
 
 use crate::sys::Error;
@@ -9,13 +7,10 @@ use crate::sys::Error;
 /// A notification syscall: `a0` = capability; returns (a0, a2) or the
 /// error code in a1.
 fn call(number: usize, cptr: usize) -> Result<(usize, usize), Error> {
-    let (bits, code, pending): (usize, usize, usize);
-    // SAFETY: the kernel preserves every register except a0..a5.
-    unsafe {
-        asm!("ecall", inlateout("a0") cptr => bits, lateout("a1") code, lateout("a2") pending,
-             in("a7") number, lateout("a3") _, lateout("a4") _, lateout("a5") _,
-             options(nostack));
-    }
+    let mut regs = [cptr, 0, 0, 0, 0, 0, 0];
+    // SAFETY: notification calls touch no memory of this program.
+    unsafe { crate::arch::syscall(number, &mut regs) };
+    let (bits, code, pending) = (regs[0], regs[1], regs[2]);
     if code == 0 { Ok((bits, pending)) } else { Err(Error(code)) }
 }
 

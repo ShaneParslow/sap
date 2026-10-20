@@ -1,7 +1,7 @@
 ---
 status: exploring
 summary: What it would take to run sap on Arm and x86 - which parts are architecture-specific, why a microkernel quarantines most of x86's mess, where the real cost is (drivers and laptop power management), and a proposed order for ports.
-updated: 2026-10-08
+updated: 2026-10-19
 sources: ["[[2026-10-08-22c3947b-wiki-setup]]"]
 ---
 
@@ -15,6 +15,7 @@ The human wants x86 eventually for real use, since Arm adoption on the desktop i
 |---|---|---|
 | Components, interfaces, IPC conventions, object store | Yes | Rust and Cap'n Proto; a port only changes the target triple. |
 | Device discovery | Mostly | The kernel reads a few facts; full discovery lives in a userspace device manager ([[hw-device-discovery]]). |
+| User runtime architecture layer | No, but small | The system-call instruction and thread pointer (`sap-sys`), the entry point (`sap-rt`), the ELF machine and relocation type (`sap-loader`), each in an `arch/riscv.rs`, plus the Rust target specification ([[prog-runtime#Crates]]). |
 | Kernel architecture layer | No | Boot entry, trap entry/exit, context switch, page tables, timer, interrupt controller, inter-processor interrupts, TLB and cache maintenance, syscall entry. |
 | Isolation accelerators | No | CHERI exists only on RISC-V and Arm Morello. Already optional by design ([[ipc-paging-vs-cheri]]). |
 | Drivers | Per device | The dominant cost on any platform. |

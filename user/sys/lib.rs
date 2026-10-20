@@ -12,6 +12,7 @@
 #![deny(implicit_provenance_casts, integer_to_ptr_transmutes)]
 
 pub mod address;
+mod arch;
 pub mod cnode;
 pub mod ipc;
 pub mod notification;

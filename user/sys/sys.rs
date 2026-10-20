@@ -1,7 +1,5 @@
 //! System calls and the IPC buffer.
 
-use core::arch::asm;
-
 use sap_abi::{syscall, IpcBuffer, MessageInfo, MAX_EXTRA_CAPS, MESSAGE_REGISTERS};
 
 /// This thread's IPC buffer.
@@ -13,9 +11,7 @@ use sap_abi::{syscall, IpcBuffer, MessageInfo, MAX_EXTRA_CAPS, MESSAGE_REGISTERS
 ///
 /// TODO: move to a real thread-local once the sap Rust target has TLS.
 pub fn ipc_buffer() -> &'static mut IpcBuffer {
-    let address: usize;
-    // SAFETY: reading a register.
-    unsafe { asm!("mv {}, tp", out(reg) address, options(nomem, nostack)) };
+    let address = crate::arch::thread_pointer();
     assert!(address != 0, "no IPC buffer");
     // SAFETY: the kernel mapped an IPC buffer here for this thread, and only
     // this thread uses it.
@@ -24,14 +20,11 @@ pub fn ipc_buffer() -> &'static mut IpcBuffer {
 
 /// A syscall with one argument, returning one word.
 pub fn syscall1(number: usize, arg: usize) -> usize {
-    let result;
-    // SAFETY: the kernel preserves every register except a0..a5.
-    unsafe {
-        asm!("ecall", inlateout("a0") arg => result, in("a7") number,
-             lateout("a1") _, lateout("a2") _, lateout("a3") _, lateout("a4") _, lateout("a5") _,
-             options(nostack));
-    }
-    result
+    let mut regs = [arg, 0, 0, 0, 0, 0, 0];
+    // SAFETY: the calls made this way (YIELD, the debug calls) touch no
+    // memory of this program.
+    unsafe { crate::arch::syscall(number, &mut regs) };
+    regs[0]
 }
 
 pub fn yield_now() {
@@ -52,22 +45,17 @@ pub fn call(cptr: usize, label: usize, words: &[usize], caps: &[usize]) -> (Mess
         }
         buffer.caps[..caps.len()].copy_from_slice(caps);
     }
-    let mut mr = [0; MESSAGE_REGISTERS];
-    for (r, &w) in mr.iter_mut().zip(words) {
+    // The capability, the info, then the first message words.
+    let mut regs = [cptr, MessageInfo::new(label, caps.len(), words.len()).0, 0, 0, 0, 0, 0];
+    for (r, &w) in regs[2..2 + MESSAGE_REGISTERS].iter_mut().zip(words) {
         *r = w;
     }
-    let info = MessageInfo::new(label, caps.len(), words.len());
-    let reply: usize;
-    // SAFETY: CALL takes the capability in a0, the info in a1 and message
-    // registers in a2..a5, and returns in the same registers.
-    unsafe {
-        asm!("ecall",
-             inlateout("a0") cptr => _, inlateout("a1") info.0 => reply,
-             inlateout("a2") mr[0] => mr[0], inlateout("a3") mr[1] => mr[1],
-             inlateout("a4") mr[2] => mr[2], inlateout("a5") mr[3] => mr[3],
-             in("a7") syscall::CALL, options(nostack));
-    }
-    (MessageInfo(reply), mr)
+    // SAFETY: an invocation writes only result registers and the IPC
+    // buffer, which the caller reads after this returns.
+    unsafe { crate::arch::syscall(syscall::CALL, &mut regs) };
+    let mut results = [0; MESSAGE_REGISTERS];
+    results.copy_from_slice(&regs[2..2 + MESSAGE_REGISTERS]);
+    (MessageInfo(regs[1]), results)
 }
 
 /// An invocation's error code (`sap_abi::error`).

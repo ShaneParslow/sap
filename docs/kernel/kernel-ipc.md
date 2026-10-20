@@ -98,7 +98,7 @@ A thread's faults go to the endpoint in its fault slot (`FAULT_SLOT`, `kernel/th
 
 ## Per-thread IPC buffers in userspace
 
-Several threads of one program each need their own IPC buffer. Every thread starts with the thread-pointer register `tp` pointing at its IPC buffer, which nothing else uses yet since there is no thread-local storage; the kernel sets it for the root task, and whoever starts any other thread sets it with its other registers. `sap-sys` reads it (`ipc_buffer`, `user/sys/sys.rs:15`). A `TODO` there says to move to a real thread-local once the sap Rust target has TLS ([[prog-runtime]], [[prog-rust-toolchain]]).
+Several threads of one program each need their own IPC buffer. Every thread starts with the thread-pointer register `tp` pointing at its IPC buffer, which nothing else uses yet since there is no thread-local storage; the kernel sets it for the root task, and whoever starts any other thread sets it with its other registers. `sap-sys` reads it (`ipc_buffer`, `user/sys/sys.rs:13`). A `TODO` there says to move to a real thread-local once the sap Rust target has TLS ([[prog-runtime]], [[prog-rust-toolchain]]).
 
 ## Tests
 

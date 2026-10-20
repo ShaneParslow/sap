@@ -18,7 +18,9 @@
 // Pointers come from `sap_sys::address::mapped`, never from integer casts.
 #![deny(implicit_provenance_casts, integer_to_ptr_transmutes)]
 
-use elf::abi::{EM_RISCV, ET_DYN, PF_W, PF_X, PT_LOAD, R_RISCV_RELATIVE};
+mod arch;
+
+use elf::abi::{ET_DYN, PF_W, PF_X, PT_LOAD};
 use elf::endian::LittleEndian;
 use elf::ElfBytes;
 use sap_abi::{attr, error, object, reg, rights};
@@ -134,8 +136,8 @@ fn filled_frame(parent: &Parent, slots: &mut Slots, fill: impl FnOnce(&mut [u8; 
 pub fn load(image: &[u8], parent: &Parent, slots: &mut Slots, priority: usize, args: [usize; 3]) -> Process {
     let elf = ElfBytes::<LittleEndian>::minimal_parse(image).expect("loader: not an ELF file");
     assert!(
-        elf.ehdr.e_machine == EM_RISCV && elf.ehdr.e_type == ET_DYN,
-        "loader: not a position-independent RISC-V executable"
+        elf.ehdr.e_machine == arch::MACHINE && elf.ehdr.e_type == ET_DYN,
+        "loader: not a position-independent executable for this machine"
     );
     let segments = elf.segments().expect("loader: no program headers");
     let (sections, strings) = elf.section_headers_with_strtab().expect("loader: bad section headers");
@@ -175,7 +177,7 @@ pub fn load(image: &[u8], parent: &Parent, slots: &mut Slots, priority: usize, a
                 }
                 // Relative relocations in this page: load base + addend.
                 for rela in relocations() {
-                    assert!(rela.r_type == R_RISCV_RELATIVE, "loader: unsupported relocation {}", rela.r_type);
+                    assert!(rela.r_type == arch::RELATIVE, "loader: unsupported relocation {}", rela.r_type);
                     let at = rela.r_offset as usize;
                     if (page..page + PAGE).contains(&at) {
                         let value = (LOAD_BASE as i64 + rela.r_addend) as u64;

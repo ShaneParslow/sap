@@ -15,6 +15,7 @@
 // Pointers come from `sap_sys::address::mapped`, never from integer casts.
 #![deny(implicit_provenance_casts, integer_to_ptr_transmutes)]
 
+mod arch;
 pub mod debug;
 #[cfg(feature = "heap")]
 pub mod heap;
@@ -25,16 +26,6 @@ pub mod sync;
 pub use sap_sys::{abi, address, cnode, ipc, notification, sys, tcb, untyped, vspace};
 
 use core::panic::PanicInfo;
-
-core::arch::global_asm!(
-    r#"
-    .section .text.entry
-    .globl _start
-_start:
-    call    sap_start
-1:  j       1b
-"#
-);
 
 unsafe extern "Rust" {
     /// The program's entry point, with the thread's three start arguments.
