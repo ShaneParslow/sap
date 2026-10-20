@@ -4,6 +4,7 @@ summary: How sap's Rust code is built - one pinned nightly for everything, the k
 updated: 2026-10-19
 sources: ["[[2026-10-08-22c3947b#m30|§m30]]", "[[2026-10-16-2c1ac53c#m4|§m4]]"]
 code: [rust-toolchain.toml, Cargo.toml, .cargo/config.toml, user/.cargo/config.toml, user/riscv64gc-unknown-sap.json, user/build_program.rs, kernel/build.rs, user/init/build.rs]
+verified: e668fd5
 ---
 
 # Rust toolchain
