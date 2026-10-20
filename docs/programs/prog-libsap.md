@@ -2,7 +2,7 @@
 status: implemented
 summary: The user-side crates every sap program links today - sap-sys (stateless system-call and invocation wrappers), libsap (the thread start convention, entry point, debug console, panic handler, and a runtime with a slot allocator, notification-backed mutexes and an optional heap for alloc), sap-ring, and sap-loader, the ELF loader the root task uses to start other programs in their own processes.
 updated: 2026-10-19
-code: [user/libsap/lib.rs, user/libsap/runtime.rs, user/libsap/Cargo.toml, user/sys/lib.rs, user/libsap/slots.rs, user/libsap/sync.rs, user/libsap/heap.rs, user/sys/vspace.rs, user/sys/sys.rs, user/sys/ipc.rs, user/loader/lib.rs, user/ring/lib.rs, user/libsap/debug.rs, user/peer/main.rs, user/init/main.rs, user/init/build.rs, kernel/root_task.rs]
+code: [user/sys/address.rs, clippy.toml, user/libsap/lib.rs, user/libsap/runtime.rs, user/libsap/Cargo.toml, user/sys/lib.rs, user/libsap/slots.rs, user/libsap/sync.rs, user/libsap/heap.rs, user/sys/vspace.rs, user/sys/sys.rs, user/sys/ipc.rs, user/loader/lib.rs, user/ring/lib.rs, user/libsap/debug.rs, user/peer/main.rs, user/init/main.rs, user/init/build.rs, kernel/root_task.rs]
 sources: ["[[2026-10-08-22c3947b-wiki-setup]]"]
 ---
 
@@ -25,7 +25,7 @@ The kernel follows it for the root task, whose `a0` is the address of the boot-i
 
 | Crate | Holds | Relies on |
 |---|---|---|
-| `sap-sys` (`user/sys/`) | stateless wrappers over the kernel interface, as libsel4 is to seL4: `sys` (the raw `CALL` for kernel invocations, `YIELD`, the IPC buffer), `cnode`, `untyped`, `vspace` and `tcb` invocations ([[kernel-capabilities]], [[kernel-threads]]), `notification` (`SIGNAL`, `WAIT`, `POLL`) and `ipc` (`SEND`, `NB_SEND`, `CALL`, `RECV`, `NB_RECV`, `REPLY`, `REPLY_RECV`, with capabilities to give, moved or copied, and the receive window, [[kernel-ipc]]) | nothing but `tp` pointing at the IPC buffer |
+| `sap-sys` (`user/sys/`) | stateless wrappers over the kernel interface, as libsel4 is to seL4: `address` (`mapped`, `user/sys/address.rs:18`, the only way user code turns an address into a pointer; the user crates deny integer-to-pointer casts and `clippy.toml` disallows the exposed-provenance functions elsewhere, [[hw-cheri#Keeping the door open]]), `sys` (the raw `CALL` for kernel invocations, `YIELD`, the IPC buffer), `cnode`, `untyped`, `vspace` and `tcb` invocations ([[kernel-capabilities]], [[kernel-threads]]), `notification` (`SIGNAL`, `WAIT`, `POLL`) and `ipc` (`SEND`, `NB_SEND`, `CALL`, `RECV`, `NB_RECV`, `REPLY`, `REPLY_RECV`, with capabilities to give, moved or copied, and the receive window, [[kernel-ipc]]) | nothing but `tp` pointing at the IPC buffer |
 | `libsap` (`user/libsap/`) | the entry point, the panic handler (prints and halts with failure), the `debug` console (`print!`, `println!`), and the runtime: `runtime`, `slots`, `sync` and, behind the `heap` feature (on by default), `heap`; it re-exports `sap-sys`'s modules | resources given to `runtime::start` |
 | `sap-ring` (`user/ring/`) | shared-memory rings between processes ([[ipc-rings]]) | `sap-sys` |
 | `sap-loader` (`user/loader/`) | the ELF loader, below | `sap-sys`, the `elf` crate |

@@ -19,7 +19,7 @@ pub fn ipc_buffer() -> &'static mut IpcBuffer {
     assert!(address != 0, "no IPC buffer");
     // SAFETY: the kernel mapped an IPC buffer here for this thread, and only
     // this thread uses it.
-    unsafe { &mut *(address as *mut IpcBuffer) }
+    unsafe { &mut *crate::address::mapped::<IpcBuffer>(address) }
 }
 
 /// A syscall with one argument, returning one word.

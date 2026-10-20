@@ -121,7 +121,7 @@ impl Grower {
         // above what the list already has (or start it).
         unsafe {
             if self.heap.size() == 0 {
-                self.heap.init(self.top as *mut u8, bytes);
+                self.heap.init(sap_sys::address::mapped(self.top), bytes);
             } else {
                 self.heap.extend(bytes);
             }

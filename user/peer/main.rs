@@ -5,8 +5,12 @@
 
 #![no_std]
 #![no_main]
+#![feature(strict_provenance_lints)]
+// Pointers come from `sap_sys::address::mapped`, never from integer casts.
+#![deny(implicit_provenance_casts, integer_to_ptr_transmutes)]
 
 use sap_ring::{Consumer, Producer, MAX_WORDS};
+use libsap::address::mapped;
 use libsap::{ipc, println, tcb};
 
 /// An address mapped only in the root task's address space.
@@ -32,7 +36,7 @@ fn sap_main(ep: usize, me: usize, mode: usize) -> ! {
     // The parent's memory isn't mapped here: this read faults, and the
     // fault goes to the parent, which leaves this thread suspended.
     // SAFETY: deliberately touches an address this process can't reach.
-    let _ = unsafe { core::ptr::read_volatile(PARENT_ONLY as *const usize) };
+    let _ = unsafe { core::ptr::read_volatile(mapped::<usize>(PARENT_ONLY)) };
     println!("peer: read the parent's memory (isolation broken)");
     loop {
         let _ = tcb::suspend(me);

@@ -3,6 +3,9 @@
 
 #![no_std]
 #![no_main]
+#![feature(strict_provenance_lints)]
+// Pointers come from `sap_sys::address::mapped`, never from integer casts.
+#![deny(implicit_provenance_casts, integer_to_ptr_transmutes)]
 
 extern crate alloc;
 
@@ -13,6 +16,7 @@ use core::alloc::Layout;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use libsap::abi::{attr, error, fault, init_slot, object, recv_source, reg, rights, BootInfo};
+use libsap::address::mapped;
 use libsap::cnode::SlotRef;
 use libsap::sys::Error;
 use libsap::runtime::{self, Resources};
@@ -53,7 +57,7 @@ fn untyped_at_least(info: &BootInfo, bits: u8) -> usize {
 #[unsafe(no_mangle)]
 fn sap_main(boot_info: usize, _: usize, _: usize) -> ! {
     // SAFETY: the kernel passes the address of the read-only boot-info page.
-    let info = unsafe { &*(boot_info as *const BootInfo) };
+    let info = unsafe { &*mapped::<BootInfo>(boot_info) };
     report(info);
     runtime::start(Resources {
         cnode: init_slot::CNODE,
@@ -206,20 +210,20 @@ fn check_mapping(info: &BootInfo) {
 
     // Write through the mapping, move the frame to another address
     // read-only, and read the value back there.
-    let word = va as *mut u64;
+    let word = mapped::<u64>(va);
     // SAFETY: the frame was just mapped read-write at va.
     unsafe { word.write_volatile(0x5a9_cafe) };
     expect("unmap frame", vspace::unmap_frame(f1), Ok(()));
     expect("remap read-only", vspace::map_frame(f1, me, va + 0x3000, rights::READ, attr::EXECUTE_NEVER), Ok(()));
     // SAFETY: mapped read-only at va + 0x3000.
-    let back = unsafe { ((va + 0x3000) as *const u64).read_volatile() };
+    let back = unsafe { mapped::<u64>(va + 0x3000).read_volatile() };
     assert_eq!(back, 0x5a9_cafe, "value didn't survive remapping");
 
     // A 2 MiB frame goes straight into the level-1 table.
     let big_va = va + 0x20_0000;
     expect("map 2 MiB frame", vspace::map_frame(big, me, big_va, rw, attr::EXECUTE_NEVER), Ok(()));
     // SAFETY: mapped read-write.
-    unsafe { ((big_va + 0x1f_fff8) as *mut u64).write_volatile(7) };
+    unsafe { mapped::<u64>(big_va + 0x1f_fff8).write_volatile(7) };
     let address = vspace::frame_address(big).expect("frame address");
     let region = info.untyped_list[parent - info.untyped.start].paddr;
     assert!(address == region, "2 MiB frame at {address:#x}, region at {region:#x}");
@@ -244,7 +248,7 @@ fn check_mapping(info: &BootInfo) {
     expect("map the spare table", vspace::map_page_table(spare, me, va), Ok(()));
     expect("map frame again", vspace::map_frame(f1, me, va, rights::READ, attr::EXECUTE_NEVER), Ok(()));
     // SAFETY: mapped read-only; a fresh table, the same frame.
-    let again = unsafe { (va as *const u64).read_volatile() };
+    let again = unsafe { mapped::<u64>(va).read_volatile() };
     assert_eq!(again, 0x5a9_cafe, "value didn't survive a new table");
 
     // Revoking the region deletes every object: frames and tables are
@@ -297,7 +301,7 @@ fn check_threads(info: &BootInfo) {
     expect("registers of self", tcb::write_registers(my_tcb, false, &[0; reg::COUNT]), Err(error::ILLEGAL_OPERATION));
 
     let mut regs = [0; reg::COUNT];
-    regs[reg::PC] = worker as *const () as usize;
+    regs[reg::PC] = (worker as *const ()).addr();
     regs[reg::SP] = stack_va + 0x4000;
     regs[reg::A0] = 1;
     expect("start", tcb::write_registers(thread, true, &regs), Ok(()));
@@ -325,7 +329,7 @@ fn check_threads(info: &BootInfo) {
     // Its registers show where it stopped: inside `worker`, on its stack.
     let regs = tcb::read_registers(thread).expect("read registers");
     let (pc, sp) = (regs[reg::PC], regs[reg::SP]);
-    let entry = worker as *const () as usize;
+    let entry = (worker as *const ()).addr();
     assert!((entry..entry + 0x100).contains(&pc), "pc {pc:#x} not in worker at {entry:#x}");
     assert!((stack_va..=stack_va + 0x4000).contains(&sp), "sp {sp:#x} not on its stack");
 
@@ -406,7 +410,7 @@ fn check_notifications(info: &BootInfo) {
     expect("configure", tcb::configure(thread, init_slot::CNODE, me, None), Ok(()));
     expect("priority", tcb::set_priority(thread, init_slot::TCB, 255), Ok(()));
     let mut regs = [0; reg::COUNT];
-    regs[reg::PC] = waiter as *const () as usize;
+    regs[reg::PC] = (waiter as *const ()).addr();
     regs[reg::SP] = stack_va + 0x1000;
     regs[reg::A0] = ntfn;
     regs[reg::A0 + 1] = thread;
@@ -469,7 +473,7 @@ fn spawn_with(untyped: usize, slots: usize, va: usize, entry: extern "C" fn(usiz
     expect("spawn: configure", tcb::configure(thread, init_slot::CNODE, me, Some((frames + 1, buffer))), Ok(()));
     expect("spawn: priority", tcb::set_priority(thread, init_slot::TCB, 255), Ok(()));
     let mut regs = [0; reg::COUNT];
-    regs[reg::PC] = entry as *const () as usize;
+    regs[reg::PC] = (entry as *const ()).addr();
     regs[reg::SP] = va + 0x1000;
     regs[reg::TP] = buffer;
     regs[reg::A0..reg::A0 + 3].copy_from_slice(&args);
@@ -745,7 +749,7 @@ extern "C" fn faulter(address: usize, mode: usize, me: usize) -> ! {
     if mode == 0 {
         // SAFETY: deliberately touches an address that may be unmapped; the
         // fault handler maps it before this thread resumes.
-        let value = unsafe { core::ptr::read_volatile(address as *const usize) };
+        let value = unsafe { core::ptr::read_volatile(mapped::<usize>(address)) };
         FAULT_READ.store(value, Ordering::Relaxed);
     } else {
         // SAFETY: deliberately illegal; the thread never resumes past it.
@@ -782,12 +786,12 @@ fn check_faults(info: &BootInfo) {
     let got = ipc::recv(ep, reply, &mut words).expect("receive the fault");
     assert_eq!((got.info.label(), got.badge), (fault::VM, 0x51), "fault kind or badge");
     assert_eq!(words[fault::ADDRESS], target, "fault address");
-    let entry = faulter as *const () as usize;
+    let entry = (faulter as *const ()).addr();
     assert!((entry..entry + 0x100).contains(&words[fault::PC]), "fault pc not in faulter");
     // Fix it: map a page there with a value in it, and resume the thread.
     expect("map the page", vspace::map_frame(page, me, target, rights::READ | rights::WRITE, attr::EXECUTE_NEVER), Ok(()));
     // SAFETY: just mapped read-write.
-    unsafe { (target as *mut usize).write_volatile(0xfa017) };
+    unsafe { mapped::<usize>(target).write_volatile(0xfa017) };
     expect("resume it", ipc::reply(reply, 0, &[], &[]), Ok(()));
     sys::yield_now();
     assert_eq!(FAULT_READ.load(Ordering::Relaxed), 0xfa017, "the faulting read didn't complete after the fix");
@@ -1005,7 +1009,7 @@ fn check_heap(info: &BootInfo) {
     let layout = Layout::from_size_align(100, 4096).unwrap();
     // SAFETY: a non-zero size; freed with the same layout.
     let aligned = core::hint::black_box(unsafe { alloc::alloc::alloc(layout) });
-    assert!(!aligned.is_null() && aligned as usize % 4096 == 0, "a page-aligned allocation");
+    assert!(!aligned.is_null() && aligned.addr() % 4096 == 0, "a page-aligned allocation");
     // SAFETY: allocated above with this layout.
     unsafe { alloc::alloc::dealloc(aligned, layout) };
     assert_eq!(format!("{} and {}", "text", 2), "text and 2");

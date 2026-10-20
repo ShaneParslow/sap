@@ -23,9 +23,13 @@
 //! larger buffers (M5).
 
 #![no_std]
+#![feature(strict_provenance_lints)]
+// Pointers come from `sap_sys::address::mapped`, never from integer casts.
+#![deny(implicit_provenance_casts, integer_to_ptr_transmutes)]
 
 use core::sync::atomic::{fence, AtomicUsize, Ordering};
 
+use sap_sys::address::mapped;
 use sap_sys::notification;
 
 const PAGE: usize = 4096;
@@ -85,7 +89,7 @@ impl Producer {
     /// producer; `doorbell` signals the consumer and `wait` is this side's
     /// notification.
     pub unsafe fn new(data: usize, control: usize, doorbell: usize, wait: usize) -> Self {
-        Self { data: data as *mut Data, control: control as *const Control, doorbell, wait, sleeps: 0 }
+        Self { data: mapped(data), control: mapped(control), doorbell, wait, sleeps: 0 }
     }
 
     /// Publish `words`, waiting while the ring is full.
@@ -132,7 +136,7 @@ impl Consumer {
     /// consumer; `doorbell` signals the producer and `wait` is this side's
     /// notification.
     pub unsafe fn new(data: usize, control: usize, doorbell: usize, wait: usize) -> Self {
-        Self { data: data as *const Data, control: control as *mut Control, doorbell, wait, sleeps: 0 }
+        Self { data: mapped(data), control: mapped(control), doorbell, wait, sleeps: 0 }
     }
 
     /// Take the next message into `out`, waiting while the ring is empty.

@@ -19,7 +19,7 @@ Tooling: QEMU's `virt` machine loads its bundled OpenSBI by default (`-bios defa
 
 The order agreed on 2026-10-19 ([[2026-10-16-2c1ac53c#m10|§m10]]), from the items below:
 1. ~~I4, splitting `libsap`~~ (done).
-2. **I5**, provenance hygiene in user code.
+2. ~~I5, provenance hygiene in user code~~ (done).
 3. **M5**, Cap'n Proto messages across the rings; M7's bootstrap message is itself a Cap'n Proto message.
 4. **M7**, the process manager: programs start their runtime from the bootstrap message, and the loader moves onto the runtime's slot allocator.
 5. **I2**, `std`, once thread-local storage, a log service and the process ABI exist.
@@ -65,7 +65,6 @@ These can happen at any time and feed the milestones above.
 
 - **I2. A `std` platform layer** for sap: thread-local storage, then `std` once a log service exists ([[prog-rust-std]]). The heap, slot allocator and mutexes it builds on exist ([[prog-libsap#Slots, locks and the heap]]).
 - **I3. seL4-style zombie capabilities:** iterative, preemptible deletion, before untrusted programs run ([[kernel-capabilities#Delete, finalise, revoke]]).
-- **I5. Provenance hygiene:** turn integer-to-pointer casts in user code into one runtime function and deny `implicit_provenance_casts` in user crates, so nothing new assumes an integer can become a pointer ([[hw-cheri#Keeping the door open]]).
 
 ## Done
 
@@ -76,3 +75,4 @@ These can happen at any time and feed the milestones above.
 - M4 (2026-10-13): notifications with badges (`ed24f74`); endpoints with MCS-style reply objects and bound notifications (`48f0571`); capability transfer, up to 16 per message (`a7e19d3`); fault delivery (`1b77a5f`); a userspace ELF loader and a second process (`810d575`); shared-memory rings between two processes ([[kernel-ipc]], [[prog-libsap]], [[ipc-rings]]).
 - I1 (2026-10-19): one pinned nightly for everything, and sap's own target for user programs with `core`, `alloc` and `compiler_builtins` built from source; `-z notext` removed ([[prog-rust-toolchain]]).
 - I4 (2026-10-19): `libsap` split into `sap-sys`, the `libsap` runtime with an optional heap, `sap-ring` and `sap-loader`; `libsap::init` became `runtime::start` ([[prog-libsap#Crates]]).
+- I5 (2026-10-19): user code gets pointers only from `sap_sys::address::mapped`; user crates deny `implicit_provenance_casts` and `integer_to_ptr_transmutes`; `clippy.toml` disallows the exposed-provenance functions elsewhere ([[hw-cheri#Keeping the door open]]).

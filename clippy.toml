@@ -1,0 +1,8 @@
+# User code gets pointers from sap_sys::address::mapped, the one place that
+# uses exposed provenance, so a CHERI port changes one function (hw-cheri in
+# the wiki). The compiler denies integer-to-pointer casts in user crates;
+# this catches the explicit functions it allows.
+disallowed-methods = [
+    { path = "core::ptr::with_exposed_provenance", reason = "use sap_sys::address::mapped" },
+    { path = "core::ptr::with_exposed_provenance_mut", reason = "use sap_sys::address::mapped" },
+]

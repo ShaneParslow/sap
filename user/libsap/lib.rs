@@ -11,6 +11,9 @@
 //! task, `a0` is the address of the kernel's boot-info page.
 
 #![no_std]
+#![feature(strict_provenance_lints)]
+// Pointers come from `sap_sys::address::mapped`, never from integer casts.
+#![deny(implicit_provenance_casts, integer_to_ptr_transmutes)]
 
 pub mod debug;
 #[cfg(feature = "heap")]
@@ -19,7 +22,7 @@ pub mod runtime;
 pub mod slots;
 pub mod sync;
 
-pub use sap_sys::{abi, cnode, ipc, notification, sys, tcb, untyped, vspace};
+pub use sap_sys::{abi, address, cnode, ipc, notification, sys, tcb, untyped, vspace};
 
 use core::panic::PanicInfo;
 

@@ -7,7 +7,11 @@
 //! kernel's objects, with `sap-abi` (roadmap D5).
 
 #![no_std]
+#![feature(strict_provenance_lints)]
+// Pointers come from `sap_sys::address::mapped`, never from integer casts.
+#![deny(implicit_provenance_casts, integer_to_ptr_transmutes)]
 
+pub mod address;
 pub mod cnode;
 pub mod ipc;
 pub mod notification;

@@ -14,6 +14,9 @@
 //! parent copies capabilities into fixed slots (M7, typed bootstrap).
 
 #![no_std]
+#![feature(strict_provenance_lints)]
+// Pointers come from `sap_sys::address::mapped`, never from integer casts.
+#![deny(implicit_provenance_casts, integer_to_ptr_transmutes)]
 
 use elf::abi::{EM_RISCV, ET_DYN, PF_W, PF_X, PT_LOAD, R_RISCV_RELATIVE};
 use elf::endian::LittleEndian;
@@ -121,7 +124,7 @@ fn filled_frame(parent: &Parent, slots: &mut Slots, fill: impl FnOnce(&mut [u8; 
     vspace::map_frame(frame, parent.vspace, parent.scratch, rw, attr::EXECUTE_NEVER).expect("loader: scratch map");
     // SAFETY: the frame was just mapped read-write at the scratch address,
     // and nothing else uses that address.
-    fill(unsafe { &mut *(parent.scratch as *mut [u8; PAGE]) });
+    fill(unsafe { &mut *sap_sys::address::mapped::<[u8; PAGE]>(parent.scratch) });
     vspace::unmap_frame(frame).expect("loader: scratch unmap");
     frame
 }
