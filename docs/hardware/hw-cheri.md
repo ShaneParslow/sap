@@ -1,7 +1,7 @@
 ---
 status: decided
 summary: CHERI support is wanted from the start as an accelerator, never a correctness requirement. What CHERI is, its standardization status, what it fixes for sap (bounds, unforgeability, sealed handles, cheap compartment calls) and what it doesn't.
-updated: 2026-10-08
+updated: 2026-10-19
 sources: ["[[2026-09-27-future-of-computing#m3|§m3]]", "[[2026-09-27-future-of-computing#m7|§m7]]", "[[2026-09-27-future-of-computing#m13|§m13]]", "[[2026-09-27-future-of-computing#m17|§m17]]", "[[2026-09-27-future-of-computing#m23|§m23]]", "[[2026-09-27-future-of-computing#m25|§m25]]"]
 ---
 
@@ -40,9 +40,17 @@ Inside a compartment written in a memory-safe language, use-after-free can't hap
 
 **Page transfer still has a role.** For large messages from untrusted peers, transferring pages (the sender loses write access) is what guarantees immutability; CHERI capabilities are for fine-grained sharing among components that trust each other ([[2026-09-27-future-of-computing#m25|§m25]]).
 
+## Keeping the door open
+
+CHERI and paging are not one a subset of the other. CHERI bounds pointers inside an address space; paging separates address spaces and makes revocation of shared memory instant (unmap), which CHERI can't match without sweeps. CHERI hardware still has page tables. So paging work isn't wasted, and CHERI can come later (M10), provided nothing assumes that an integer can become a pointer. Proposed rules until then ([[2026-10-16-2c1ac53c#m8|§m8]]):
+- **No pointers in the kernel ABI or in shared memory.** Already true: system calls take capability addresses and words, the kernel reaches the IPC buffer through its frame capability, and rings and Cap'n Proto messages hold indices and offsets.
+- **Pointers come from the runtime, not from casts.** User code that turns a constant address into a pointer (the ring pages, the IPC buffer in `tp`) should get it from one runtime function, which under CHERI would derive it from a capability the runtime holds for its address space. Rust's nightly lints `fuzzy_provenance_casts` and `lossy_provenance_casts` find every such cast.
+- **Revocation across trust boundaries stays at page granularity,** between address spaces, where it is cheap on both.
+
 ## Platform support
 
 - **Emulation:** CHERI-QEMU covers CHERI-RISC-V and Morello ([[2026-09-27-future-of-computing#m29|§m29]]).
+- **Rust (as of October 2026):** CHERI support exists only outside mainline Rust: a Morello compiler from the University of Kent (Rust 1.72.1, with `std` on CheriBSD), and a CHERIoT compiler for embedded RISC-V tracking nightly, where `core` and `alloc` compile and testing is ongoing ([Rust for Morello](https://www.cs.kent.ac.uk/people/staff/mjb211/rust/index.htm), [CHERI Alliance Rust working group](https://cheri-alliance.org/who-we-are/working-groups/rust-cheri/)). No purecap compiler for 64-bit CHERI-RISC-V was found. Since sap's userspace is Rust, purecap user programs wait on a compiler; code built for plain RISC-V runs unchanged in CHERI's hybrid mode, so the kernel and today's programs can run on CHERI-QEMU first.
 - **seL4:** no CHERI support in mainline as far as the chat knew; building on seL4 would mean the paging variant only ([[2026-09-27-future-of-computing#m31|§m31]]). This is one of the arguments in [[kernel-choice]].
 
 > [!question] Open

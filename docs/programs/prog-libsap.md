@@ -73,5 +73,8 @@ The loader handles exactly what sap programs are built as: static position-indep
 
 Revoking the untyped memory then removes the peer entirely.
 
+> [!question] Open
+> Splitting `libsap` so that programs without a heap don't carry one (proposed 2026-10-19, [[2026-10-16-2c1ac53c#m8|§m8]]): a stateless system-call crate (the wrappers, as libsel4 is to seL4); the runtime (entry, panic, slots, locks), with the heap behind a Cargo feature that supplies the global allocator; and the loader and rings as crates of their own. Slots need no heap: the bitmap is static. `libsap::init` would be renamed, since `init` is also the root task; from M7 the entry code would start the runtime from the bootstrap message before `sap_main`, so only the root task would call it.
+
 > [!todo] Not built
 > A typed bootstrap message; an untyped allocator; thread-local storage; process exit and supervision.

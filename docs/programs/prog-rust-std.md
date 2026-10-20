@@ -26,6 +26,10 @@ For sap the mapping is mostly direct, with a few deliberate absences:
 
 So a sap `std` would be smaller than a POSIX one by design: programs written against `std::fs` or `std::env` belong in the compatibility layer ([[system-legacy-compat]]), not in native sap.
 
+## Building it today
+
+Building `std` for the sap target with everything unimplemented doesn't work without changing `std` itself. Tried 2026-10-19 with `-Zbuild-std=std,panic_abort` and `#![feature(restricted_std)]`: most of `std` falls back to its "unsupported" platform for an unknown operating system, but about ten platform modules list the systems they support and have no fallback, so the build stops in allocation, random numbers (hash-map keys), thread-locals, I/O errors and the single-threaded locks. Each is a few lines routing `target_os = "sap"` to an implementation, but they are lines in Rust's own library, which means carrying a patched `std` (or upstreaming the target) from the first build. The size of a port, counting non-blank, non-comment lines in this nightly's library: `std` is about 80,000 lines, of which the platform layer for every system together is about 47,000. The Unix-specific part (Linux included) is about 11,000, plus 3,800 of public `std::os::unix` and `std::os::linux` extensions. A small system's port is far smaller: Hermit's is about 1,300 lines (it delegates to a separate system-call crate, as `std` would delegate to `libsap`), Xous's 3,300 and UEFI's 4,300. So a sap port is a few thousand lines, not an overhaul; the cost is carrying it outside Rust until the target is upstream. So `std` waits until there is enough to put behind it: thread-local storage, a log service for standard output, and the process ABI (M7) that tells a program its resources.
+
 ## Order
 
 1. A heap allocator in `libsap`, so `alloc` works (needed for Cap'n Proto messages, M5). Built 2026-10-19 ([[prog-libsap#Slots, locks and the heap]]).
