@@ -160,12 +160,24 @@ pub unsafe fn insert_original(cap: Cap, parent: Option<*mut Slot>, dest: *mut Sl
 /// Put `cap`, derived from the capability in `src`, into empty slot `dest`,
 /// right after `src` in the derivation tree.
 ///
+/// A copy of untyped memory (which can only be made while nothing has been
+/// retyped from it) takes the memory over: the source is marked full, as
+/// seL4's `setUntypedCapAsFull` does. Otherwise both would start retyping
+/// from the bottom of the region, and the same memory would become two
+/// objects. The source resets once the copy and everything made through
+/// it are gone.
+///
 /// # Safety
 /// Both must be slots in live CNodes or TCBs; `dest` empty, `src` not.
 pub unsafe fn insert_derived(cap: Cap, src: *mut Slot, dest: *mut Slot) {
     // SAFETY: per the caller's guarantee.
     unsafe {
         debug_assert!((*dest).cap.is_null());
+        if let (Cap::Untyped { size_bits, device, base, .. }, Cap::Untyped { size_bits: s2, base: b2, .. }) = ((*src).cap, cap)
+            && (base, size_bits) == (b2, s2)
+        {
+            (*src).cap = Cap::Untyped { size_bits, device, base, free_index: 1 << size_bits };
+        }
         (*dest).cap = cap;
         (*dest).revocable = cap.is_revocable_copy(&(*src).cap);
         (*dest).first_badged = (*dest).revocable;

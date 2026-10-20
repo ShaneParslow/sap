@@ -179,6 +179,21 @@ fn check_retype(info: &BootInfo) {
     expect("objects are gone", slot(cnode + 17).copy_from(slot(cnode), rights::ALL), Err(error::FAILED_LOOKUP));
     expect("reuse after revoke", untyped::retype(region, object::FRAME_4K, 0, in_root, cnode, 16), Ok(()));
     expect("revoke again", slot(region).revoke(), Ok(()));
+
+    // A copy of untyped memory takes the memory over: the original counts
+    // as full until the copy and everything made through it are gone, so
+    // the two can't hand out the same memory twice.
+    let copy = cnode;
+    expect("one frame", untyped::retype(region, object::FRAME_4K, 0, in_root, copy, 1), Ok(()));
+    expect("revoke it", slot(region).revoke(), Ok(()));
+    expect("copy the empty region", slot(copy).copy_from(slot(region), rights::ALL), Ok(()));
+    expect("the original is full", untyped::retype(region, object::FRAME_4K, 0, in_root, copy + 1, 1), Err(error::NOT_ENOUGH_MEMORY));
+    expect("the copy retypes", untyped::retype(copy, object::FRAME_4K, 0, in_root, copy + 1, 1), Ok(()));
+    expect("delete the copy", slot(copy).delete(), Ok(()));
+    expect("full while the copy's frame lives", untyped::retype(region, object::FRAME_4K, 0, in_root, copy + 2, 1), Err(error::NOT_ENOUGH_MEMORY));
+    expect("revoke the frame", slot(region).revoke(), Ok(()));
+    expect("the original retypes again", untyped::retype(region, object::FRAME_4K, 0, in_root, copy, 1), Ok(()));
+    expect("revoke once more", slot(region).revoke(), Ok(()));
     expect("revoke the carve", slot(parent).revoke(), Ok(()));
     println!("init: untyped retype, exhaustion and reuse after revoke behave");
 }

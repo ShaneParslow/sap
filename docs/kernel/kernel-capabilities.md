@@ -37,9 +37,9 @@ A `Slot` (`kernel/cspace.rs:28`) holds a capability and its links in the derivat
 ## The derivation tree
 
 Every slot is on one doubly linked list, seL4's "mapping database", ordered so that a capability's descendants follow it directly. Nothing is allocated; the links live in the slots.
-- **Inserting.** An original (a boot capability, or a newly retyped object) starts a tree, or goes right after the untyped memory it came from (`insert_original`, line 145). A copy goes right after its source (`insert_derived`, line 165).
-- **Parenthood is computed, not stored.** `b` is a child of `a` if `a` is *revocable* and `b`'s object lies within `a`'s (`is_parent_of`, line 242), using `Cap::same_region_as` in `cap.rs`, with an extra rule for badges ([[kernel-ipc#Badges]]). Originals are revocable, and so are copies of untyped memory and copies given a new badge (`Cap::is_revocable_copy`), as in seL4. So a copy of a TCB capability is a sibling, while a copy of untyped memory is a child and owns what is later retyped through it.
-- **Moving** keeps the capability's place in the list (`move_cap`, line 181).
+- **Inserting.** An original (a boot capability, or a newly retyped object) starts a tree, or goes right after the untyped memory it came from (`insert_original`, line 145). A copy goes right after its source (`insert_derived`, line 172).
+- **Parenthood is computed, not stored.** `b` is a child of `a` if `a` is *revocable* and `b`'s object lies within `a`'s (`is_parent_of`, line 254), using `Cap::same_region_as` in `cap.rs`, with an extra rule for badges ([[kernel-ipc#Badges]]). Originals are revocable, and so are copies of untyped memory and copies given a new badge (`Cap::is_revocable_copy`), as in seL4. So a copy of a TCB capability is a sibling, while a copy of untyped memory is a child and owns what is later retyped through it.
+- **Moving** keeps the capability's place in the list (`move_cap`, line 193).
 
 ## Resolving addresses
 
@@ -47,7 +47,7 @@ A capability address is resolved like a page-table walk (`resolve`, `kernel/cspa
 
 ## Delete, finalise, revoke
 
-`delete` (`kernel/cspace.rs:286`) removes a capability. If it was the **last** capability to its object, meaning no neighbour on the list names the same object, since copies are adjacent (`is_final`, line 258), the object is finalised (`finalise`, line 307):
+`delete` (`kernel/cspace.rs:298`) removes a capability. If it was the **last** capability to its object, meaning no neighbour on the list names the same object, since copies are adjacent (`is_final`, line 270), the object is finalised (`finalise`, line 319):
 - a CNode's contents are deleted, recursively;
 - a thread is taken off the CPU and its own slots are deleted (`thread::finalise`);
 - a page table that is an address-space root frees its ASID; a mapped one is unmapped.
@@ -61,7 +61,7 @@ Deleting a frame capability that maps its frame unmaps it whether or not it was 
 
 seL4 solves all three with "zombie" capabilities: a capability being finalised becomes a zombie in its slot, deletion proceeds iteratively rather than recursively, and long deletions stop at preemption points and resume on the next call. sap should adopt that before untrusted programs run (`TODO` in `cspace.rs`).
 
-`revoke` (line 352) deletes the children that follow a capability until the next capability isn't one.
+`revoke` (line 364) deletes the children that follow a capability until the next capability isn't one.
 
 ## Invocation
 
@@ -102,7 +102,7 @@ Notifications are 32 bytes; endpoints and reply objects, 16. Device untyped memo
 
 A thread of another process using an object that is revoked simply sees a broken capability or is stopped; it can't observe the memory being reused. Concurrency inside the kernel isn't an issue, because system calls run to completion with interrupts off (and, with more harts, will run under a big lock, as in seL4). seL4 additionally lets long revocations stop at preemption points and resume, which sap doesn't yet ([[#Delete, finalise, revoke]]).
 
-Untyped memory is handed out with a **watermark**: each object goes at the next address aligned to its size, and the capability's `free_index` advances past it. Memory below the watermark is never handed out again while anything retyped from the region still exists. Once everything has been revoked, so the capability has no children (`kernel/untyped.rs:95`), the next retype starts from zero. That is the only way memory is reclaimed, and why revoking untyped memory is how a parent takes back everything a child built from it. New objects are zeroed (except in device memory), and their capabilities are inserted as originals right after the untyped capability, so they are its children (`create`, `kernel/untyped.rs:124`). Every check happens before anything changes, so a failed retype leaves no partial result: `NOT_ENOUGH_MEMORY` past the end of the region, `DELETE_FIRST` for an occupied slot, `RANGE_ERROR` for bad sizes or counts, `INVALID_ARGUMENT` for an unknown type.
+Untyped memory is handed out with a **watermark**: each object goes at the next address aligned to its size, and the capability's `free_index` advances past it. Memory below the watermark is never handed out again while anything retyped from the region still exists. Once everything has been revoked, so the capability has no children (`kernel/untyped.rs:95`), the next retype starts from zero. That is the only way memory is reclaimed, and why revoking untyped memory is how a parent takes back everything a child built from it. A copy of untyped memory can only be made while nothing has been retyped from it, and making one marks the original full (`insert_derived`, `kernel/cspace.rs:172`), as seL4's `setUntypedCapAsFull` does; the original resets once the copy and everything made through it are gone. Without that rule the original and the copy would both start from zero, the same bytes would become two unrelated objects, and the capabilities to one object would no longer all sit together in the derivation list. New objects are zeroed (except in device memory), and their capabilities are inserted as originals right after the untyped capability, so they are its children (`create`, `kernel/untyped.rs:124`). Every check happens before anything changes, so a failed retype leaves no partial result: `NOT_ENOUGH_MEMORY` past the end of the region, `DELETE_FIRST` for an occupied slot, `RANGE_ERROR` for bad sizes or counts, `INVALID_ARGUMENT` for an unknown type.
 
 ## Address spaces
 
