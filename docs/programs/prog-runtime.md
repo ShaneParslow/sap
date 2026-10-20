@@ -48,7 +48,7 @@ A program hands the runtime what it may use on the program's behalf, once, befor
 > [!todo] Not built
 > The heap never shrinks: freed memory returns to the free list but stays mapped. The loader still uses its own bump allocator for slots (`Slots`) and adds page tables by retyping one and deleting it if every level exists, which spends untyped memory that only a revoke recovers; both should move to the runtime's allocator and `map_frame_with_tables`.
 
-`init`'s `check_heap` (`user/init/main.rs:996`) checks that nothing is mapped before the first allocation, growth past 2 MiB (across level-0 page tables), a page-aligned allocation, reuse of freed memory without growth, formatting into a `String`, two threads allocating 40,000 vectors each at once, and a thread that finds a mutex held sleeping until `init` unlocks it. The heap gets the largest untyped region other than the first (`runtime_untyped`, line 42), and the other checks pick theirs around it, since several revoke their region when done.
+`init`'s `check_heap` (`user/init/main.rs:999`) checks that nothing is mapped before the first allocation, growth past 2 MiB (across level-0 page tables), a page-aligned allocation, reuse of freed memory without growth, formatting into a `String`, two threads allocating 40,000 vectors each at once, and a thread that finds a mutex held sleeping until `init` unlocks it. The heap gets the largest untyped region other than the first (`runtime_untyped`, line 42), and the other checks pick theirs around it, since several revoke their region when done.
 
 ## The loader
 
@@ -65,7 +65,7 @@ The loader handles exactly what sap programs are built as: static position-indep
 
 ## The second program
 
-`user/peer` is a small program the root task loads with `sap_loader::load` to check IPC between address spaces. `user/init/build.rs` builds it and embeds it, as the kernel embeds `init`, and rebuilds it whenever the peer, `sap-rt` or the ABI crate changes. `check_process` in `init` (`user/init/main.rs:828`) gives the peer a badged endpoint capability and its own thread capability, sets `init` as its fault handler, and starts it. Then it checks:
+`user/peer` is a small program the root task loads with `sap_loader::load` to check IPC between address spaces. `user/init/build.rs` builds it and embeds it, as the kernel embeds `init`, and rebuilds it whenever the peer, `sap-rt` or the ABI crate changes. `check_process` in `init` (`user/init/main.rs:831`) gives the peer a badged endpoint capability and its own thread capability, sets `init` as its fault handler, and starts it. Then it checks:
 - the peer's six-word `CALL` arrives with the badge;
 - the reply's words reach the peer, which reports their sum back;
 - the peer's read of an address mapped only in `init`'s address space faults, and the fault comes back to `init` as a `VM` fault at that address.
