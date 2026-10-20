@@ -1,13 +1,16 @@
 ---
 status: decided
 summary: Cap'n Proto is sap's schema language, wire format and RPC - zero-copy layout, append-only evolution, safe reads of untrusted data, capability RPC with promise pipelining - extended with $own/$borrow annotations rather than forked. Replaced WIT.
-updated: 2026-10-11
+updated: 2026-10-19
 sources: ["[[2026-09-27-future-of-computing#m5|§m5]]", "[[2026-09-27-future-of-computing#m13|§m13]]", "[[2026-09-27-future-of-computing#m15|§m15]]", "[[2026-09-27-future-of-computing#m22|§m22]]", "[[2026-09-27-future-of-computing#m23|§m23]]", "[[2026-09-27-future-of-computing#m25|§m25]]", "[[2026-09-27-future-of-computing#m28|§m28]]"]
 ---
 
 # Cap'n Proto
 
 **Decided:** interfaces are Cap'n Proto schemas, messages use Cap'n Proto encoding, and remote and local RPC follow Cap'n Proto's capability RPC. The human questioned WIT because it has no native transport, RPC or bindings while Cap'n Proto has all three in production; the chat reversed its earlier WIT recommendation, and the human called dropping WIT a big simplification ([[2026-09-27-future-of-computing#m22|§m22]], [[2026-09-27-future-of-computing#m23|§m23]], [[2026-09-27-future-of-computing#m28|§m28]]). The ownership extension below is proposed, not yet adopted.
+
+> [!note] Built
+> Schemas live in `interfaces/` at the top of the repository; the `sap-interfaces` crate generates `no_std` Rust bindings from them at build time with `capnpc`, so the `capnp` schema compiler is a build requirement ([[prog-runtime#Crates]]). The first schema is the echo service used to test messages between processes (M5). `capnp` 0.27 builds into a caller-supplied buffer and reads without allocating, so programs without a heap can use it.
 
 ## Properties sap relies on
 

@@ -21,6 +21,8 @@ use sap_rt::cnode::SlotRef;
 use sap_rt::sys::Error;
 use sap_rt::runtime::{self, Resources};
 use sap_rt::{debug, heap, ipc, notification, println, slots, sync, sys, tcb, untyped, vspace};
+use capnp::message::{Builder, Reader, ReaderOptions, SegmentArray, SingleSegmentAllocator};
+use sap_interfaces::echo_capnp::request;
 use sap_loader::{self as loader, Parent, Slots};
 use sap_ring::{Consumer, Producer};
 
@@ -77,6 +79,7 @@ fn sap_main(boot_info: usize, _: usize, _: usize) -> ! {
     check_process(info);
     check_ring(info);
     check_heap(info);
+    check_capnp();
     println!("init: all checks passed");
     debug::halt(false)
 }
@@ -1058,4 +1061,65 @@ fn check_heap(info: &BootInfo) {
     expect("handoff", notification::wait(handoff_done).map(drop), Ok(()));
     assert_eq!(*HANDOFF.lock(), 7, "the woken thread should have taken the lock");
     println!("init: heap grows, aligns, reuses memory and serves two threads ({} KiB mapped); a mutex sleeps and wakes", heap::mapped() / 1024);
+}
+
+/// A word-aligned buffer, as Cap'n Proto segments must be.
+#[repr(C, align(8))]
+struct Words<const N: usize>([u8; N]);
+
+/// Cap'n Proto within one process: a request built in a fixed buffer with no
+/// heap, read back through the checked reader, and a corrupted pointer, bad
+/// UTF-8 and an over-long traversal rejected rather than trusted.
+fn check_capnp() {
+    let mut space = Words([0; 1024]);
+    let mut message = Builder::new(SingleSegmentAllocator::new(&mut space.0));
+    {
+        let mut req = message.init_root::<request::Builder>();
+        req.set_id(7);
+        req.set_text("capabilities");
+        let mut numbers = req.reborrow().init_numbers(4);
+        for (i, n) in [3u32, 1, 4, 1].into_iter().enumerate() {
+            numbers.set(i as u32, n);
+        }
+        req.set_blob(&[0xff; 5]);
+    }
+    let segment = message.get_segments_for_output()[0];
+    let mut copy = Words([0; 1024]);
+    copy.0[..segment.len()].copy_from_slice(segment);
+    let words = &copy.0[..segment.len()];
+
+    let segments = [words];
+    let reader = Reader::new(SegmentArray::new(&segments), ReaderOptions::new());
+    let req = reader.get_root::<request::Reader>().expect("root");
+    assert_eq!(req.get_id(), 7);
+    assert_eq!(req.get_text().unwrap().to_str(), Ok("capabilities"));
+    assert_eq!(req.get_numbers().unwrap().iter().map(u64::from).sum::<u64>(), 9);
+    assert_eq!(req.get_blob().unwrap(), &[0xff; 5]);
+
+    // Each corruption is in a private copy, as a receiver's would be.
+    let mut bad = Words([0; 1024]);
+    let n = segment.len();
+    // The root pointer (word 0) pointing far outside the segment.
+    bad.0[..n].copy_from_slice(segment);
+    bad.0[..4].copy_from_slice(&0x7fff_fff0u32.to_le_bytes());
+    let segments = [&bad.0[..n]];
+    let reader = Reader::new(SegmentArray::new(&segments), ReaderOptions::new());
+    assert!(reader.get_root::<request::Reader>().is_err(), "an out-of-bounds root should be refused");
+    // Text that isn't UTF-8: found and overwritten in place.
+    bad.0[..n].copy_from_slice(segment);
+    let at = bad.0[..n].windows(12).position(|w| w == b"capabilities").expect("the text");
+    bad.0[at] = 0xc3;
+    bad.0[at + 1] = 0x28;
+    let segments = [&bad.0[..n]];
+    let reader = Reader::new(SegmentArray::new(&segments), ReaderOptions::new());
+    let req = reader.get_root::<request::Reader>().expect("root");
+    assert!(req.get_text().unwrap().to_str().is_err(), "invalid UTF-8 should be refused");
+    // A traversal limit smaller than the message.
+    let segments = [words];
+    let mut options = ReaderOptions::new();
+    options.traversal_limit_in_words(Some(4));
+    let reader = Reader::new(SegmentArray::new(&segments), options);
+    let over = reader.get_root::<request::Reader>().and_then(|r| r.get_numbers().and_then(|_| r.get_blob()).map(drop));
+    assert!(over.is_err(), "a traversal past the limit should be refused");
+    println!("init: Cap'n Proto messages build without a heap, read back, and refuse bad pointers, UTF-8 and traversal");
 }

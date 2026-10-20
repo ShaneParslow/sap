@@ -29,6 +29,7 @@ The kernel follows it for the root task, whose `a0` is the address of the boot-i
 | `sap-rt` (`user/rt/`) | the entry point, the panic handler (prints and halts with failure), the `debug` console (`print!`, `println!`), and the runtime: `runtime`, `slots`, `sync` and, behind the `heap` feature (on by default), `heap`; it re-exports `sap-sys`'s modules | resources given to `runtime::start` |
 | `sap-ring` (`user/ring/`) | shared-memory rings between processes ([[ipc-rings]]) | `sap-sys` |
 | `sap-loader` (`user/loader/`) | the ELF loader, below | `sap-sys`, the `elf` crate |
+| `sap-interfaces` (`user/interfaces/`) | Rust bindings for the Cap'n Proto schemas in `interfaces/`, generated at build time ([[iface-capnp]]) | the `capnp` crate; the `capnp` tool to build |
 
 Each crate keeps its architecture-specific code in `arch/riscv.rs`, as the kernel does ([[system-portability]]): in `sap-sys` the system-call instruction, with arguments and results in `a0`–`a7`, and the thread pointer (`user/sys/arch/riscv.rs`), so every wrapper above it is architecture-neutral; in `sap-rt` the `_start` entry; in `sap-loader` the ELF machine and relocation type. Porting the user side means adding those three files and a target specification.
 
