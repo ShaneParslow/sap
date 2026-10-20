@@ -3,6 +3,7 @@ status: implemented
 summary: The first shared-memory channel as built - a pair of single-producer/single-consumer rings between two processes, each direction a producer-owned data page and a consumer-owned control page, publication by release store, wake-up flags with sequentially consistent fences, notifications as doorbells, and what 10,000 round trips on one CPU showed.
 updated: 2026-10-19
 code: [user/ring/lib.rs, user/loader/lib.rs, user/peer/main.rs, user/init/main.rs]
+verified: b6d7446
 sources: ["[[2026-10-08-22c3947b#m33|§m33]]", "[[2026-10-08-22c3947b#m34|§m34]]"]
 ---
 
