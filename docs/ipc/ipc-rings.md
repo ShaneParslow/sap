@@ -31,7 +31,7 @@ Each process has one notification for everything it waits for, in both direction
 
 ## Setting one up
 
-Today the root task sets up the channel by hand (`check_ring` in `user/init/main.rs:876`):
+Today the root task sets up the channel by hand (`check_ring` in `user/init/main.rs:875`):
 - it retypes four frames and two notifications, and mints a badged signal capability for each notification;
 - it loads a second instance of `user/peer` ([[prog-libsap#The loader]]);
 - it maps the four frames into its own address space and, through copies of their capabilities, into the peer's with the complementary rights (`Process::map_frame`);

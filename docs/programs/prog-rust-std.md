@@ -18,7 +18,7 @@ For sap the mapping is mostly direct, with a few deliberate absences:
 | `std` area | sap |
 |---|---|
 | allocation | a heap in memory the runtime maps from its untyped quota ([[cap-process-authority#Runtime capabilities and declared imports]]) |
-| threads, mutexes, condition variables | threads retyped from the runtime's quota; futex-style waiting needs notifications (M4) |
+| threads, mutexes, condition variables | threads retyped from the runtime's quota; mutexes sleep on notifications, as `libsap`'s already do ([[prog-libsap#Slots, locks and the heap]]) |
 | time | a time service, or reading the timer counter if user access is enabled |
 | standard I/O | the log service; until then the debug console |
 | environment variables, process arguments | none: programs receive typed imports, not strings ([[kernel-process-model]]) |
@@ -28,7 +28,7 @@ So a sap `std` would be smaller than a POSIX one by design: programs written aga
 
 ## Order
 
-1. A heap allocator in `libsap`, so `alloc` works (needed for Cap'n Proto messages, M5).
+1. A heap allocator in `libsap`, so `alloc` works (needed for Cap'n Proto messages, M5). Built 2026-10-19 ([[prog-libsap#Slots, locks and the heap]]).
 2. Thread-local storage, which moves each thread's IPC-buffer pointer out of `tp`, where the RISC-V TLS convention puts the thread pointer ([[prog-libsap#Thread start convention]]).
 3. A `std` platform layer once a log service exists.
 4. Upstreaming the target to Rust as a tier 3 target when the interface is stable, as Redox, Hermit and Fuchsia did.

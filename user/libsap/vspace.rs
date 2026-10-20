@@ -1,6 +1,6 @@
 //! Address-space invocations (RISC-V): page tables, frames, ASIDs.
 
-use sap_abi::label;
+use sap_abi::{error, label};
 
 use crate::sys::{invoke, Error};
 
@@ -18,6 +18,25 @@ pub fn unmap_page_table(page_table: usize) -> Result<(), Error> {
 /// (`sap_abi::rights`) and `attributes` (`sap_abi::attr`).
 pub fn map_frame(frame: usize, vspace: usize, va: usize, rights: usize, attributes: usize) -> Result<(), Error> {
     invoke(frame, label::FRAME_MAP, &[va, rights, attributes], &[vspace]).map(drop)
+}
+
+/// `map_frame`, adding page tables when the address has none: a table from
+/// `new_table` is installed at the first missing level, until the frame
+/// maps. Tables are only made when needed.
+pub fn map_frame_with_tables(
+    frame: usize,
+    vspace: usize,
+    va: usize,
+    rights: usize,
+    attributes: usize,
+    mut new_table: impl FnMut() -> Result<usize, Error>,
+) -> Result<(), Error> {
+    loop {
+        match map_frame(frame, vspace, va, rights, attributes) {
+            Err(e) if e.0 == error::FAILED_LOOKUP => map_page_table(new_table()?, vspace, va)?,
+            done => return done,
+        }
+    }
 }
 
 pub fn unmap_frame(frame: usize) -> Result<(), Error> {

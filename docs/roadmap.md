@@ -52,7 +52,7 @@ These can happen at any time and feed the milestones above.
 
 ## Infrastructure
 
-- **I2. A `std` platform layer** for sap: a heap allocator first (M5 needs `alloc`), then thread-local storage, then `std` once a log service exists ([[prog-rust-std]]).
+- **I2. A `std` platform layer** for sap: thread-local storage, then `std` once a log service exists ([[prog-rust-std]]). The heap, slot allocator and mutexes it builds on exist ([[prog-libsap#Slots, locks and the heap]]).
 - **I3. seL4-style zombie capabilities:** iterative, preemptible deletion, before untrusted programs run ([[kernel-capabilities#Delete, finalise, revoke]]).
 
 ## Done
