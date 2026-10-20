@@ -45,7 +45,7 @@ Grouped by urgency, then ordered by how much of the design each one affects. Det
 27. Per-process or shared address spaces, decided per deployment; where to draw boundaries on CHERI hardware. → [[prog-loading#Address spaces]]
 28. Rust target details: distributing the target spec to other people's crates, `libsap` versus the `std` platform layer. → [[prog-rust-toolchain]], [[prog-rust-std]]
 29. Whether sap defines a canonical program IR at all; signatures on code objects. → [[prog-representation]], [[prog-loading]]
-30. Attestation and transparency logs in the core or only as applications. → [[vision-attestation-and-verification]]
+30. Attestation: whether fine-grained claims about a capability subsystem need a kernel primitive (an exclusivity check, uncopyable capabilities); transparency logs in the core or only as applications. → [[vision-attestation-and-verification]]
 31. Registry and name directory: who runs them, policy for choosing implementations, declarative configuration. → [[system-package-registry]]
 32. Which legacy-compatibility approach comes first. → [[system-legacy-compat]]
 33. Presenting remote capabilities in the powerbox. → [[system-remote-compute]]

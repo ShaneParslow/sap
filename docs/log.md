@@ -39,3 +39,7 @@ New [[kernel-memory-riscv]] and [[kernel-root-task]]; rewrote [[kernel-boot-risc
 ## [2026-10-13] session | M3 complete; toolchain, deletion depth, memory reuse, ASIDs
 
 M3 pages: [[kernel-threads]], [[kernel-capabilities]]. Answers to §m30 filed: new [[prog-rust-toolchain]]; sections in [[kernel-capabilities]], [[kernel-memory-riscv]], [[hw-cheri]], [[workflows]]; roadmap infrastructure items I1–I3. Lint gained `--citations` and `--commits`.
+
+## [2026-10-19] session | Bug fixes, workspace, Rust target; attestation proposal
+
+From [[2026-10-16-2c1ac53c-code-walkthrough]]: fixed the embedded-peer rebuild, lost unbadged signals and the ring's index underflow ([[kernel-ipc]], [[ipc-rings]]); one Cargo workspace ([[kernel-boot-riscv]]); roadmap I1 done, [[prog-rust-toolchain]] now implemented and split, new [[prog-rust-std]]. Filed the human's attestation proposal in [[vision-attestation-and-verification]] and seL4's information-flow proof in [[sel4]].

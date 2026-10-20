@@ -26,7 +26,7 @@ Every page, in reading order: root pages, then functional areas (concepts first,
 | [[vision]] | hub | Why sap exists - owner-controlled computing in a world of abundant AI-written software - and the design principles that follow. |
 | [[vision-owner-control]] | decided | The goal behind sap - computing that answers to its owner - and why abundant AI-written software makes standardized interfaces, capabilities and user-held data the foundations that matter. |
 | [[vision-principles]] | decided | The design principles every area applies - standard core, least authority, mechanism in the kernel, honest failure, hardware as accelerator, specs over languages - each with how firmly it is held. |
-| [[vision-attestation-and-verification]] | exploring | What cryptography can and cannot prove about a running program, scoped versus whole-device attestation, and cheaper alternatives to consensus. Background; not yet part of sap's design. |
+| [[vision-attestation-and-verification]] | exploring | What cryptography can and cannot prove about a running program, scoped versus whole-device attestation, the human's proposal of many competing verifiers with fine-grained capability-graph claims, and cheaper alternatives to consensus. Background; not yet part of sap's design. |
 
 ## Capabilities
 

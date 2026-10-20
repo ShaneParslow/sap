@@ -13,6 +13,6 @@ sap starts from a question about the future rather than a technical itch: if AI 
 |---|---|---|
 | [[vision-owner-control]] | decided | The goal: devices, data and agents that answer to their owner. What shifts when software is cheap, and the two futures it can lead to. |
 | [[vision-principles]] | decided | The design principles derived from the goal, each marked with how firmly it is held. Every other area applies these. |
-| [[vision-attestation-and-verification]] | exploring | What can and can't be proven about a running program, and where attestation is legitimate. Not yet part of sap's design. |
+| [[vision-attestation-and-verification]] | exploring | What can and can't be proven about a running program, where attestation is legitimate, and the proposal of many competing verifiers with fine-grained claims about capability subsystems. Not yet part of sap's design. |
 
 Read [[vision-principles]] before the technical areas; the other two pages are background.

@@ -10,6 +10,7 @@ Newest first. "Adopted" means the human chose it; "proposed" entries are recorde
 
 | Date | Decision | Why | Source | Pages |
 |---|---|---|---|---|
+| 2026-10-19 | *Proposed (human):* accept hardware-rooted attestation with many competing verifiers and fine-grained claims about capability subsystems, instead of resisting attestation outright. Revisits the 10-08 framing that whole-device attestation is the form to resist. | A single OS signing authority is the harm, not attestation; capabilities allow claims about one subsystem. | [[2026-10-16-2c1ac53c#m4\|§m4]] | [[vision-attestation-and-verification]] |
 | 2026-10-19 | One pinned nightly Rust compiler for everything, kernel included; user programs build for sap's own target with `core` built from source. | Uniformity; the custom target and `build-std` need nightly anyway. | [[2026-10-16-2c1ac53c#m4\|§m4]] | [[prog-rust-toolchain]] |
 | 2026-10-16 | The repository is one Cargo workspace. | rust-analyzer couldn't see the user programs; one lockfile and one set of profiles. | [[2026-10-16-2c1ac53c#m2\|§m2]] | [[kernel-boot-riscv]] |
 | 2026-10-13 | Replies use MCS-style reply objects: a server passes a reply object to `Recv`; `Call` links it to the caller. | Time donation and scheduling contexts (planned) need it; avoids redesigning Call/Reply later. | [[2026-10-08-22c3947b#m34\|§m34]] | [[kernel-objects-and-syscalls]], [[kernel-scheduling]] |
