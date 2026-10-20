@@ -6,7 +6,7 @@
 # user/.cargo/config.toml makes them position-independent.
 [workspace]
 resolver = "3"
-members = ["abi", "kernel", "user/libsap", "user/init", "user/peer"]
+members = ["abi", "kernel", "user/sys", "user/libsap", "user/ring", "user/loader", "user/init", "user/peer"]
 default-members = ["kernel"]
 
 [profile.dev]

@@ -1,0 +1,13 @@
+[package]
+name = "sap-sys"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+path = "lib.rs"
+# No test harness on a bare-metal target.
+test = false
+bench = false
+
+[dependencies]
+sap-abi = { path = "../../abi" }

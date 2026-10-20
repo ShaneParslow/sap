@@ -16,13 +16,15 @@ use core::ops::Range;
 use core::ptr::{self, NonNull};
 
 use linked_list_allocator::Heap;
-use sap_abi::object::{self, MAX_RETYPE_COUNT};
-use sap_abi::{attr, error, rights};
+use sap_sys::abi::object::{self, MAX_RETYPE_COUNT};
+use sap_sys::abi::{attr, error, rights};
 
-use crate::cnode::SlotRef;
+use sap_sys::cnode::SlotRef;
+use sap_sys::sys::Error;
+use sap_sys::{untyped, vspace};
+
+use crate::slots;
 use crate::sync::Mutex;
-use crate::sys::Error;
-use crate::{slots, untyped, vspace};
 
 const PAGE: usize = 4096;
 /// The least the heap grows by, to keep growth system calls rare.

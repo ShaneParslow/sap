@@ -22,9 +22,11 @@
 //! TODO: messages are at most seven words; carry Cap'n Proto messages and
 //! larger buffers (M5).
 
+#![no_std]
+
 use core::sync::atomic::{fence, AtomicUsize, Ordering};
 
-use crate::notification;
+use sap_sys::notification;
 
 const PAGE: usize = 4096;
 /// Words per slot: a length word and up to seven message words.

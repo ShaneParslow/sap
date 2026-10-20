@@ -13,13 +13,15 @@
 //! TODO: no bootstrap message yet; arguments are three words and the
 //! parent copies capabilities into fixed slots (M7, typed bootstrap).
 
+#![no_std]
+
 use elf::abi::{EM_RISCV, ET_DYN, PF_W, PF_X, PT_LOAD, R_RISCV_RELATIVE};
 use elf::endian::LittleEndian;
 use elf::ElfBytes;
 use sap_abi::{attr, error, object, reg, rights};
 
-use crate::cnode::{SlotRef, WORD};
-use crate::{tcb, untyped, vspace};
+use sap_sys::cnode::{SlotRef, WORD};
+use sap_sys::{tcb, untyped, vspace};
 
 const PAGE: usize = 4096;
 /// Where images are placed (as the kernel places the root task).

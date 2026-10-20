@@ -2,7 +2,7 @@
 status: implemented
 summary: Threads and scheduling as implemented today - the thread control block (saved user registers, its capability slots, state, priorities), the thread invocations that configure, start, stop and inspect threads, seL4-style fixed-priority round-robin scheduling with time slices, the idle loop, and lock-free kernel globals on one hart.
 updated: 2026-10-13
-code: [kernel/thread.rs, kernel/sched.rs, kernel/global.rs, kernel/syscall.rs, kernel/invocation.rs, user/libsap/tcb.rs, user/init/main.rs, kernel/arch/riscv/trap.rs, kernel/arch/riscv/mod.rs, kernel/arch/riscv/vspace.rs, kernel/root_task.rs, kernel/main.rs, abi/lib.rs]
+code: [kernel/thread.rs, kernel/sched.rs, kernel/global.rs, kernel/syscall.rs, kernel/invocation.rs, user/sys/tcb.rs, user/init/main.rs, kernel/arch/riscv/trap.rs, kernel/arch/riscv/mod.rs, kernel/arch/riscv/vspace.rs, kernel/root_task.rs, kernel/main.rs, abi/lib.rs]
 verified: b3443ec
 sources: ["[[2026-10-08-22c3947b-wiki-setup]]"]
 ---
@@ -39,7 +39,7 @@ A new TCB does nothing until it is configured and started through its capability
 | `TCB_BIND_NOTIFICATION`, `TCB_SET_FAULT_HANDLER` | bind a notification ([[kernel-ipc#Bound notifications]]), set the fault-handler endpoint ([[kernel-ipc#Fault delivery]]) |
 | `TCB_SET_PRIORITY`, `TCB_SET_MC_PRIORITY` | set its priority or maximum controlled priority, at most the authority thread's `mcp` (`RANGE_ERROR` otherwise) |
 
-Reading and writing registers is refused on the calling thread itself (`ILLEGAL_OPERATION`), as in seL4; here the calling thread's registers are also borrowed by the syscall path. The priority rule is seL4's: a thread can't use an authority to grant more priority than that authority was itself granted. `user/libsap/tcb.rs` wraps these.
+Reading and writing registers is refused on the calling thread itself (`ILLEGAL_OPERATION`), as in seL4; here the calling thread's registers are also borrowed by the syscall path. The priority rule is seL4's: a thread can't use an authority to grant more priority than that authority was itself granted. `user/sys/tcb.rs` wraps these.
 
 ## Scheduler
 

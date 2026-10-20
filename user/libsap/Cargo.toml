@@ -9,8 +9,13 @@ path = "lib.rs"
 test = false
 bench = false
 
+[features]
+default = ["heap"]
+# A heap behind `alloc` (the global allocator). Without it, a program that
+# uses `alloc` fails to link.
+heap = ["dep:linked_list_allocator"]
+
 [dependencies]
-elf = { version = "0.8.0", default-features = false }
 # The heap's free list; without its spinlock, since libsap has its own lock.
-linked_list_allocator = { version = "0.10.6", default-features = false }
-sap-abi = { path = "../../abi" }
+linked_list_allocator = { version = "0.10.6", default-features = false, optional = true }
+sap-sys = { path = "../sys" }

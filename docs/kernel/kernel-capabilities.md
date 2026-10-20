@@ -1,8 +1,8 @@
 ---
 status: implemented
 summary: Capabilities as implemented today, following seL4 - the capability representation, CNodes of 64-byte slots, the derivation tree kept as a linked list through the slots, resolving capability addresses through guarded CNodes, delete and revoke with finalisation, the CALL invocation path, CNode operations, retyping untyped memory, building address spaces from page-table and frame capabilities, and the capabilities the root task starts with.
-updated: 2026-10-13
-code: [kernel/cap.rs, kernel/cspace.rs, kernel/invocation.rs, kernel/untyped.rs, kernel/thread.rs, kernel/root_task.rs, kernel/arch/riscv/caps.rs, kernel/arch/riscv/vspace.rs, abi/lib.rs, user/libsap/sys.rs, user/libsap/cnode.rs, user/libsap/untyped.rs, user/libsap/vspace.rs, user/init/main.rs, kernel/arch/riscv/paging.rs]
+updated: 2026-10-19
+code: [kernel/cap.rs, kernel/cspace.rs, kernel/invocation.rs, kernel/untyped.rs, kernel/thread.rs, kernel/root_task.rs, kernel/arch/riscv/caps.rs, kernel/arch/riscv/vspace.rs, abi/lib.rs, user/sys/sys.rs, user/sys/cnode.rs, user/sys/untyped.rs, user/sys/vspace.rs, user/init/main.rs, kernel/arch/riscv/paging.rs]
 verified: b3443ec
 sources: ["[[2026-10-08-22c3947b-wiki-setup]]"]
 ---
@@ -79,7 +79,7 @@ The capability's type picks the object, and the label picks the operation (`abi/
 
 Derivation follows seL4's `deriveCap` (`derive`, line 339): untyped memory can only be copied while nothing has been retyped from it (`REVOKE_FIRST` otherwise), and a copied frame capability starts unmapped. A destination that isn't empty gives `DELETE_FIRST`; an address that doesn't resolve gives `FAILED_LOOKUP`. Kernel object methods are plain constants in `sap-abi` for now; a `TODO` says to generate them from a Cap'n Proto schema (roadmap D5, [[cap-process-authority#Runtime capabilities and declared imports]]).
 
-On the user side, `libsap` (`user/libsap/`) wraps `CALL` (`sys::call`, `user/libsap/sys.rs:44`), the CNode operations (`user/libsap/cnode.rs`) and retype (`user/libsap/untyped.rs`).
+On the user side, `sap-sys` (`user/sys/`, [[prog-libsap#Crates]]) wraps `CALL` (`sys::call`, `user/sys/sys.rs:44`), the CNode operations (`user/sys/cnode.rs`) and retype (`user/sys/untyped.rs`).
 
 ## Retyping untyped memory
 

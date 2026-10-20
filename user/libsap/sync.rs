@@ -14,7 +14,7 @@ use core::cell::UnsafeCell;
 use core::ops::{Deref, DerefMut};
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::{notification, sys};
+use sap_sys::{notification, sys};
 
 /// How many times a thread slept waiting for a mutex, over all mutexes.
 static SLEEPS: AtomicUsize = AtomicUsize::new(0);

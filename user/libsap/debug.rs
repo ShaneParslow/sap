@@ -4,9 +4,9 @@
 
 use core::fmt::{self, Write};
 
-use sap_abi::syscall::{DEBUG_HALT, DEBUG_PUTCHAR};
+use sap_sys::abi::syscall::{DEBUG_HALT, DEBUG_PUTCHAR};
 
-use crate::sys::syscall1;
+use sap_sys::sys::syscall1;
 
 pub struct Console;
 

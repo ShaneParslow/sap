@@ -1,0 +1,12 @@
+[package]
+name = "sap-ring"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+path = "lib.rs"
+test = false
+bench = false
+
+[dependencies]
+sap-sys = { path = "../sys" }

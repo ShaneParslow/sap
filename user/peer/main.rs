@@ -6,7 +6,7 @@
 #![no_std]
 #![no_main]
 
-use libsap::ring::{Consumer, Producer, MAX_WORDS};
+use sap_ring::{Consumer, Producer, MAX_WORDS};
 use libsap::{ipc, println, tcb};
 
 /// An address mapped only in the root task's address space.

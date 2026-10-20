@@ -15,9 +15,10 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use libsap::abi::{attr, error, fault, init_slot, object, recv_source, reg, rights, BootInfo};
 use libsap::cnode::SlotRef;
 use libsap::sys::Error;
-use libsap::process::{self, Parent, Slots};
-use libsap::ring::{Consumer, Producer};
-use libsap::{debug, heap, ipc, notification, println, slots, sync, sys, tcb, untyped, vspace, Resources};
+use libsap::runtime::{self, Resources};
+use libsap::{debug, heap, ipc, notification, println, slots, sync, sys, tcb, untyped, vspace};
+use sap_loader::{self as loader, Parent, Slots};
+use sap_ring::{Consumer, Producer};
 
 /// Slot `i` of the root CNode.
 fn slot(i: usize) -> SlotRef {
@@ -54,7 +55,7 @@ fn sap_main(boot_info: usize, _: usize, _: usize) -> ! {
     // SAFETY: the kernel passes the address of the read-only boot-info page.
     let info = unsafe { &*(boot_info as *const BootInfo) };
     report(info);
-    libsap::init(Resources {
+    runtime::start(Resources {
         cnode: init_slot::CNODE,
         slots: info.empty.start + CHECK_SLOTS..info.empty.end,
         vspace: init_slot::VSPACE,
@@ -842,7 +843,7 @@ fn check_process(info: &BootInfo) {
     };
     let mut slots = Slots { next: base + 3, end: base + 200 };
     // The peer's slot 1 is its endpoint, slot 2 its own thread.
-    let peer = process::load(PEER, &parent, &mut slots, 255, [1, 2, 0]);
+    let peer = loader::load(PEER, &parent, &mut slots, 255, [1, 2, 0]);
     peer.give(&parent, 1, badged, rights::WRITE | rights::GRANT);
     peer.give(&parent, 2, peer.tcb, rights::ALL);
     expect("fault handler", tcb::set_fault_handler(peer.tcb, Some(badged)), Ok(()));
@@ -904,7 +905,7 @@ fn check_ring(info: &BootInfo) {
     let peer_base = 0x20_0000_0000;
     let mine_rights = [rw, ro, ro, rw];
     let theirs_rights = [ro, rw, rw, ro];
-    let peer = process::load(PEER, &parent, &mut slots, 255, [0, 2, 1]);
+    let peer = loader::load(PEER, &parent, &mut slots, 255, [0, 2, 1]);
     for i in 0..4 {
         let va = here + i * 0x1000;
         if i == 0 {

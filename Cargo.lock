@@ -37,15 +37,16 @@ name = "init"
 version = "0.1.0"
 dependencies = [
  "libsap",
+ "sap-loader",
+ "sap-ring",
 ]
 
 [[package]]
 name = "libsap"
 version = "0.1.0"
 dependencies = [
- "elf",
  "linked_list_allocator",
- "sap-abi",
+ "sap-sys",
 ]
 
 [[package]]
@@ -65,6 +66,7 @@ name = "peer"
 version = "0.1.0"
 dependencies = [
  "libsap",
+ "sap-ring",
 ]
 
 [[package]]
@@ -99,6 +101,29 @@ dependencies = [
  "riscv",
  "sap-abi",
  "sbi-rt",
+]
+
+[[package]]
+name = "sap-loader"
+version = "0.1.0"
+dependencies = [
+ "elf",
+ "sap-abi",
+ "sap-sys",
+]
+
+[[package]]
+name = "sap-ring"
+version = "0.1.0"
+dependencies = [
+ "sap-sys",
+]
+
+[[package]]
+name = "sap-sys"
+version = "0.1.0"
+dependencies = [
+ "sap-abi",
 ]
 
 [[package]]
