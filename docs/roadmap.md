@@ -15,6 +15,17 @@ sap writes its own kernel ([[kernel-choice]]). The seL4 column below is kept for
 
 Tooling: QEMU's `virt` machine loads its bundled OpenSBI by default (`-bios default`; on Arch, `qemu-system-riscv` pulls in `qemu-system-riscv-firmware`), and the kernel is loaded at `0x80200000` with `-kernel`, entered in S-mode. CHERI-QEMU and a CHERI OpenSBI come later, normally built with `cheribuild` (M10).
 
+## Next
+
+The order agreed on 2026-10-19 ([[2026-10-16-2c1ac53c#m10|§m10]]), from the items below:
+1. **I4**, splitting `libsap`.
+2. **I5**, provenance hygiene in user code.
+3. **M5**, Cap'n Proto messages across the rings; M7's bootstrap message is itself a Cap'n Proto message.
+4. **M7**, the process manager: programs start their runtime from the bootstrap message, and the loader moves onto the runtime's slot allocator.
+5. **I2**, `std`, once thread-local storage, a log service and the process ABI exist.
+
+CHERI stays at M10: the provenance lint and the rules in [[hw-cheri#Keeping the door open]] keep it reachable, and Rust has no CHERI-RISC-V purecap compiler yet ([[hw-cheri#Platform support]]).
+
 ## Bring-up milestones
 
 The human's proposed order (console, log, isolation, mapping, IPC, processes, store) with the chat's two amendments: traps, timer, page tables and user mode come right after the console, and capability tables come before IPC because IPC transfers capabilities ([[2026-09-27-future-of-computing#m28|§m28]], [[2026-09-27-future-of-computing#m29|§m29]]).
@@ -54,6 +65,8 @@ These can happen at any time and feed the milestones above.
 
 - **I2. A `std` platform layer** for sap: thread-local storage, then `std` once a log service exists ([[prog-rust-std]]). The heap, slot allocator and mutexes it builds on exist ([[prog-libsap#Slots, locks and the heap]]).
 - **I3. seL4-style zombie capabilities:** iterative, preemptible deletion, before untrusted programs run ([[kernel-capabilities#Delete, finalise, revoke]]).
+- **I4. Split `libsap`:** a stateless system-call crate, the runtime (entry, panic, slots, locks, the heap behind a feature) and separate crates for rings and the loader; `libsap::init` renamed ([[prog-libsap]]).
+- **I5. Provenance hygiene:** turn integer-to-pointer casts in user code into one runtime function and deny `implicit_provenance_casts` in user crates, so nothing new assumes an integer can become a pointer ([[hw-cheri#Keeping the door open]]).
 
 ## Done
 

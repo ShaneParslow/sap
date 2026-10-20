@@ -44,7 +44,17 @@ Inside a compartment written in a memory-safe language, use-after-free can't hap
 
 CHERI and paging are not one a subset of the other. CHERI bounds pointers inside an address space; paging separates address spaces and makes revocation of shared memory instant (unmap), which CHERI can't match without sweeps. CHERI hardware still has page tables. So paging work isn't wasted, and CHERI can come later (M10), provided nothing assumes that an integer can become a pointer. Proposed rules until then ([[2026-10-16-2c1ac53c#m8|§m8]]):
 - **No pointers in the kernel ABI or in shared memory.** Already true: system calls take capability addresses and words, the kernel reaches the IPC buffer through its frame capability, and rings and Cap'n Proto messages hold indices and offsets.
-- **Pointers come from the runtime, not from casts.** User code that turns a constant address into a pointer (the ring pages, the IPC buffer in `tp`) should get it from one runtime function, which under CHERI would derive it from a capability the runtime holds for its address space. Rust's nightly lints `fuzzy_provenance_casts` and `lossy_provenance_casts` find every such cast.
+- **Pointers come from the runtime, not from casts.** User code that turns a constant address into a pointer (the ring pages, the IPC buffer in `tp`) should get it from one runtime function, which under CHERI would derive it from a capability the runtime holds for its address space.
+- **The compiler checks it.** On the pinned nightly, `implicit_provenance_casts` (formerly `fuzzy_provenance_casts` and `lossy_provenance_casts`, behind `#![feature(strict_provenance_lints)]`) flags every `as` cast between integers and pointers, and `integer_to_ptr_transmutes` (on by default) flags transmutes. On 2026-10-19 there were 70 such casts: 49 in the kernel (the direct map, and object pointers kept as `usize` in capabilities and thread state) and 21 in user code (ring and IPC-buffer addresses, the boot-info address, tests).
+
+What the lints don't see, each a known place to check rather than a scattered risk:
+- the explicit exposed-provenance functions (`with_exposed_provenance`, `expose_provenance`), which are the sanctioned escape hatch but give untagged pointers under purecap CHERI; sap uses none, and a grep or Clippy's `disallowed_methods` keeps it that way;
+- assembly, which is rewritten for CHERI's capability registers anyway;
+- dependencies, whose lints are capped: as of 2026-10-19 `elf` makes no such casts, `linked_list_allocator` does its address arithmetic on pointers, and `fdt` stores physical addresses as pointers that are never dereferenced;
+- pointers stored in integer-typed memory (message words, `AtomicUsize`, byte buffers), whose tag is lost on CHERI when copied as data;
+- layouts that assume a pointer is 8 bytes, such as structures shared with assembly; size assertions like the 64-byte capability slot fail at compile time;
+- a pointer moved outside its object's bounds, or rebuilt from the wrong base, which compiles and then traps on CHERI.
+
 - **Revocation across trust boundaries stays at page granularity,** between address spaces, where it is cheap on both.
 
 ## Platform support
