@@ -104,7 +104,7 @@ Several threads of one program each need their own IPC buffer. Every thread star
 
 `user/init` (`check_notifications`) checks: minting two badges and refusing a re-badge; two signals with nobody waiting accumulating, so one poll returns both bits and the next finds nothing pending; a signal through the unbadged original being pending with no bits, and a `WAIT` after an unbadged and a badged signal returning at once with the badged bits; a send-only capability being refused a `WAIT`; a second thread blocked in `WAIT` waking once per signal with the right badge; a signal sent while that thread is suspended being taken by its restarted `WAIT` after `RESUME`; revoking one badge deleting its copies while the badge itself keeps working; and deleting the notification with the thread waiting, after which its restarted `WAIT` reports `FAILED_LOOKUP`.
 
-`check_ipc` uses a `spawn` helper (`spawn_with`) (`user/init/main.rs:463`) to start threads with their own stack and IPC buffer, and checks:
+`check_ipc` uses a `spawn` helper (`spawn_with`) (`user/init/main.rs:465`) to start threads with their own stack and IPC buffer, and checks:
 - a server thread answering with `REPLY_RECV`: a six-word `CALL` through a badged capability comes back with the badge as the label and every word incremented, so two words crossed the IPC buffers each way, and the reply carries no badge;
 - a plain `SEND` completing without an answer, counted by the server;
 - `RECV` on a send-only capability and `CALL` on a receive-only one refused;

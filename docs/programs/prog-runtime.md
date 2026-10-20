@@ -27,9 +27,9 @@ The kernel follows it for the root task, whose `a0` is the address of the boot-i
 |---|---|---|
 | `sap-sys` (`user/sys/`) | stateless wrappers over the kernel interface, as libsel4 is to seL4: `address` (`mapped`, `user/sys/address.rs:18`, the only way user code turns an address into a pointer; the user crates deny integer-to-pointer casts and `clippy.toml` disallows the exposed-provenance functions elsewhere, [[hw-cheri#Keeping the door open]]), `sys` (the raw `CALL` for kernel invocations, `YIELD`, the IPC buffer), `cnode`, `untyped`, `vspace` and `tcb` invocations ([[kernel-capabilities]], [[kernel-threads]]), `notification` (`SIGNAL`, `WAIT`, `POLL`) and `ipc` (`SEND`, `NB_SEND`, `CALL`, `RECV`, `NB_RECV`, `REPLY`, `REPLY_RECV`, with capabilities to give, moved or copied, and the receive window, [[kernel-ipc]]) | nothing but `tp` pointing at the IPC buffer |
 | `sap-rt` (`user/rt/`) | the entry point, the panic handler (prints and halts with failure), the `debug` console (`print!`, `println!`), and the runtime: `runtime`, `slots`, `sync` and, behind the `heap` feature (on by default), `heap`; it re-exports `sap-sys`'s modules | resources given to `runtime::start` |
-| `sap-ring` (`user/ring/`) | shared-memory rings between processes ([[ipc-rings]]) | `sap-sys` |
+| `sap-ring` (`user/ring/`) | shared-memory rings of variable-length records between processes ([[ipc-rings]]) | `sap-sys` |
 | `sap-loader` (`user/loader/`) | the ELF loader, below | `sap-sys`, the `elf` crate |
-| `sap-interfaces` (`user/interfaces/`) | Rust bindings for the Cap'n Proto schemas in `interfaces/`, generated at build time ([[iface-capnp]]) | the `capnp` crate; the `capnp` tool to build |
+| `sap-interfaces` (`user/interfaces/`) | Rust bindings for the Cap'n Proto schemas in `interfaces/`, generated at build time ([[iface-capnp]]), and the record kinds of the echo channel | the `capnp` crate; the `capnp` tool to build |
 
 Each crate keeps its architecture-specific code in `arch/riscv.rs`, as the kernel does ([[system-portability]]): in `sap-sys` the system-call instruction, with arguments and results in `a0`–`a7`, and the thread pointer (`user/sys/arch/riscv.rs`), so every wrapper above it is architecture-neutral; in `sap-rt` the `_start` entry; in `sap-loader` the ELF machine and relocation type. Porting the user side means adding those three files and a target specification.
 
@@ -48,7 +48,7 @@ A program hands the runtime what it may use on the program's behalf, once, befor
 > [!todo] Not built
 > The heap never shrinks: freed memory returns to the free list but stays mapped. The loader still uses its own bump allocator for slots (`Slots`) and adds page tables by retyping one and deleting it if every level exists, which spends untyped memory that only a revoke recovers; both should move to the runtime's allocator and `map_frame_with_tables`.
 
-`init`'s `check_heap` (`user/init/main.rs:999`) checks that nothing is mapped before the first allocation, growth past 2 MiB (across level-0 page tables), a page-aligned allocation, reuse of freed memory without growth, formatting into a `String`, two threads allocating 40,000 vectors each at once, and a thread that finds a mutex held sleeping until `init` unlocks it. The heap gets the largest untyped region other than the first (`runtime_untyped`, line 42), and the other checks pick theirs around it, since several revoke their region when done.
+`init`'s `check_heap` (`user/init/main.rs:1111`) checks that nothing is mapped before the first allocation, growth past 2 MiB (across level-0 page tables), a page-aligned allocation, reuse of freed memory without growth, formatting into a `String`, two threads allocating 40,000 vectors each at once, and a thread that finds a mutex held sleeping until `init` unlocks it. The heap gets the largest untyped region other than the first (`runtime_untyped`, line 43), and the other checks pick theirs around it, since several revoke their region when done.
 
 ## The loader
 
@@ -65,7 +65,7 @@ The loader handles exactly what sap programs are built as: static position-indep
 
 ## The second program
 
-`user/peer` is a small program the root task loads with `sap_loader::load` to check IPC between address spaces. `user/init/build.rs` builds it and embeds it, as the kernel embeds `init`, and rebuilds it whenever the peer, `sap-rt` or the ABI crate changes. `check_process` in `init` (`user/init/main.rs:831`) gives the peer a badged endpoint capability and its own thread capability, sets `init` as its fault handler, and starts it. Then it checks:
+`user/peer` is a small program the root task loads with `sap_loader::load` to check IPC between address spaces. Its third start argument picks what it does: the endpoint checks below, or, over a channel of two rings, echoing word records, serving the echo interface, or breaking the ring's rules on purpose ([[ipc-rings#What runs show]]). It builds without the heap. `user/init/build.rs` builds it and embeds it, as the kernel embeds `init`, and rebuilds it whenever the peer, `sap-rt` or the ABI crate changes. `check_process` in `init` (`user/init/main.rs:833`) gives the peer a badged endpoint capability and its own thread capability, sets `init` as its fault handler, and starts it. Then it checks:
 - the peer's six-word `CALL` arrives with the badge;
 - the reply's words reach the peer, which reports their sum back;
 - the peer's read of an address mapped only in `init`'s address space faults, and the fault comes back to `init` as a `VM` fault at that address.

@@ -22,9 +22,10 @@ use sap_rt::sys::Error;
 use sap_rt::runtime::{self, Resources};
 use sap_rt::{debug, heap, ipc, notification, println, slots, sync, sys, tcb, untyped, vspace};
 use capnp::message::{Builder, Reader, ReaderOptions, SegmentArray, SingleSegmentAllocator};
-use sap_interfaces::echo_capnp::request;
+use sap_interfaces::echo;
+use sap_interfaces::echo_capnp::{reply, request};
 use sap_loader::{self as loader, Parent, Slots};
-use sap_ring::{Consumer, Producer};
+use sap_ring::{as_bytes, as_bytes_mut, Consumer, Layout as RingLayout, Producer, RingError, PAGE};
 
 /// Slot `i` of the root CNode.
 fn slot(i: usize) -> SlotRef {
@@ -78,6 +79,7 @@ fn sap_main(boot_info: usize, _: usize, _: usize) -> ! {
     check_faults(info);
     check_process(info);
     check_ring(info);
+    check_echo_service(info);
     check_heap(info);
     check_capnp();
     println!("init: all checks passed");
@@ -877,92 +879,202 @@ fn check_process(info: &BootInfo) {
     println!("init: a second process, calls between address spaces and isolation behave");
 }
 
-/// Two processes over a pair of shared-memory rings with notifications as
-/// doorbells: 10,000 messages echoed by a second instance of the peer, with
-/// at most 48 in flight.
-fn check_ring(info: &BootInfo) {
-    let base = info.empty.start + 520;
-    let parent_untyped = untyped_at_least(info, 20);
+/// Where a peer maps its channel (init maps each at an address of its own).
+const CHANNEL_THERE: usize = 0x20_0000_0000;
+
+/// One end of a channel: a ring out and a ring back.
+struct Channel {
+    out: Producer,
+    back: Consumer,
+}
+
+/// Load a peer in `mode` and connect it by a channel of two rings with
+/// `data_pages` data pages each, mapped here at `here`. Everything is made
+/// from `parent.untyped`, so revoking it removes the peer and the channel.
+fn connect_peer(parent: &Parent, slots: &mut Slots, mode: usize, data_pages: usize, here: usize) -> Channel {
     let in_root = SlotRef { root: init_slot::CNODE, index: 0, depth: 0 };
-    let (mine, theirs, my_bell, their_bell, frames, copies) = (base, base + 1, base + 2, base + 3, base + 4, base + 8);
+    let mut take = || {
+        slots.next += 1;
+        slots.next - 1
+    };
+    // A notification each, and a badged capability to signal the other.
+    let (mine, theirs, my_bell, their_bell) = (take(), take(), take(), take());
+    expect("notification", untyped::retype(parent.untyped, object::NOTIFICATION, 0, in_root, mine, 1), Ok(()));
+    expect("notification", untyped::retype(parent.untyped, object::NOTIFICATION, 0, in_root, theirs, 1), Ok(()));
+    expect("my doorbell", slot(my_bell).mint_from(slot(mine), rights::WRITE, 1), Ok(()));
+    expect("their doorbell", slot(their_bell).mint_from(slot(theirs), rights::WRITE, 1), Ok(()));
+
+    let peer = loader::load(PEER, parent, slots, 255, [data_pages, 2, mode]);
+    let out = RingLayout::new(here, data_pages);
+    let back = RingLayout::new(here + out.pages() * PAGE, data_pages);
+    let offset = CHANNEL_THERE.wrapping_sub(here);
+    let (ro, rw) = (rights::READ, rights::READ | rights::WRITE);
+    // Each page is writable only by the side that owns its contents: init
+    // produces on `out` and consumes on `back`.
+    for (layout, init_produces) in [(out, true), (back, false)] {
+        for i in 0..layout.pages() {
+            let (frame, copy) = (slots.next, slots.next + 1);
+            slots.next += 2;
+            expect("ring page", untyped::retype(parent.untyped, object::FRAME_4K, 0, in_root, frame, 1), Ok(()));
+            expect("copy for the peer", slot(copy).copy_from(slot(frame), rights::ALL), Ok(()));
+            let init_writes = layout.producer_writes(i) == init_produces;
+            let va = layout.base + i * PAGE;
+            let new_table = || {
+                let table = slots::alloc().expect("slot");
+                untyped::retype(parent.untyped, object::PAGE_TABLE, 0, in_root, table, 1).map(|()| table)
+            };
+            let mapped = vspace::map_frame_with_tables(frame, init_slot::VSPACE, va, if init_writes { rw } else { ro }, attr::EXECUTE_NEVER, new_table);
+            expect("map here", mapped, Ok(()));
+            peer.map_frame(parent, slots, copy, va.wrapping_add(offset), if init_writes { ro } else { rw });
+        }
+    }
+    peer.give(parent, 1, theirs, rights::READ);
+    peer.give(parent, 2, peer.tcb, rights::ALL);
+    peer.give(parent, 3, my_bell, rights::WRITE);
+    peer.start();
+    // SAFETY: both rings are mapped here with the rights each end needs,
+    // and this thread is the only user of these ends.
+    unsafe { Channel { out: Producer::new(out, their_bell, mine), back: Consumer::new(back, their_bell, mine) } }
+}
+
+/// Untyped memory and slots for the channel checks; revoking the memory
+/// removes every peer and channel made from it.
+fn channel_resources(info: &BootInfo) -> (Parent, Slots) {
+    let first = slots::alloc_range(400).expect("slots");
     let parent = Parent {
         cnode: init_slot::CNODE,
         vspace: init_slot::VSPACE,
         asid_pool: init_slot::ASID_POOL,
         authority: init_slot::TCB,
-        untyped: parent_untyped,
+        untyped: untyped_at_least(info, 20),
         scratch: 0x38_0000_0000,
     };
-    let mut slots = Slots { next: base + 20, end: base + 300 };
+    (parent, Slots { next: first, end: first + 400 })
+}
 
-    // A notification each, and a badged capability to signal the other.
-    expect("notifications", untyped::retype(parent_untyped, object::NOTIFICATION, 0, in_root, mine, 2), Ok(()));
-    expect("my doorbell", slot(my_bell).mint_from(slot(mine), rights::WRITE, 1), Ok(()));
-    expect("their doorbell", slot(their_bell).mint_from(slot(theirs), rights::WRITE, 1), Ok(()));
-
-    // Four pages: ring A (init to peer) data and control, ring B (peer to
-    // init) data and control. Each side maps them with complementary
-    // rights: a page is writable only by the side that owns its contents.
-    expect("ring pages", untyped::retype(parent_untyped, object::FRAME_4K, 0, in_root, frames, 4), Ok(()));
-    for i in 0..4 {
-        expect("copy for the peer", slot(copies + i).copy_from(slot(frames + i), rights::ALL), Ok(()));
-    }
-    let (ro, rw) = (rights::READ, rights::READ | rights::WRITE);
-    let here = 0x28_0000_0000;
-    let peer_base = 0x20_0000_0000;
-    let mine_rights = [rw, ro, ro, rw];
-    let theirs_rights = [ro, rw, rw, ro];
-    let peer = loader::load(PEER, &parent, &mut slots, 255, [0, 2, 1]);
-    for i in 0..4 {
-        let va = here + i * 0x1000;
-        if i == 0 {
-            // Page tables for this process's ring region.
-            for _ in 0..2 {
-                let table = slots.next;
-                slots.next += 1;
-                let _ = untyped::retype(parent_untyped, object::PAGE_TABLE, 0, in_root, table, 1);
-                let _ = vspace::map_page_table(table, init_slot::VSPACE, va);
-            }
-        }
-        expect("map here", vspace::map_frame(frames + i, init_slot::VSPACE, va, mine_rights[i], attr::EXECUTE_NEVER), Ok(()));
-        peer.map_frame(&parent, &mut slots, copies + i, peer_base + i * 0x1000, theirs_rights[i]);
-    }
-    peer.give(&parent, 1, theirs, rights::READ);
-    peer.give(&parent, 2, peer.tcb, rights::ALL);
-    peer.give(&parent, 3, my_bell, rights::WRITE);
-    peer.start();
-
-    // SAFETY: the four pages are mapped here with the rights the ring needs,
-    // and this thread is the only user of this end.
-    let (mut out, mut back) = unsafe {
-        (Producer::new(here, here + 0x1000, their_bell, mine), Consumer::new(here + 0x2000, here + 0x3000, their_bell, mine))
-    };
-    const MESSAGES: usize = 10_000;
-    const WINDOW: usize = 48;
-    let (mut sent, mut received, mut checksum) = (0, 0, 0usize);
-    let mut words = [0usize; 7];
+/// Two processes over a channel of two rings, with notifications as
+/// doorbells: 10,000 word records echoed by a peer, with at most 48 in
+/// flight.
+fn check_ring(info: &BootInfo) {
+    let (parent, mut slots) = channel_resources(info);
+    let Channel { mut out, mut back } = connect_peer(&parent, &mut slots, 1, 1, 0x28_0000_0000);
+    const MESSAGES: u64 = 10_000;
+    const WINDOW: u64 = 48;
+    let (mut sent, mut received, mut checksum) = (0u64, 0u64, 0u64);
+    let mut words = [0u64; 2];
     while received < MESSAGES {
         while sent < MESSAGES && sent - received < WINDOW {
-            out.send(&[sent, sent * 3]);
+            out.send(echo::WORDS, sent, as_bytes(&[sent, sent * 3]));
             sent += 1;
         }
-        let n = back.recv(&mut words);
-        assert_eq!(n, 2, "echo length");
-        assert_eq!((words[0], words[1]), (received + 1, received * 3 + 1), "echo out of order or corrupted");
+        let record = back.recv(&mut words).expect("ring");
+        assert_eq!((record.kind, record.id, record.len), (echo::WORDS, received, 16), "echo record");
+        assert_eq!(words, [received + 1, received * 3 + 1], "echo out of order or corrupted");
         checksum = checksum.wrapping_add(words[0]);
         received += 1;
     }
-    out.send(&[usize::MAX]);
-    assert_eq!(back.recv(&mut words), 1, "the peer should echo the stop message");
+    out.send(echo::STOP, 0, &[]);
+    assert_eq!(back.recv(&mut words).map(|r| r.kind), Ok(echo::STOP), "the peer should echo the stop record");
     assert_eq!(checksum, MESSAGES * (MESSAGES + 1) / 2, "checksum");
     sys::yield_now(); // let the peer report and stop
     println!(
-        "init: {MESSAGES} messages round trip over shared-memory rings; init slept {} time(s) waiting for echoes, {} for space",
+        "init: {MESSAGES} records round trip over shared-memory rings; init slept {} time(s) waiting for echoes, {} for space",
         back.sleeps, out.sleeps
     );
-
-    expect("revoke", slot(parent_untyped).revoke(), Ok(()));
+    expect("revoke", slot(parent.untyped).revoke(), Ok(()));
+    slots::free_range(slots.end - 400, 400);
     println!("init: shared-memory rings between processes behave");
+}
+
+/// The request `init` sends as number `i`: its text, numbers and blob grow
+/// and shrink with `i`, so records of many sizes cross the ring.
+fn echo_request<'a, 'b>(i: u64, scratch: &'a mut SingleSegmentAllocator<'b>) -> Builder<&'a mut SingleSegmentAllocator<'b>> {
+    let mut message = Builder::new(scratch);
+    let mut request = message.init_root::<request::Builder>();
+    request.set_id(i);
+    let text = &"sapabilities: capabilities everywhere, Cap'n Proto across the rings. "[..(i as usize * 7) % 70];
+    request.set_text(text);
+    let mut numbers = request.reborrow().init_numbers((i % 50) as u32);
+    for k in 0..i % 50 {
+        numbers.set(k as u32, (k * i) as u32);
+    }
+    let blob_len = (i as usize * 37) % 900;
+    request.init_blob(blob_len as u32).iter_mut().enumerate().for_each(|(k, b)| *b = (k as u64 + i) as u8);
+    message
+}
+
+/// Check `reply` against request number `i`.
+fn check_reply(i: u64, body: &[u8]) {
+    let segments = [body];
+    let reader = Reader::new(SegmentArray::new(&segments), ReaderOptions::new());
+    let reply = reader.get_root::<reply::Reader>().expect("reply");
+    let text = &"sapabilities: capabilities everywhere, Cap'n Proto across the rings. "[..(i as usize * 7) % 70];
+    assert_eq!(reply.get_id(), i);
+    assert!(reply.get_text().unwrap().to_str().unwrap().chars().eq(text.chars().rev()), "reversed text");
+    assert_eq!(reply.get_sum(), (0..i % 50).map(|k| (k * i) as u32 as u64).sum::<u64>(), "sum");
+    let blob_len = (i * 37) % 900;
+    assert_eq!(reply.get_blob_length() as u64, blob_len, "blob length");
+    assert_eq!(reply.get_blob_sum(), (0..blob_len).map(|k| (k + i) as u8 as u64).sum::<u64>(), "blob sum");
+}
+
+/// The echo interface between processes: Cap'n Proto requests of many sizes
+/// out, replies back, read from a private copy or (trusting the peer) in
+/// place; a malformed request, one too long for the peer, and a peer that
+/// breaks the ring's rules.
+fn check_echo_service(info: &BootInfo) {
+    let (parent, mut slots) = channel_resources(info);
+    let Channel { mut out, mut back } = connect_peer(&parent, &mut slots, 2, 2, 0x28_0000_0000);
+    let mut scratch_words = [0u64; 512];
+    let mut scratch = SingleSegmentAllocator::new(as_bytes_mut(&mut scratch_words));
+    let mut reply_words = [0u64; 512];
+    const REQUESTS: u64 = 300;
+    const WINDOW: u64 = 6;
+    let (mut sent, mut received, mut bytes) = (0, 0, 0);
+    while received < REQUESTS {
+        while sent < REQUESTS && sent - received < WINDOW {
+            let message = echo_request(sent, &mut scratch);
+            let segment = message.get_segments_for_output()[0];
+            bytes += segment.len();
+            out.send(echo::REQUEST, sent, segment);
+            sent += 1;
+        }
+        if received % 2 == 0 {
+            let record = back.recv(&mut reply_words).expect("ring");
+            assert_eq!((record.kind, record.id), (echo::REPLY, received), "reply record");
+            check_reply(received, &as_bytes(&reply_words)[..record.len]);
+        } else {
+            // SAFETY: the peer is this test's own program, which never
+            // writes a record after publishing it.
+            let record = unsafe { back.recv_in_place(|record, body| { check_reply(received, body); record }) }.expect("ring");
+            assert_eq!((record.kind, record.id), (echo::REPLY, received), "reply record");
+        }
+        received += 1;
+    }
+    // Not Cap'n Proto: the peer answers with an error and carries on.
+    out.send(echo::REQUEST, 1000, &[0xff; 40]);
+    assert_eq!(back.recv(&mut reply_words).map(|r| (r.kind, r.id)), Ok((echo::ERROR, 1000)), "a malformed request");
+    // Longer than the peer's 2 KiB buffer: skipped, with an error.
+    out.send(echo::REQUEST, 1001, &[0; 3000]);
+    assert_eq!(back.recv(&mut reply_words).map(|r| (r.kind, r.id)), Ok((echo::ERROR, 1001)), "an oversized request");
+    out.send(echo::STOP, 0, &[]);
+    assert_eq!(back.recv(&mut reply_words).map(|r| r.kind), Ok(echo::STOP), "the stop record");
+    sys::yield_now();
+    println!("init: {REQUESTS} Cap'n Proto requests ({} KiB) answered across processes, read copied and in place", bytes / 1024);
+
+    // A peer that answers with garbage, then publishes a record longer than
+    // what it published: the garbage fails to parse, the record is refused.
+    let Channel { mut out, mut back } = connect_peer(&parent, &mut slots, 3, 1, 0x28_0001_0000);
+    let message = echo_request(1, &mut scratch);
+    out.send(echo::REQUEST, 1, message.get_segments_for_output()[0]);
+    drop(message);
+    let record = back.recv(&mut reply_words).expect("ring");
+    let segments = [&as_bytes(&reply_words)[..record.len]];
+    let reader = Reader::new(SegmentArray::new(&segments), ReaderOptions::new());
+    assert!(reader.get_root::<reply::Reader>().and_then(|r| r.get_text().map(drop)).is_err(), "a garbage reply should not parse");
+    assert_eq!(back.recv(&mut reply_words), Err(RingError::Corrupt), "a record past what was published");
+    expect("revoke", slot(parent.untyped).revoke(), Ok(()));
+    slots::free_range(slots.end - 400, 400);
+    println!("init: Cap'n Proto over rings refuses malformed and oversized requests and a lying peer");
 }
 
 const HEAP_ROUNDS: usize = 40_000;

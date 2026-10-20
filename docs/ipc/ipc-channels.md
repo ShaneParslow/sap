@@ -1,7 +1,7 @@
 ---
 status: proposed
 summary: A channel is two single-producer/single-consumer rings in shared memory, one per direction. Covers slot layout, atomic publish, backpressure when full, message size limits, streaming with credits, and the copy-small/transfer-large rule.
-updated: 2026-10-08
+updated: 2026-10-19
 sources: ["[[2026-09-27-future-of-computing#m13|§m13]]", "[[2026-09-27-future-of-computing#m14|§m14]]", "[[2026-09-27-future-of-computing#m15|§m15]]", "[[2026-09-27-future-of-computing#m17|§m17]]", "[[2026-09-27-future-of-computing#m25|§m25]]"]
 ---
 
@@ -11,7 +11,7 @@ A channel connects two trust domains on one machine. That shared-memory channels
 
 
 > [!note] Built
-> A first version exists: rings of up to seven-word messages between two processes, with the layout and waiting described here ([[ipc-rings]]).
+> Built as described here, with the details settled by building ([[ipc-rings]]): each direction's indices on pages of their own, records of a two-word header (length, kind, an id matching replies to requests; no sequence number or capability count yet) and an inline body of up to half the ring, padding instead of wrapping, and bodies copied out on receive. Large payloads as transferred buffers are still to come (M5).
 
 ## Layout
 

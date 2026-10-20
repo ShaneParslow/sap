@@ -20,7 +20,7 @@ Tooling: QEMU's `virt` machine loads its bundled OpenSBI by default (`-bios defa
 The order agreed on 2026-10-19 ([[2026-10-16-2c1ac53c#m10|§m10]]), from the items below:
 1. ~~I4, splitting `sap-rt`~~ (done).
 2. ~~I5, provenance hygiene in user code~~ (done).
-3. **M5**, Cap'n Proto messages across the rings; M7's bootstrap message is itself a Cap'n Proto message.
+3. **M5**, Cap'n Proto messages across the rings; M7's bootstrap message is itself a Cap'n Proto message. In progress: schemas and bindings, variable-length records, copied and trusted in-place reads, and the echo service are built ([[ipc-rings]]); page transfer for large messages, with the kernel's exclusivity check, and the copy/transfer measurement remain.
 4. **M7**, the process manager: programs start their runtime from the bootstrap message, and the loader moves onto the runtime's slot allocator.
 5. **I2**, `std`, once thread-local storage, a log service and the process ABI exist.
 

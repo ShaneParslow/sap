@@ -12,4 +12,6 @@ bench = false
 [dependencies]
 # No heap: the peer doesn't allocate.
 sap-rt = { path = "../rt", default-features = false }
+capnp = { version = "0.27.2", default-features = false }
+sap-interfaces = { path = "../interfaces" }
 sap-ring = { path = "../ring" }
