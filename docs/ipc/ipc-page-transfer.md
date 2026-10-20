@@ -84,7 +84,12 @@ What does carry over is the shape: as built, the cost of a transfer grows with t
 ## Open questions
 
 > [!question] Open
-> - **A per-message cost.** The options are invocations over a range of slots (identify, map or unmap 16 frames in one call), 2 MiB frames for large messages, or a kernel operation that moves a frame's capability and its mapping together. Which of these is worth the kernel complexity depends on hardware numbers. CHERI removes the mapping changes altogether ([[ipc-paging-vs-cheri]]).
+> - **A per-message cost.** Six system calls per page is the main cost ([[2026-10-16-2c1ac53c#m26|§m26]]). In order of ambition, the options are:
+>   - range invocations: identify-and-map 16 frames in one call, which also checks exclusivity, and unmap them in one. That makes it four calls per message plus the call and reply.
+>   - remapping as part of the IPC: frames named in a call are unmapped from the sender, checked, and mapped read-only into a window the receiver named, and the reply maps them back. That leaves only the call and the reply, plus the TLB flush that unmapping needs. It is L4's model, in which IPC carries map and grant items for flexpages; seL4 dropped it for capability transfer.
+>   - 2 MiB frames for large messages.
+>
+>   Which of these is worth the kernel complexity depends on hardware numbers. CHERI removes the mapping changes altogether ([[ipc-paging-vs-cheri]]).
 > - **Building in place.** The sender writes into the frames, but it has to know the message's length before it maps them. Building a Cap'n Proto message directly in the frames needs a size estimate, or mapping all 16 frames.
 > - **Messages over 64 KiB:** several calls, larger frames, or a raised capability limit.
 > - **A receiver that blocks.** The receiver receives the announced call with a blocking receive, so a sender that publishes the record and never calls stalls that connection's receiver. Binding the receiver's notification to its thread, so that one receive waits for both rings and calls ([[kernel-ipc#Bound notifications]]), would remove that.
