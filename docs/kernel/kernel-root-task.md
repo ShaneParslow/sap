@@ -1,8 +1,8 @@
 ---
 status: implemented
 summary: The one program the kernel starts by itself, as in seL4 - user/init, built on the libsap runtime as a static position-independent ELF and embedded in the kernel; how the kernel loads it (contiguous frames, relative relocations, W^X segments, a stack, IPC buffer and boot-info page) and starts it as a thread; and the debug syscalls it still uses.
-updated: 2026-10-16
-code: [kernel/build.rs, kernel/root_task.rs, kernel/syscall.rs, abi/lib.rs, user/init/main.rs, user/init/build.rs, user/.cargo/config.toml, user/libsap/lib.rs, user/libsap/debug.rs]
+updated: 2026-10-19
+code: [kernel/build.rs, user/build_program.rs, user/riscv64gc-unknown-sap.json, kernel/root_task.rs, kernel/syscall.rs, abi/lib.rs, user/init/main.rs, user/init/build.rs, user/.cargo/config.toml, user/libsap/lib.rs, user/libsap/debug.rs]
 verified: 7123956
 sources: ["[[2026-10-08-22c3947b-wiki-setup]]"]
 ---
@@ -13,9 +13,9 @@ The kernel loads exactly one program, the **root task**, as seL4 does. Every oth
 
 ## Building it
 
-The root task is `user/init`, a crate in the workspace ([[kernel-boot-riscv#Building and running]]). The kernel's build script (`kernel/build.rs`) runs Cargo on it, always in release mode, with a build directory of its own inside the kernel's build output (sharing the workspace's would deadlock on its lock), and passes the result's path to the kernel, which embeds it with `include_bytes!` (`kernel/root_task.rs:25`). The script runs Cargo from the init crate's directory, so `user/.cargo/config.toml`, which makes every user program position-independent, applies; it also clears the outer build's compiler flags, which would otherwise override it. Building a user crate any other way, such as `cargo check --workspace` for an editor, doesn't get those flags: fine for checking, but its image wouldn't link as intended. It reruns whenever anything under `user/` or `abi/` changes; `user/init/build.rs` builds the second program the same way ([[prog-libsap#The second program]]).
+The root task is `user/init`, a crate in the workspace ([[kernel-boot-riscv#Building and running]]). The kernel's build script (`kernel/build.rs`) builds it in release mode with the shared `build_user_program` helper ([[prog-rust-toolchain#Building a program from a build script]]) and passes the result's path to the kernel, which embeds it with `include_bytes!` (`kernel/root_task.rs:25`). `user/init/build.rs` builds the second program the same way ([[prog-libsap#The second program]]).
 
-`user/init` is linked as a **static position-independent executable** (`-C relocation-model=pie`, `--pie --no-dynamic-linker`), in line with the decision that all code is position-independent ([[prog-loading]]). Each segment starts on its own page (`-z separate-loadable-segments`), so segments can be mapped with different permissions. The precompiled `core` library for this target isn't position-independent, so its vtables need relocations in read-only segments; `-z notext` allows that, and the loader applies relocations before mapping anything (`user/init/build.rs`).
+`user/init` is built for sap's own target as a **static position-independent executable**, in line with the decision that all code is position-independent ([[prog-loading]]), with `core` built from source so that it is position-independent too ([[prog-rust-toolchain]]). Each segment starts on its own page (`-z separate-loadable-segments`), so segments can be mapped with different permissions, and every relocation is in the writable segment: the linker is told to refuse any other (`-z text`).
 
 It is built on **`libsap`** ([[prog-libsap]]), the user runtime. The kernel starts the root task by the same convention as every other thread: `tp` at its IPC buffer, and here `a0` the boot-info page's address.
 

@@ -1,0 +1,7 @@
+# One pinned nightly for everything: user programs need a custom target and
+# core built from source (both unstable), and the kernel uses the same
+# compiler so the two never disagree. Update deliberately.
+[toolchain]
+channel = "nightly-2026-10-13"
+components = ["rust-src", "rustfmt", "clippy"]
+targets = ["riscv64gc-unknown-none-elf"]

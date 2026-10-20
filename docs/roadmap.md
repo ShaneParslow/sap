@@ -1,7 +1,7 @@
 ---
 status: hub
 summary: Ordered work items - the kernel decision, the bring-up milestones on RISC-V, and design exercises that can run in parallel.
-updated: 2026-10-13
+updated: 2026-10-19
 sources: ["[[2026-09-27-future-of-computing#m9|§m9]]", "[[2026-09-27-future-of-computing#m11|§m11]]", "[[2026-09-27-future-of-computing#m28|§m28]]", "[[2026-09-27-future-of-computing#m29|§m29]]"]
 ---
 
@@ -52,8 +52,7 @@ These can happen at any time and feed the milestones above.
 
 ## Infrastructure
 
-- **I1. A sap Rust target:** a target specification with position-independent code, a pinned nightly, and `core`/`alloc` built from source, removing the `-z notext` workaround. Before M7 ([[prog-rust-toolchain]]).
-- **I2. A `std` platform layer** for sap, once notifications (M4) and a log service exist ([[prog-rust-toolchain#The standard library]]).
+- **I2. A `std` platform layer** for sap: a heap allocator first (M5 needs `alloc`), then thread-local storage, then `std` once a log service exists ([[prog-rust-std]]).
 - **I3. seL4-style zombie capabilities:** iterative, preemptible deletion, before untrusted programs run ([[kernel-capabilities#Delete, finalise, revoke]]).
 
 ## Done
@@ -63,3 +62,4 @@ These can happen at any time and feed the milestones above.
 - M2 (2026-10-11): traps and timer ([[kernel-traps-riscv]]; `2420fdc`, `2c41a33`); boot information from the device tree and failure exit status (`4629d35`, `2799abb`), made architecture-neutral (`e875153`) ([[kernel-boot-riscv]]); Sv39 paging with the kernel in the upper half (`6325cb4`, [[kernel-memory-riscv]]); user mode with a root task loaded by the kernel (`1be5924`, [[kernel-root-task]]). CSR and SBI access moved to the `riscv` and `sbi-rt` crates (`ff1fdea`).
 - M3 (2026-10-13): threads and a priority scheduler ([[kernel-threads]]; `55838c6`); capability spaces, the derivation tree, `CALL` and CNode operations, the root task's initial capabilities (`64cda48`); untyped retype (`0c39997`); page-table, frame and ASID invocations with hardware ASIDs (`e69595e`); thread invocations, so userspace creates and schedules threads ([[kernel-capabilities]]). Shared `sap-abi` crate and `libsap` runtime.
 - M4 (2026-10-13): notifications with badges (`ed24f74`); endpoints with MCS-style reply objects and bound notifications (`48f0571`); capability transfer, up to 16 per message (`a7e19d3`); fault delivery (`1b77a5f`); a userspace ELF loader and a second process (`810d575`); shared-memory rings between two processes ([[kernel-ipc]], [[prog-libsap]], [[ipc-rings]]).
+- I1 (2026-10-19): one pinned nightly for everything, and sap's own target for user programs with `core`, `alloc` and `compiler_builtins` built from source; `-z notext` removed ([[prog-rust-toolchain]]).

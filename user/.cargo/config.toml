@@ -1,6 +1,13 @@
-# User programs are static position-independent executables; the linker
-# arguments are in each program's build.rs. Applies to builds run from
-# inside user/, which is how kernel/build.rs and user/init/build.rs build
-# them, not to the kernel.
+# User programs build for sap's own target: static position-independent
+# executables, with core, alloc and compiler_builtins built from source so
+# they are position-independent too (prog-rust-toolchain in the wiki).
+# Applies to builds run from inside user/, which is how kernel/build.rs and
+# user/init/build.rs build them.
 [build]
-rustflags = ["-C", "relocation-model=pie"]
+target = "riscv64gc-unknown-sap.json"
+
+[unstable]
+json-target-spec = true
+build-std = ["core", "alloc", "compiler_builtins"]
+# The memory functions (memcpy and friends) that a hosted target gets from libc.
+build-std-features = ["compiler-builtins-mem"]

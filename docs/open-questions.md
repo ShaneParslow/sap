@@ -1,7 +1,7 @@
 ---
 status: hub
 summary: Every unresolved question in the wiki, grouped by whether it blocks the roadmap, each linked to the page that holds the detail.
-updated: 2026-10-11
+updated: 2026-10-19
 ---
 
 # Open questions
@@ -43,7 +43,7 @@ Grouped by urgency, then ordered by how much of the design each one affects. Det
 25. When to start an x86-64 port (Limine or a custom UEFI loader), and whether Arm comes first. → [[system-portability]]
 26. Memory topology: attribute vocabulary, migration, placement versus quotas. → [[hw-memory-topology]]
 27. Per-process or shared address spaces, decided per deployment; where to draw boundaries on CHERI hardware. → [[prog-loading#Address spaces]]
-28. Rust target details: whether the kernel moves to the pinned nightly, distributing the target spec, `libsap` versus the `std` platform layer. → [[prog-rust-toolchain]]
+28. Rust target details: distributing the target spec to other people's crates, `libsap` versus the `std` platform layer. → [[prog-rust-toolchain]], [[prog-rust-std]]
 29. Whether sap defines a canonical program IR at all; signatures on code objects. → [[prog-representation]], [[prog-loading]]
 30. Attestation and transparency logs in the core or only as applications. → [[vision-attestation-and-verification]]
 31. Registry and name directory: who runs them, policy for choosing implementations, declarative configuration. → [[system-package-registry]]

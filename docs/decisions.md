@@ -1,7 +1,7 @@
 ---
 status: log
 summary: Dated log of decisions and reversals, each with its reason and source. Topic pages state the current conclusion; this page records how it was reached.
-updated: 2026-10-11
+updated: 2026-10-19
 ---
 
 # Decisions
@@ -10,6 +10,8 @@ Newest first. "Adopted" means the human chose it; "proposed" entries are recorde
 
 | Date | Decision | Why | Source | Pages |
 |---|---|---|---|---|
+| 2026-10-19 | One pinned nightly Rust compiler for everything, kernel included; user programs build for sap's own target with `core` built from source. | Uniformity; the custom target and `build-std` need nightly anyway. | [[2026-10-16-2c1ac53c#m4\|§m4]] | [[prog-rust-toolchain]] |
+| 2026-10-16 | The repository is one Cargo workspace. | rust-analyzer couldn't see the user programs; one lockfile and one set of profiles. | [[2026-10-16-2c1ac53c#m2\|§m2]] | [[kernel-boot-riscv]] |
 | 2026-10-13 | Replies use MCS-style reply objects: a server passes a reply object to `Recv`; `Call` links it to the caller. | Time donation and scheduling contexts (planned) need it; avoids redesigning Call/Reply later. | [[2026-10-08-22c3947b#m34\|§m34]] | [[kernel-objects-and-syscalls]], [[kernel-scheduling]] |
 | 2026-10-13 | Notifications get their own syscalls (`Signal`, `Wait`, `Poll`) rather than reusing `Send`/`Recv`. | Clarity. | [[2026-10-08-22c3947b#m34\|§m34]] | [[kernel-objects-and-syscalls]] |
 | 2026-10-13 | A message carries up to 16 capabilities, each moved or copied, into a slot range the receiver names. *Diverges* from seL4 (one, copied). | Receiver can't be flooded (its range bounds delivery); a fixed bound keeps kernel latency bounded; bigger batches go as a CNode. | [[2026-10-08-22c3947b#m34\|§m34]] | [[ipc-cap-transfer]] |

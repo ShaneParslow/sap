@@ -9,7 +9,7 @@ sources: ["[[2026-10-08-22c3947b-wiki-setup]]"]
 
 # libsap, the user runtime
 
-`libsap` (`user/libsap/`) is the Rust library every sap program builds on today: the equivalent of a C runtime plus thin wrappers over the kernel's interface. It is `no_std` and uses the shared `sap-abi` crate for every number and layout, so it can't drift from the kernel ([[kernel-threads#Syscalls]]). It will grow into the platform layer for Rust's `std` ([[prog-rust-toolchain#The standard library]]).
+`libsap` (`user/libsap/`) is the Rust library every sap program builds on today: the equivalent of a C runtime plus thin wrappers over the kernel's interface. It is `no_std` and uses the shared `sap-abi` crate for every number and layout, so it can't drift from the kernel ([[kernel-threads#Syscalls]]). It will grow into the platform layer for Rust's `std` ([[prog-rust-std]]).
 
 ## Thread start convention
 
