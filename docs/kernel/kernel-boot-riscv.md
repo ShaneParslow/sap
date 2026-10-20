@@ -1,8 +1,8 @@
 ---
 status: implemented
 summary: How the kernel boots on QEMU virt riscv64 today - OpenSBI enters _start in S-mode, the entry code turns on a boot page table and jumps to the kernel's upper-half address, riscv_start turns the device tree into architecture-neutral boot information and sets up traps, paging and the timer, and kmain runs boot checks and starts the root task. Also the console, log and shutdown.
-updated: 2026-10-16
-code: [Cargo.toml, .cargo/config.toml, kernel/Cargo.toml, kernel/build.rs, kernel/arch/riscv/linker.ld, kernel/arch/riscv/entry.rs, kernel/arch/riscv/mod.rs, kernel/arch/riscv/sbi.rs, kernel/arch/riscv/test_device.rs, kernel/arch/mod.rs, kernel/boot.rs, kernel/devicetree.rs, kernel/console.rs, kernel/log.rs, kernel/main.rs]
+updated: 2026-10-19
+code: [rust-toolchain.toml, Cargo.toml, .cargo/config.toml, kernel/Cargo.toml, kernel/build.rs, kernel/arch/riscv/linker.ld, kernel/arch/riscv/entry.rs, kernel/arch/riscv/mod.rs, kernel/arch/riscv/sbi.rs, kernel/arch/riscv/test_device.rs, kernel/arch/mod.rs, kernel/boot.rs, kernel/devicetree.rs, kernel/console.rs, kernel/log.rs, kernel/main.rs]
 verified: 810d575
 sources: ["[[2026-10-08-22c3947b-wiki-setup]]"]
 ---
@@ -13,7 +13,7 @@ What the kernel does from firmware hand-off until the root task runs, as impleme
 
 ## Building and running
 
-The repository is one Cargo workspace (`Cargo.toml`): the kernel, the shared `abi` crate, `libsap` and the user programs, with one lockfile and one set of profiles (`panic = "abort"`). From the top or from `kernel/`: `cargo build`, or `cargo run` to boot in QEMU; the kernel is the default member. `.cargo/config.toml` sets the target, `riscv64gc-unknown-none-elf`, and the runner, `qemu-system-riscv64 -machine virt -nographic -bios default -kernel`, so QEMU's bundled OpenSBI is the firmware. `kernel/build.rs` passes the linker script to the linker and builds `user/init`, the root task, so one `cargo run` builds and boots everything ([[kernel-root-task]]).
+The repository is one Cargo workspace (`Cargo.toml`): the kernel, the shared `abi` crate, `libsap` and the user programs, with one lockfile and one set of profiles (`panic = "abort"`). From the top or from `kernel/`: `cargo build`, or `cargo run` to boot in QEMU; the kernel is the default member. `.cargo/config.toml` sets the target, `riscv64gc-unknown-none-elf`, and the runner, `qemu-system-riscv64 -machine virt -nographic -bios default -kernel`, so QEMU's bundled OpenSBI is the firmware. `kernel/build.rs` passes the linker script to the linker and builds `user/init`, the root task, so one `cargo run` builds and boots everything ([[kernel-root-task]]). The compiler is the nightly pinned in `rust-toolchain.toml`, which rustup installs on first use ([[prog-rust-toolchain]]).
 
 Dependencies, all `no_std`: `fdt` (pinned to 0.1.5) for the device tree, `riscv` for CSR access and trap causes, `sbi-rt` for SBI calls, `bitflags`, and `elf` for loading the root task.
 
