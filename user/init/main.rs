@@ -15,12 +15,12 @@ use alloc::vec::Vec;
 use core::alloc::Layout;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use libsap::abi::{attr, error, fault, init_slot, object, recv_source, reg, rights, BootInfo};
-use libsap::address::mapped;
-use libsap::cnode::SlotRef;
-use libsap::sys::Error;
-use libsap::runtime::{self, Resources};
-use libsap::{debug, heap, ipc, notification, println, slots, sync, sys, tcb, untyped, vspace};
+use sap_rt::abi::{attr, error, fault, init_slot, object, recv_source, reg, rights, BootInfo};
+use sap_rt::address::mapped;
+use sap_rt::cnode::SlotRef;
+use sap_rt::sys::Error;
+use sap_rt::runtime::{self, Resources};
+use sap_rt::{debug, heap, ipc, notification, println, slots, sync, sys, tcb, untyped, vspace};
 use sap_loader::{self as loader, Parent, Slots};
 use sap_ring::{Consumer, Producer};
 

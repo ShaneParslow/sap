@@ -11,5 +11,5 @@ bench = false
 
 [dependencies]
 # No heap: the peer doesn't allocate.
-libsap = { path = "../libsap", default-features = false }
+sap-rt = { path = "../rt", default-features = false }
 sap-ring = { path = "../ring" }

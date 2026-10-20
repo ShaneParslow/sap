@@ -10,6 +10,6 @@ test = false
 bench = false
 
 [dependencies]
-libsap = { path = "../libsap" }
+sap-rt = { path = "../rt" }
 sap-loader = { path = "../loader" }
 sap-ring = { path = "../ring" }

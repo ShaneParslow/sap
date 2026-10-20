@@ -1,5 +1,5 @@
 [package]
-name = "libsap"
+name = "sap-rt"
 version = "0.1.0"
 edition = "2024"
 
@@ -16,6 +16,6 @@ default = ["heap"]
 heap = ["dep:linked_list_allocator"]
 
 [dependencies]
-# The heap's free list; without its spinlock, since libsap has its own lock.
+# The heap's free list; without its spinlock, since sap-rt has its own lock.
 linked_list_allocator = { version = "0.10.6", default-features = false, optional = true }
 sap-sys = { path = "../sys" }

@@ -30,7 +30,7 @@ Three things often mistaken for capabilities are not:
 
 Two sets of capabilities arrive at startup, in fixed slots of the initial table:
 
-**Runtime capabilities**, which every process gets and the program never names: its own capability table, address space and main thread; a quota of untyped memory (its memory budget, from which the runtime allocates frames and new threads); its IPC buffer; and the connection to its launcher, over which the bootstrap message arrives and exit is reported. These belong to the language runtime (`libsap` for Rust). The program doesn't import them, any more than a Linux program imports its stack.
+**Runtime capabilities**, which every process gets and the program never names: its own capability table, address space and main thread; a quota of untyped memory (its memory budget, from which the runtime allocates frames and new threads); its IPC buffer; and the connection to its launcher, over which the bootstrap message arrives and exit is reported. These belong to the language runtime (`sap-rt` for Rust). The program doesn't import them, any more than a Linux program imports its stack.
 
 **Declared imports**, the program's *world*: a Cap'n Proto struct whose fields are the capabilities and values it needs, delivered as the bootstrap message ([[kernel-process-model]]). Most programs import only RPC interfaces:
 

@@ -10,8 +10,8 @@
 #![deny(implicit_provenance_casts, integer_to_ptr_transmutes)]
 
 use sap_ring::{Consumer, Producer, MAX_WORDS};
-use libsap::address::mapped;
-use libsap::{ipc, println, tcb};
+use sap_rt::address::mapped;
+use sap_rt::{ipc, println, tcb};
 
 /// An address mapped only in the root task's address space.
 const PARENT_ONLY: usize = 0x38_0000_0000;

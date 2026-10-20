@@ -36,17 +36,9 @@ checksum = "784a4df722dc6267a04af36895398f59d21d07dce47232adf31ec0ff2fa45e67"
 name = "init"
 version = "0.1.0"
 dependencies = [
- "libsap",
  "sap-loader",
  "sap-ring",
-]
-
-[[package]]
-name = "libsap"
-version = "0.1.0"
-dependencies = [
- "linked_list_allocator",
- "sap-sys",
+ "sap-rt",
 ]
 
 [[package]]
@@ -65,8 +57,8 @@ checksum = "2ee67f1008b1ba2321834326597b8e186293b049a023cdef258527550b9935b4"
 name = "peer"
 version = "0.1.0"
 dependencies = [
- "libsap",
  "sap-ring",
+ "sap-rt",
 ]
 
 [[package]]
@@ -116,6 +108,14 @@ dependencies = [
 name = "sap-ring"
 version = "0.1.0"
 dependencies = [
+ "sap-sys",
+]
+
+[[package]]
+name = "sap-rt"
+version = "0.1.0"
+dependencies = [
+ "linked_list_allocator",
  "sap-sys",
 ]
 

@@ -1,8 +1,8 @@
 ---
 status: implemented
-summary: The one program the kernel starts by itself, as in seL4 - user/init, built on the libsap runtime as a static position-independent ELF and embedded in the kernel; how the kernel loads it (contiguous frames, relative relocations, W^X segments, a stack, IPC buffer and boot-info page) and starts it as a thread; and the debug syscalls it still uses.
+summary: The one program the kernel starts by itself, as in seL4 - user/init, built on the sap-rt runtime as a static position-independent ELF and embedded in the kernel; how the kernel loads it (contiguous frames, relative relocations, W^X segments, a stack, IPC buffer and boot-info page) and starts it as a thread; and the debug syscalls it still uses.
 updated: 2026-10-19
-code: [kernel/build.rs, user/build_program.rs, user/riscv64gc-unknown-sap.json, kernel/root_task.rs, kernel/syscall.rs, abi/lib.rs, user/init/main.rs, user/init/build.rs, user/.cargo/config.toml, user/libsap/lib.rs, user/libsap/debug.rs]
+code: [kernel/build.rs, user/build_program.rs, user/riscv64gc-unknown-sap.json, kernel/root_task.rs, kernel/syscall.rs, abi/lib.rs, user/init/main.rs, user/init/build.rs, user/.cargo/config.toml, user/rt/lib.rs, user/rt/debug.rs]
 verified: f064b02
 sources: ["[[2026-10-08-22c3947b-wiki-setup]]"]
 ---
@@ -13,11 +13,11 @@ The kernel loads exactly one program, the **root task**, as seL4 does. Every oth
 
 ## Building it
 
-The root task is `user/init`, a crate in the workspace ([[kernel-boot-riscv#Building and running]]). The kernel's build script (`kernel/build.rs`) builds it in release mode with the shared `build_user_program` helper ([[prog-rust-toolchain#Building a program from a build script]]) and passes the result's path to the kernel, which embeds it with `include_bytes!` (`kernel/root_task.rs:25`). `user/init/build.rs` builds the second program the same way ([[prog-libsap#The second program]]).
+The root task is `user/init`, a crate in the workspace ([[kernel-boot-riscv#Building and running]]). The kernel's build script (`kernel/build.rs`) builds it in release mode with the shared `build_user_program` helper ([[prog-rust-toolchain#Building a program from a build script]]) and passes the result's path to the kernel, which embeds it with `include_bytes!` (`kernel/root_task.rs:25`). `user/init/build.rs` builds the second program the same way ([[prog-runtime#The second program]]).
 
 `user/init` is built for sap's own target as a **static position-independent executable**, in line with the decision that all code is position-independent ([[prog-loading]]), with `core` built from source so that it is position-independent too ([[prog-rust-toolchain]]). Each segment starts on its own page (`-z separate-loadable-segments`), so segments can be mapped with different permissions, and every relocation is in the writable segment: the linker is told to refuse any other (`-z text`).
 
-It is built on **`libsap`** ([[prog-libsap]]), the user runtime. The kernel starts the root task by the same convention as every other thread: `tp` at its IPC buffer, and here `a0` the boot-info page's address.
+It is built on **`sap-rt`** ([[prog-runtime]]), the user runtime. The kernel starts the root task by the same convention as every other thread: `tp` at its IPC buffer, and here `a0` the boot-info page's address.
 
 ## Loading it
 
@@ -42,7 +42,7 @@ Until capability invocations exist (M3), two temporary calls stand in, like seL4
 | `0x100` | `DEBUG_PUTCHAR(byte)` | prints one byte on the kernel console |
 | `0x101` | `DEBUG_HALT(failure)` | logs and shuts down; nonzero reports failure |
 
-Unknown numbers log a warning and return `usize::MAX`. `user/init` prints through `DEBUG_PUTCHAR` (via `libsap`'s console), runs its checks ([[kernel-capabilities#Tests]]), and ends with `DEBUG_HALT`. Its formatting code reaches vtables through relocated pointers, so the output itself shows the relocations were applied.
+Unknown numbers log a warning and return `usize::MAX`. `user/init` prints through `DEBUG_PUTCHAR` (via `sap-rt`'s console), runs its checks ([[kernel-capabilities#Tests]]), and ends with `DEBUG_HALT`. Its formatting code reaches vtables through relocated pointers, so the output itself shows the relocations were applied.
 
 Faults in other threads go to their fault handlers ([[kernel-ipc#Fault delivery]]); the root task has none, so a fault in it is logged and ends the boot with a failure. Tested: a null read (`address 0x8`), a read of a kernel address, and 30 million loop iterations under 100 Hz timer interrupts.
 

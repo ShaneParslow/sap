@@ -218,7 +218,7 @@ pub fn start(mut alloc: BootAllocator) {
     unsafe {
         (*tcb).context = UserContext::new_user(entry, STACK_TOP, BOOT_INFO_VA);
         // Every thread starts with tp = its IPC buffer (the convention
-        // libsap relies on).
+        // sap-rt relies on).
         (*tcb).context.set_user_reg(sap_abi::reg::TP, IPC_BUFFER_VA);
         (*tcb).priority = MAX_PRIORITY;
         (*tcb).mcp = MAX_PRIORITY;
