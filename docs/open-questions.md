@@ -12,7 +12,7 @@ Grouped by urgency, then ordered by how much of the design each one affects. Det
 
 1. **Process ABI and runtime slot layout:** entry registers, the startup record, which capabilities every process gets. Needed for user mode (M2) and spawning (M7). → [[prog-loading]], [[cap-process-authority]]
 2. **Adopt the `$own`/`$borrow` annotation design?** Needed by M6. → [[iface-capnp]], [[cap-ownership]]
-3. **Ring details:** slot and ring sizes, whether Cap'n Proto RPC framing runs inside rings unchanged, how a channel is created. Settle by building M4–M5. → [[ipc-channels]]
+3. **Ring details:** ring sizes, and how a channel is created in one operation. M5 settled the record format and carries plain messages rather than RPC framing for now. → [[ipc-channels]], [[ipc-rings]]
 4. **Capability transfer:** native move, batched transfer into a per-connection receive range, and whether that range is its own table. → [[ipc-cap-transfer]], [[kernel-objects-and-syscalls]]
 5. **Which CHERI-RISC-V variant and toolchain**, and whether CHERI work starts before M10. → [[hw-cheri]]
 
@@ -37,12 +37,13 @@ Grouped by urgency, then ordered by how much of the design each one affects. Det
 22. A case needing real cross-language in-process FFI. → [[iface-bindings-and-languages]]
 23. A "finishing a publish" scheduling hint. → [[kernel-scheduling]]
 24. Device manager: complete device-tree parse, and how device capabilities reach drivers. → [[hw-device-discovery]]
+25. Page transfer's cost per page: invocations over a range of slots, 2 MiB frames, or moving a capability and its mapping together; it needs hardware numbers, which a port to the human's D1 board would give. → [[ipc-page-transfer]], [[hw-isa#Real hardware]]
 
 ## Long-range
 
-25. When to start an x86-64 port (Limine or a custom UEFI loader), and whether Arm comes first. → [[system-portability]]
-26. Memory topology: attribute vocabulary, migration, placement versus quotas. → [[hw-memory-topology]]
-27. Per-process or shared address spaces, decided per deployment; where to draw boundaries on CHERI hardware. → [[prog-loading#Address spaces]]
+26. When to start an x86-64 port (Limine or a custom UEFI loader), and whether Arm comes first. → [[system-portability]]
+27. Memory topology: attribute vocabulary, migration, placement versus quotas. → [[hw-memory-topology]]
+28. Per-process or shared address spaces, decided per deployment; where to draw boundaries on CHERI hardware. → [[prog-loading#Address spaces]]
 28. Rust target details: distributing the target spec to other people's crates, `sap-rt` versus the `std` platform layer. → [[prog-rust-toolchain]], [[prog-rust-std]]
 29. Whether sap defines a canonical program IR at all; signatures on code objects. → [[prog-representation]], [[prog-loading]]
 30. Attestation: the form of an exclusivity check for fine-grained claims about a capability subsystem; transparency logs in the core or only as applications. → [[vision-attestation-and-verification]]

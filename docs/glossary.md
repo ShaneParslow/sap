@@ -16,6 +16,8 @@ One name per concept; pages use these terms. Grouped by area in reading order, a
 - **Caretaker / membrane:** an indirection the grantor can disable, used to revoke delegated access; a membrane extends it over an object graph. [[cap-revocation]]
 - **Confused deputy:** a component tricked into using its authority on a caller's behalf; prevented by passing capabilities instead of names. [[cap-model]]
 - **Derivation tree:** each capability records its parent; revoking a parent revokes its descendants (seL4 CDT). [[cap-ownership]]
+- **Exclusive capability:** the only capability to its object; `CNODE_IDENTIFY` reports it by looking at the capability's neighbours in the derivation list. A frame's holder that maps an exclusive frame holds its only mapping. [[ipc-page-transfer]]
+- **Identify (`CNODE_IDENTIFY`):** asking the kernel, through one's own CNode, what a capability is (type, exclusive, mapped) without invoking it. [[kernel-capabilities#Invocation]]
 - **Own:** moving a capability; the sender loses it. [[cap-ownership]]
 - **Typestate:** encoding protocol states as handle types so illegal call orders can't be written. [[cap-ownership]]
 - **Declared imports (world):** the Cap'n Proto struct of capabilities and values a program needs, delivered as its bootstrap message; distinct from the runtime capabilities every process gets. [[cap-process-authority]]
@@ -66,7 +68,7 @@ One name per concept; pages use these terms. Grouped by area in reading order, a
 
 - **Double fetch / TOCTOU:** a hostile writer changes shared data between the receiver's check and use. [[ipc-validation]]
 - **memfd sealing / F_SEAL_WRITE** *(search)*: making a Linux shared buffer immutable before sending it. [[ipc-validation]]
-- **Page transfer:** granting a buffer's pages to the receiver and removing the sender's write access. [[ipc-channels]]
+- **Page transfer:** sending a message too large for a ring as whole frames whose capabilities move to the receiver, which checks that nobody else can write them, reads the message in place and gives the frames back. [[ipc-page-transfer]]
 - **Single-fetch rule:** read each structural field once into a local and use only the local. [[ipc-validation]]
 - **SPSC ring:** single-producer/single-consumer ring buffer; one per channel direction. [[ipc-channels]]
 - **Software fault isolation (SFI):** isolation enforced by compiler-inserted checks. [[ipc-paging-vs-cheri]]

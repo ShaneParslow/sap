@@ -72,6 +72,10 @@ impl Slots {
 pub struct Process {
     pub tcb: usize,
     pub cnode: usize,
+    /// The CNode capability the thread's capability space is rooted at,
+    /// with a guard so that full-width addresses name its slots. Give the
+    /// process a copy of this one to let it name its own slots.
+    pub guarded_cnode: usize,
     pub vspace: usize,
 }
 
@@ -81,6 +85,12 @@ impl Process {
     pub fn give(&self, parent: &Parent, index: usize, cap: usize, rights: usize) {
         let dest = SlotRef { root: self.cnode, index, depth: CNODE_RADIX };
         dest.copy_from(SlotRef::new(parent.cnode, cap), rights).expect("loader: give a capability");
+    }
+
+    /// Add page tables to the process's address space until `va` has every
+    /// level, so a frame can later be mapped there without untyped memory.
+    pub fn map_tables(&self, parent: &Parent, slots: &mut Slots, va: usize) {
+        ensure_tables(parent, slots, self.vspace, va);
     }
 
     pub fn start(&self) {
@@ -216,5 +226,5 @@ pub fn load(image: &[u8], parent: &Parent, slots: &mut Slots, priority: usize, a
     regs[reg::TP] = IPC_BUFFER;
     regs[reg::A0..reg::A0 + 3].copy_from_slice(&args);
     tcb::write_registers(thread, false, &regs).expect("loader: registers");
-    Process { tcb: thread, cnode, vspace: space }
+    Process { tcb: thread, cnode, guarded_cnode: guarded, vspace: space }
 }

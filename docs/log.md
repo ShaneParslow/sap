@@ -43,3 +43,7 @@ M3 pages: [[kernel-threads]], [[kernel-capabilities]]. Answers to §m30 filed: n
 ## [2026-10-19] session | Bug fixes, workspace, Rust target; attestation proposal
 
 From [[2026-10-16-2c1ac53c-code-walkthrough]]: fixed the embedded-peer rebuild, lost unbadged signals and the ring's index underflow ([[kernel-ipc]], [[ipc-rings]]); one Cargo workspace ([[kernel-boot-riscv]]); roadmap I1 done, [[prog-rust-toolchain]] now implemented and split, new [[prog-rust-std]]. Filed the human's attestation proposal in [[vision-attestation-and-verification]] and seL4's information-flow proof in [[sel4]].
+
+## [2026-10-19] session | M5 done: page transfer, CNODE_IDENTIFY, untyped copy fix
+
+From [[2026-10-16-2c1ac53c-code-walkthrough]]: new [[ipc-page-transfer]] (protocol, the exclusivity argument, identify before invoking, QEMU measurement in which copying wins up to 60 KiB); `CNODE_IDENTIFY` and the untyped-copy rule in [[kernel-capabilities]], [[kernel-sel4-differences]], [[vision-attestation-and-verification]]; user-readable time counter in [[kernel-traps-riscv]]; [[ipc-rings]], [[ipc-channels]], [[ipc-cap-transfer]], [[prog-runtime]] updated; D1 board facts in [[hw-isa#Real hardware]]; roadmap M5 done; decisions, open questions (25), glossary, index.

@@ -50,5 +50,16 @@ Constraints for sap: patch before kernel text is mapped read-only and execute-on
 > [!question] Open
 > Whether and when sap needs this. Nothing in M1–M2 does; it becomes worth it once a hot path benefits from an optional extension.
 
+## Real hardware
+
+QEMU is fine for correctness but distorts costs. A system call there takes microseconds, while memory copies run at close to host speed, so measurements such as the copy/transfer crossover ([[ipc-page-transfer#What it costs]]) need a real core. The human has one RISC-V board, a MangoPi with an Allwinner D1 ([[2026-10-16-2c1ac53c#m22|§m22]]); its extensions weren't known at the time. Facts about the D1 that matter for a port (from public documentation, not yet checked on the board):
+- **Core:** one T-Head C906 at 1 GHz, RV64GC with an MMU (Sv39). It also has a vector unit that predates the ratified vector extension (version 0.7.1), which standard toolchains don't target.
+- **Memory attributes:** cacheability is set with T-Head's own page-table bits, not Svpbmt, and Linux handles them as a vendor erratum. sap's page tables would need to set them, or normal memory may be mapped uncached, which would spoil any measurement.
+- **Boot:** U-Boot and OpenSBI with a device tree, so the kernel's device-tree discovery ([[kernel-boot-riscv]]) applies; the console is a 16550-style UART rather than QEMU's.
+- **One hart,** so it measures single-core costs only, not the multi-CPU polling the rings are designed for ([[ipc-rings#What runs show]]).
+
+> [!todo] Not built
+> A D1 port: the memory-attribute bits, the console, and loading the kernel through U-Boot. It isn't on the roadmap yet. It would answer the per-call costs that page transfer's design depends on.
+
 > [!note] Arm and CHERI
 > CHERI-QEMU also emulates Arm's Morello. Whether to add an Arm port later is open; the human wasn't sure of the Arm boot path ([[2026-09-27-future-of-computing#m28|§m28]]).

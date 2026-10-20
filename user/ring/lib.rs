@@ -31,8 +31,8 @@
 //! use sequentially consistent fences on both sides, so a signal can't be
 //! lost between "check" and "sleep".
 //!
-//! TODO: messages larger than half the ring travel as transferred pages
-//! (M5, after this).
+//! Messages larger than half the ring travel as transferred pages instead
+//! (`transfer`).
 
 #![no_std]
 #![feature(strict_provenance_lints)]
@@ -43,6 +43,8 @@ use core::sync::atomic::{fence, AtomicUsize, Ordering};
 
 use sap_sys::address::mapped;
 use sap_sys::notification;
+
+pub mod transfer;
 
 pub const PAGE: usize = 4096;
 const WORD: usize = size_of::<u64>();

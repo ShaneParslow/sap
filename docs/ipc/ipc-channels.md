@@ -11,7 +11,7 @@ A channel connects two trust domains on one machine. That shared-memory channels
 
 
 > [!note] Built
-> Built as described here, with the details settled by building ([[ipc-rings]]): each direction's indices on pages of their own, records of a two-word header (length, kind, an id matching replies to requests; no sequence number or capability count yet) and an inline body of up to half the ring, padding instead of wrapping, and bodies copied out on receive. Large payloads as transferred buffers are still to come (M5).
+> Built as described here, with the details settled by building ([[ipc-rings]]): each direction's indices on pages of their own, records of a two-word header (length, kind, an id matching replies to requests; no sequence number or capability count yet) and an inline body of up to half the ring, padding instead of wrapping, and bodies copied out on receive. Large payloads travel as transferred frames ([[ipc-page-transfer]]); on QEMU, copying beats transfer at every size up to 60 KiB, because each transferred page costs six system calls.
 
 ## Layout
 
@@ -43,7 +43,7 @@ Unbounded receive-side queues are a memory-exhaustion attack ([[ipc-resource-lim
 - **Large payloads travel as separate buffers transferred by ownership:** their pages are granted to the receiver, and the sender loses write access. Xen's grant tables work this way ([[2026-09-27-future-of-computing#m15|§m15]]).
 - **Unbounded data is a stream of chunks with credit-based flow control.** Cap'n Proto's streaming calls already work this way.
 
-The copy/transfer crossover point is per-platform and needs measuring ([[2026-09-27-future-of-computing#m17|§m17]], [[2026-09-27-future-of-computing#m25|§m25]]). Nobody serializes anything in either case: the Cap'n Proto layout is the message.
+The copy/transfer crossover point is per-platform and needs measuring ([[2026-09-27-future-of-computing#m17|§m17]], [[2026-09-27-future-of-computing#m25|§m25]]). On QEMU there is none below 64 KiB: transfer as built costs system calls per page, and copying is cheaper at every size ([[ipc-page-transfer#What it costs]]). Hardware numbers are still needed. Nobody serializes anything in either case: the Cap'n Proto layout is the message.
 
 ## Waiting
 

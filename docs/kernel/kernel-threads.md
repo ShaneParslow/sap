@@ -28,7 +28,7 @@ The syscall path holds `&mut` to a thread's registers, which live inside its TCB
 
 ## Thread invocations
 
-A new TCB does nothing until it is configured and started through its capability (`tcb` in `kernel/invocation.rs:185`, labels in `abi/lib.rs`):
+A new TCB does nothing until it is configured and started through its capability (`tcb` in `kernel/invocation.rs:202`, labels in `abi/lib.rs`):
 
 | Operation | Effect |
 |---|---|
