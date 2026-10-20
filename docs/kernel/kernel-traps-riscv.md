@@ -42,9 +42,9 @@ On trap entry the hardware clears `sstatus.SIE`, so kernel code always runs with
 
 ## Timer
 
-`timer::init` (`kernel/arch/riscv/timer.rs:20`) records the timer frequency from the boot information ([[kernel-boot-riscv]]). `kmain` starts the timer at 100 Hz (`TICK_HZ`, `kernel/main.rs:45`) and it runs from then on: `timer::start(hz)` (`timer.rs:33`) computes the interval in timer ticks, programs the first deadline with the SBI TIME extension's `set_timer` (`kernel/arch/riscv/sbi.rs:50`), and enables the supervisor timer interrupt in `sie`.
+`timer::init` (`kernel/arch/riscv/timer.rs:20`) records the timer frequency from the boot information ([[kernel-boot-riscv]]). `kmain` starts the timer at 100 Hz (`TICK_HZ`, `kernel/main.rs:45`) and it runs from then on: `timer::start(hz)` (`timer.rs:38`) computes the interval in timer ticks, programs the first deadline with the SBI TIME extension's `set_timer` (`kernel/arch/riscv/sbi.rs:50`), and enables the supervisor timer interrupt in `sie`.
 
-Each interrupt increments a tick counter, programs the next deadline, which also clears the pending interrupt, and calls `sched::tick` (`timer.rs:56`). `now` (`timer.rs:16`) reads the `time` CSR, which every application-class core has (Zicntr). Deadlines passed to `set_timer` are absolute values of the same counter, so the two always agree.
+Each interrupt increments a tick counter, programs the next deadline, which also clears the pending interrupt, and calls `sched::tick` (`timer.rs:61`). `now` (`timer.rs:16`) reads the `time` CSR, which every application-class core has (Zicntr). `init` also lets user mode read it (`scounteren.TM`, `timer.rs:27`), as Linux does, so programs can time things without a system call; the root task learns its frequency from the boot-info page. A `TODO` notes that a configuration with time protection would hide it, since a clock is what timing channels are measured with ([[sel4#Information-flow proof]]). Deadlines passed to `set_timer` are absolute values of the same counter, so the two always agree.
 
 `set_timer` traps into firmware on every tick. A `TODO` at `sbi.rs` marks using the Sstc extension, which lets the kernel write `stimecmp` directly, when the hardware has it ([[hw-isa#Handling extension variation]]).
 

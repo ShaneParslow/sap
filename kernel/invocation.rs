@@ -7,7 +7,7 @@
 //!
 //! Operations follow seL4's invocations of the same name.
 
-use sap_abi::{error, label, reg, MessageInfo, MAX_EXTRA_CAPS, MESSAGE_REGISTERS};
+use sap_abi::{error, identify, label, reg, MessageInfo, MAX_EXTRA_CAPS, MESSAGE_REGISTERS};
 
 use crate::arch::UserContext;
 use crate::cap::Cap;
@@ -148,6 +148,23 @@ fn cnode(cnode: Cap, m: &mut Message) -> Result {
             // SAFETY: as above.
             unsafe { cspace::delete(slot) }.map_err(|_| error::ILLEGAL_OPERATION)?;
             Ok(0)
+        }
+        label::CNODE_IDENTIFY => {
+            let slot = target(0, 1)?;
+            // SAFETY: lookup returns live slots.
+            let cap = unsafe { (*slot).cap };
+            let object_type = cap.object_type().ok_or(error::FAILED_LOOKUP)?;
+            let mut flags = 0;
+            // SAFETY: as above.
+            if !matches!(cap, Cap::Untyped { .. }) && unsafe { cspace::is_final(slot) } {
+                flags |= identify::EXCLUSIVE;
+            }
+            if matches!(cap, Cap::Arch(a) if a.is_mapped()) {
+                flags |= identify::MAPPED;
+            }
+            m.set_result(0, object_type)?;
+            m.set_result(1, flags)?;
+            Ok(2)
         }
         op @ (label::CNODE_COPY | label::CNODE_MINT | label::CNODE_MOVE) => {
             let dest = target(0, 1)?;

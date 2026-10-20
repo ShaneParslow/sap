@@ -266,8 +266,12 @@ fn is_parent_of(a: &Slot, b: &Slot) -> bool {
 
 /// Whether `slot` holds the last capability to its object: no neighbour on
 /// the list names the same object. (Capabilities to one object are always
-/// adjacent, since copies are inserted next to their source.)
-unsafe fn is_final(slot: *mut Slot) -> bool {
+/// adjacent, since copies are inserted next to their source, and untyped
+/// memory can't make the same object twice; see `insert_derived`.)
+///
+/// # Safety
+/// `slot` must be a live slot.
+pub unsafe fn is_final(slot: *mut Slot) -> bool {
     // SAFETY: slot and its neighbours are live (caller's guarantee).
     unsafe {
         let s = &*slot;

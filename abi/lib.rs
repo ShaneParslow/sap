@@ -103,6 +103,17 @@ pub mod recv_source {
     pub const NOTHING: usize = 2;
 }
 
+/// What `CNODE_IDENTIFY` reports about a capability besides its type.
+pub mod identify {
+    /// No other capability names the same object. For a frame this means
+    /// that, once its holder maps it, nobody else can map it: page transfer
+    /// relies on it. Never set for untyped memory, whose region other
+    /// untyped capabilities can cover.
+    pub const EXCLUSIVE: usize = 1 << 0;
+    /// A frame or page-table capability that is mapped somewhere.
+    pub const MAPPED: usize = 1 << 1;
+}
+
 /// Invocation labels: the operation requested on the invoked capability.
 pub mod label {
     // CNode: address a slot in the invoked CNode by (index, depth).
@@ -121,6 +132,12 @@ pub mod label {
     pub const CNODE_MINT: usize = 4;
     /// MR0..MR3 as COPY. Move the capability; the source slot ends empty.
     pub const CNODE_MOVE: usize = 5;
+    /// MR0 = index, MR1 = depth. Describe the capability in the slot without
+    /// invoking it: invoking a capability of unknown type can do anything
+    /// its type does (on an endpoint, it is an IPC call). Returns MR0 = its
+    /// object type (`object`), MR1 = `identify` flags; FAILED_LOOKUP if the
+    /// slot is empty.
+    pub const CNODE_IDENTIFY: usize = 23;
 
     // Untyped memory.
     /// MR0 = object type (`object`), MR1 = size bits (for untyped: log2 of
@@ -246,6 +263,9 @@ pub mod object {
     pub const FRAME_4K: usize = 6;
     pub const FRAME_2M: usize = 7;
     pub const FRAME_1G: usize = 8;
+    /// The ASID pool: never made by retype, only reported by
+    /// `CNODE_IDENTIFY`.
+    pub const ASID_POOL: usize = 10;
 
     /// Smallest and largest untyped objects, in bits.
     pub const MIN_UNTYPED_BITS: usize = 4;
@@ -356,6 +376,9 @@ pub const MAX_BOOT_UNTYPED: usize = 230;
 pub struct BootInfo {
     pub node_id: usize,
     pub num_nodes: usize,
+    /// Ticks per second of the time counter, which user mode reads with
+    /// `rdtime` on RISC-V.
+    pub timer_hz: u64,
     /// Address of the root task's IPC buffer.
     pub ipc_buffer: usize,
     /// log2 of the number of slots in the root task's CNode.

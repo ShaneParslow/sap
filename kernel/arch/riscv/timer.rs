@@ -20,9 +20,14 @@ pub fn now() -> u64 {
 pub fn init(timebase_hz: u64) {
     assert!(timebase_hz > 0, "timer: timebase frequency is zero");
     TIMEBASE_HZ.store(timebase_hz, Ordering::Relaxed);
+    // User mode may read `time` (`rdtime`), as on Linux, for measuring.
+    // TODO: a configuration with time protection would hide it, as part of
+    // closing timing channels between partitions (sel4 in the wiki).
+    // SAFETY: only grants U-mode read access to the time counter.
+    unsafe { riscv::register::scounteren::set_tm() };
 }
 
-fn timebase_hz() -> u64 {
+pub fn timebase_hz() -> u64 {
     let hz = TIMEBASE_HZ.load(Ordering::Relaxed);
     assert!(hz > 0, "timer: used before init");
     hz

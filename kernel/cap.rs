@@ -9,6 +9,8 @@
 //! An all-zero `Cap` is `Cap::Null`, so zeroed memory is a table of empty
 //! slots.
 
+use sap_abi::object;
+
 use crate::arch::{self, ArchCap};
 use crate::cspace::SLOT_BITS;
 use crate::endpoint::{ENDPOINT_BITS, REPLY_BITS};
@@ -112,6 +114,20 @@ impl Cap {
             Cap::Notification { badge, .. } | Cap::Endpoint { badge, .. } => Some(badge),
             _ => None,
         }
+    }
+
+    /// The object type (`sap_abi::object`) this capability names.
+    pub fn object_type(&self) -> Option<usize> {
+        Some(match *self {
+            Cap::Null => return None,
+            Cap::Untyped { .. } => object::UNTYPED,
+            Cap::CNode { .. } => object::CNODE,
+            Cap::Thread { .. } => object::TCB,
+            Cap::Notification { .. } => object::NOTIFICATION,
+            Cap::Endpoint { .. } => object::ENDPOINT,
+            Cap::Reply { .. } => object::REPLY,
+            Cap::Arch(a) => a.object_type(),
+        })
     }
 
     /// The capability with its rights reduced to `rights` (abi `rights`

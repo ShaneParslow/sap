@@ -15,7 +15,7 @@ use alloc::vec::Vec;
 use core::alloc::Layout;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use sap_rt::abi::{attr, error, fault, init_slot, object, recv_source, reg, rights, BootInfo};
+use sap_rt::abi::{attr, error, fault, identify, init_slot, object, recv_source, reg, rights, BootInfo};
 use sap_rt::address::mapped;
 use sap_rt::cnode::SlotRef;
 use sap_rt::sys::Error;
@@ -238,6 +238,26 @@ fn check_mapping(info: &BootInfo) {
     // SAFETY: mapped read-only at va + 0x3000.
     let back = unsafe { mapped::<u64>(va + 0x3000).read_volatile() };
     assert_eq!(back, 0x5a9_cafe, "value didn't survive remapping");
+
+    // Identifying capabilities without invoking them: the type, whether
+    // the capability is the only one to its object (copies, including the
+    // one a thread keeps of its IPC buffer, make it shared), and whether it
+    // is mapped.
+    let identify = |s: usize| slot(s).identify().map(|i| (i.object_type, i.flags)).map_err(|e| e.0);
+    let (exclusive, is_mapped) = (identify::EXCLUSIVE, identify::MAPPED);
+    assert_eq!(identify(f1), Ok((object::FRAME_4K, exclusive | is_mapped)), "a mapped frame with one capability");
+    expect("copy a frame", slot(f2 + 1).copy_from(slot(f1), rights::ALL), Ok(()));
+    assert_eq!(identify(f1), Ok((object::FRAME_4K, is_mapped)), "a copied frame isn't exclusive");
+    assert_eq!(identify(f2 + 1), Ok((object::FRAME_4K, 0)), "nor is its copy, which starts unmapped");
+    expect("delete the copy", slot(f2 + 1).delete(), Ok(()));
+    assert_eq!(identify(f1), Ok((object::FRAME_4K, exclusive | is_mapped)), "exclusive again");
+    assert_eq!(identify(init_slot::IPC_BUFFER), Ok((object::FRAME_4K, is_mapped)), "the TCB holds a copy of the IPC buffer");
+    assert_eq!(identify(l0), Ok((object::PAGE_TABLE, exclusive | is_mapped)), "a mapped page table");
+    assert_eq!(identify(big), Ok((object::FRAME_2M, exclusive)), "an unmapped 2 MiB frame");
+    assert_eq!(identify(init_slot::ASID_POOL).map(|i| i.0), Ok(object::ASID_POOL), "the ASID pool");
+    assert_eq!(identify(parent).map(|i| i.0), Ok(object::UNTYPED), "untyped memory is never exclusive");
+    assert_eq!(identify(parent).map(|i| i.1), Ok(0), "untyped memory is never exclusive");
+    assert_eq!(identify(f2 + 1), Err(error::FAILED_LOOKUP), "an empty slot");
 
     // A 2 MiB frame goes straight into the level-1 table.
     let big_va = va + 0x20_0000;

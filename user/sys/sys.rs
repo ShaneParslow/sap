@@ -31,6 +31,11 @@ pub fn yield_now() {
     syscall1(syscall::YIELD, 0);
 }
 
+/// The time counter, in ticks of `BootInfo::timer_hz`. No system call.
+pub fn time() -> u64 {
+    crate::arch::time()
+}
+
 /// Invoke capability `cptr` with `label`, message words `words` and extra
 /// capabilities `caps`. Returns the reply's message info and its first
 /// result words.

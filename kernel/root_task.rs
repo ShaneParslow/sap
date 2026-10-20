@@ -192,6 +192,7 @@ pub fn start(mut alloc: BootAllocator) {
 
     info.node_id = 0;
     info.num_nodes = 1;
+    info.timer_hz = crate::arch::timer::timebase_hz();
     info.ipc_buffer = IPC_BUFFER_VA;
     info.cnode_radix = CNODE_RADIX;
     info.image_frames = image_frames;

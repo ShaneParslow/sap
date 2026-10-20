@@ -60,6 +60,26 @@ impl ArchCap {
         }
     }
 
+    /// The object type (`sap_abi::object`) this capability names.
+    pub fn object_type(&self) -> usize {
+        match *self {
+            ArchCap::PageTable { .. } => object::PAGE_TABLE,
+            ArchCap::Frame { size_bits: 12, .. } => object::FRAME_4K,
+            ArchCap::Frame { size_bits: 21, .. } => object::FRAME_2M,
+            ArchCap::Frame { .. } => object::FRAME_1G,
+            ArchCap::AsidPool => object::ASID_POOL,
+        }
+    }
+
+    /// Whether this capability maps its frame or page table somewhere.
+    pub fn is_mapped(&self) -> bool {
+        match *self {
+            ArchCap::PageTable { mapping, .. } => mapping != PtMapping::Unmapped,
+            ArchCap::Frame { asid, .. } => asid != 0,
+            ArchCap::AsidPool => false,
+        }
+    }
+
     pub fn masked(&self, mask: usize) -> ArchCap {
         match *self {
             ArchCap::Frame { size_bits, rights, asid, pa, va } => {

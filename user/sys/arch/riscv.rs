@@ -30,6 +30,15 @@ pub unsafe fn syscall(number: usize, regs: &mut Registers) -> usize {
     last
 }
 
+/// The time counter (`rdtime`), in ticks of `BootInfo::timer_hz`.
+#[inline(always)]
+pub fn time() -> u64 {
+    let value: u64;
+    // SAFETY: reading a counter the kernel lets user mode read.
+    unsafe { asm!("rdtime {}", out(reg) value, options(nomem, nostack)) };
+    value
+}
+
 /// The thread pointer register (`tp`), which holds the IPC buffer's
 /// address (the thread start convention).
 #[inline(always)]
