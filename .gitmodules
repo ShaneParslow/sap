@@ -1,0 +1,15 @@
+[submodule "toolchain/qemu"]
+	path = toolchain/qemu
+	url = https://github.com/Capabilities-Limited/cheri-alliance-qemu.git
+	branch = user/qwattash/rvfi-fixes-0910
+	shallow = true
+[submodule "toolchain/opensbi"]
+	path = toolchain/opensbi
+	url = https://github.com/Capabilities-Limited/cheri-alliance-opensbi.git
+	branch = cheri-rvy-0910-toooba-fixes
+	shallow = true
+[submodule "toolchain/llvm"]
+	path = toolchain/llvm
+	url = https://github.com/Capabilities-Limited/cheri-alliance-llvm-project.git
+	branch = rvy-0910-wip
+	shallow = true
