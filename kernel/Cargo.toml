@@ -17,3 +17,9 @@ fdt = "=0.1.5"
 riscv = { version = "0.16.1", default-features = false }
 sap-abi = { version = "0.1.0", path = "../abi" }
 sbi-rt = { version = "0.0.4", features = ["legacy"] }
+
+[features]
+# CHERI-RISC-V (the RVY draft): save user capabilities whole across traps.
+# Needs firmware that turns CHERI on (menvcfg.Y), such as the OpenSBI
+# built by toolchain/build.sh on the cheri branch.
+cheri = []

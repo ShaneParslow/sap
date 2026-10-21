@@ -114,7 +114,7 @@ Userspace builds address spaces from capabilities, as on seL4 for RISC-V (`kerne
 | Operation | Effect |
 |---|---|
 | `ASID_POOL_ASSIGN` | make an unmapped page table the root of a new address space: give it a free ASID, empty its user half, and copy in the kernel's upper half |
-| `PAGE_TABLE_MAP` | install a page table at the first level below the root that has no table for the address (`install_table`, `kernel/arch/riscv/paging.rs:340`); `DELETE_FIRST` if every level already has one |
+| `PAGE_TABLE_MAP` | install a page table at the first level below the root that has no table for the address (`install_table`, `kernel/arch/riscv/paging.rs:352`); `DELETE_FIRST` if every level already has one |
 | `PAGE_TABLE_UNMAP` | remove it and clear its entries |
 | `FRAME_MAP` | map a frame at an address aligned to its size, with rights masked by the capability's and an execute-never attribute; the tables above must exist (`FAILED_LOOKUP` otherwise) |
 | `FRAME_UNMAP` | remove the mapping |

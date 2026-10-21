@@ -173,6 +173,7 @@ fn start_check(info: &BootInfo, parent: &Parent, launcher: usize, factory: usize
     root.set_asid_pool(0);
     root.set_factory(1);
     root.set_peer_hash(&pack::PEER.0);
+    root.set_cheri(info.cheri != 0);
     let mut list = root.init_untyped(count as u32);
     for (i, (_, &UntypedDesc { paddr, size_bits, .. })) in regions().enumerate() {
         let mut region = list.reborrow().get(i as u32);

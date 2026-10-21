@@ -80,7 +80,7 @@ The edge cases:
 ## Blocking and cancellation
 
 A blocked thread is in one of four states (`kernel/thread.rs:41`): blocked on a notification, on sending or receiving through an endpoint, or on a reply. It is off the ready queue (`sched::block`, `kernel/sched.rs:64`) and, except when waiting for a reply, on the object's queue, with the object recorded in the TCB. Whatever ends the wait other than its normal completion has to undo that (`cancel_blocking`, `kernel/thread.rs:150`): leave the notification's or endpoint's queue, return a lent reply object, or unlink from the reply object a caller waits on (`cancel` and `cancel_reply`, `kernel/endpoint.rs:338`, 269):
-- **Suspending** a blocked thread cancels the wait and **restarts the system call**: the program counter is moved back over the `ecall` (`UserContext::restart_syscall`, `kernel/arch/riscv/trap.rs:93`), so resuming the thread repeats its `WAIT`, as seL4 does (`thread::suspend`, `kernel/thread.rs:169`). Nothing is lost: signals sent meanwhile accumulate in the word, and the repeated `WAIT` takes them.
+- **Suspending** a blocked thread cancels the wait and **restarts the system call**: the program counter is moved back over the `ecall` (`UserContext::restart_syscall`, `kernel/arch/riscv/trap.rs:126`), so resuming the thread repeats its `WAIT`, as seL4 does (`thread::suspend`, `kernel/thread.rs:169`). Nothing is lost: signals sent meanwhile accumulate in the word, and the repeated `WAIT` takes them.
 - **Deleting the last capability to the notification or endpoint** restarts every waiter's call (`finalise`, `kernel/notification.rs:136`; `finalise_endpoint`, `kernel/endpoint.rs:369`). The repeated call then fails cleanly with `FAILED_LOOKUP` instead of blocking forever on an object that is gone. A caller suspended while waiting for a reply has its `CALL` restarted too, so resuming it sends the call again, as in seL4.
 - **Deleting the thread** cancels its wait and unbinds any notification bound to it (`thread::finalise`, line 202).
 
@@ -105,7 +105,7 @@ Several threads of one program each need their own IPC buffer. Every thread star
 
 `user/check` (`check_notifications`) checks: minting two badges and refusing a re-badge; two signals with nobody waiting accumulating, so one poll returns both bits and the next finds nothing pending; a signal through the unbadged original being pending with no bits, and a `WAIT` after an unbadged and a badged signal returning at once with the badged bits; a send-only capability being refused a `WAIT`; a second thread blocked in `WAIT` waking once per signal with the right badge; a signal sent while that thread is suspended being taken by its restarted `WAIT` after `RESUME`; revoking one badge deleting its copies while the badge itself keeps working; and deleting the notification with the thread waiting, after which its restarted `WAIT` reports `FAILED_LOOKUP`.
 
-`check_ipc` uses a `spawn` helper (`spawn_with`) (`user/check/main.rs:539`) to start threads with their own stack and IPC buffer, and checks:
+`check_ipc` uses a `spawn` helper (`spawn_with`) (`user/check/main.rs:543`) to start threads with their own stack and IPC buffer, and checks:
 - a server thread answering with `REPLY_RECV`: a six-word `CALL` through a badged capability comes back with the badge as the label and every word incremented, so two words crossed the IPC buffers each way, and the reply carries no badge;
 - a plain `SEND` completing without an answer, counted by the server;
 - `RECV` on a send-only capability and `CALL` on a receive-only one refused;

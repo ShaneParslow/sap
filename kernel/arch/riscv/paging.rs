@@ -56,10 +56,22 @@ bitflags! {
         /// updates doesn't fault on first use (Svade).
         const ACCESSED = 1 << 6;
         const DIRTY = 1 << 7;
+        /// CHERI-RISC-V (RVY) `pte.y`: tagged capabilities may be stored
+        /// to the page and keep their tags when loaded. Only with the
+        /// `cheri` feature; without CHERI the bit is reserved.
+        const CAP = 1 << 58;
     }
 }
 
-const KERNEL_RW: Flags = Flags::READ.union(Flags::WRITE).union(Flags::GLOBAL);
+/// The kernel's writable memory: with CHERI it may hold capabilities, since
+/// TCBs (in the direct map) hold user registers whole.
+// TODO: user mappings never get `CAP` yet, so user capabilities live only
+// in registers; decide which user pages may hold them (not frames shared
+// between address spaces) when programs use capabilities in memory.
+const KERNEL_RW: Flags = {
+    let rw = Flags::READ.union(Flags::WRITE).union(Flags::GLOBAL);
+    if cfg!(feature = "cheri") { rw.union(Flags::CAP) } else { rw }
+};
 const KERNEL_RX: Flags = Flags::READ.union(Flags::EXECUTE).union(Flags::GLOBAL);
 const KERNEL_RO: Flags = Flags::READ.union(Flags::GLOBAL);
 

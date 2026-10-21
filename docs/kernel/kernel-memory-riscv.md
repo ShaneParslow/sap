@@ -1,9 +1,8 @@
 ---
 status: implemented
 summary: How the kernel manages memory on RISC-V today - Sv39 with the kernel in the upper half, a boot page table built in assembly, the kernel's own address space with per-section permissions and a direct map of RAM, free memory computed from the device tree, a boot-only bump allocator, user address spaces that share the kernel half, and hardware ASIDs.
-updated: 2026-10-13
+updated: 2026-10-20
 code: [kernel/arch/riscv/entry.rs, kernel/arch/riscv/linker.ld, kernel/arch/riscv/paging.rs, kernel/mm.rs, kernel/boot.rs]
-verified: 0c39997
 sources: ["[[2026-10-08-22c3947b-wiki-setup]]"]
 ---
 
@@ -36,14 +35,14 @@ It then jumps to the linked address by loading it from a literal (`.Lhigh_entry`
 
 ## Kernel address space
 
-`paging::init` (`kernel/arch/riscv/paging.rs:406`) builds the kernel's real address space and switches to it, replacing the boot table:
+`paging::init` (`kernel/arch/riscv/paging.rs:418`) builds the kernel's real address space and switches to it, replacing the boot table:
 - the image, section by section, with the permissions above;
 - every RAM region in the direct map;
 - the devices the architecture code uses, today only QEMU's test device, in the direct map at their physical address.
 
-`AddressSpace::map` (line 215) maps a range with the largest pages that fit the alignment of both addresses and the remaining size; on QEMU the kernel's tables take 5–6 frames. Mapping over an existing mapping panics. Leaves get the accessed and dirty bits set up front, so hardware without automatic updates (Svade) doesn't fault on first use. `activate` (line 256) writes `satp` (Sv39, ASID 0) and flushes the TLB; it is used once, to switch from the boot page table.
+`AddressSpace::map` (line 227) maps a range with the largest pages that fit the alignment of both addresses and the remaining size; on QEMU the kernel's tables take 5–6 frames. Mapping over an existing mapping panics. Leaves get the accessed and dirty bits set up front, so hardware without automatic updates (Svade) doesn't fault on first use. Built with the `cheri` feature (on the `cheri` branch), the kernel's writable mappings, the image's data and the direct map, also carry `pte.y` (`CAP`, `kernel/arch/riscv/paging.rs:62`), CHERI-RISC-V's permission to store tagged capabilities in a page and load them with their tags, since TCBs hold user registers as whole capabilities ([[kernel-traps-riscv#With CHERI]]); without it, storing one is a page fault. User mappings don't get it yet (a `TODO` at line 68). `activate` (line 268) writes `satp` (Sv39, ASID 0) and flushes the TLB; it is used once, to switch from the boot page table.
 
-`phys_to_virt` and `virt_to_phys` (lines 102, 107) translate between physical addresses and the direct map or image. The console uses `virt_to_phys` to hand SBI physical buffer addresses.
+`phys_to_virt` and `virt_to_phys` (lines 114, 119) translate between physical addresses and the direct map or image. The console uses `virt_to_phys` to hand SBI physical buffer addresses.
 
 Tested: writing to kernel text and reading the old identity-mapped address both fault after the switch.
 
@@ -55,13 +54,13 @@ Tested: writing to kernel text and reading the old identity-mapped address both 
 
 ## User address spaces
 
-`AddressSpace::new_user` (`kernel/arch/riscv/paging.rs:197`) creates a root table whose upper half is copied from the kernel's root, so its entries point at the kernel's lower-level tables: the kernel stays mapped (without the user bit) while user code runs, and a trap needs no `satp` switch. `map_user` (line 204) maps below `USER_END` with architecture-neutral permissions (`mm::Perms`) plus the user bit.
+`AddressSpace::new_user` (`kernel/arch/riscv/paging.rs:209`) creates a root table whose upper half is copied from the kernel's root, so its entries point at the kernel's lower-level tables: the kernel stays mapped (without the user bit) while user code runs, and a trap needs no `satp` switch. `map_user` (line 216) maps below `USER_END` with architecture-neutral permissions (`mm::Perms`) plus the user bit.
 
-A `TODO` notes that a kernel mapping added later at the root level would not reach existing user spaces; the kernel adds none after boot. Address spaces created later from retyped page tables get the same upper half when they are given an ASID (`make_root`, line 375). How userspace builds and maps them is on [[kernel-capabilities#Address spaces]].
+A `TODO` notes that a kernel mapping added later at the root level would not reach existing user spaces; the kernel adds none after boot. Address spaces created later from retyped page tables get the same upper half when they are given an ASID (`make_root`, line 387). How userspace builds and maps them is on [[kernel-capabilities#Address spaces]].
 
 ## ASIDs and the TLB
 
-Each address space has an address-space identifier (ASID): the root task's is 1, later ones come from the ASID pool. At boot `probe_asid_bits` (`kernel/arch/riscv/paging.rs:268`) finds how many ASID bits `satp` implements, by writing all ones and reading back what sticks; QEMU implements 16. When an address space's ASID fits, `activate_root` (line 288) puts it in `satp` and flushes nothing, because the TLB tags entries with their ASID and the kernel's mappings are global. A space whose ASID doesn't fit runs as ASID 0 with a full flush on every switch.
+Each address space has an address-space identifier (ASID): the root task's is 1, later ones come from the ASID pool. At boot `probe_asid_bits` (`kernel/arch/riscv/paging.rs:280`) finds how many ASID bits `satp` implements, by writing all ones and reading back what sticks; QEMU implements 16. When an address space's ASID fits, `activate_root` (line 300) puts it in `satp` and flushes nothing, because the TLB tags entries with their ASID and the kernel's mappings are global. A space whose ASID doesn't fit runs as ASID 0 with a full flush on every switch.
 
 ASIDs belong to address spaces, not threads: all threads of a process share one. Hardware ASIDs therefore limit how many address spaces can be switched between *without flushing*, not how many can exist ([[2026-10-08-22c3947b#m30|§m30]]). Today the kernel's table allows 4,095 user address spaces, a fixed limit marked `TODO` (seL4 retypes ASID pools from untyped memory, so the count grows with memory). Beyond the hardware's 65,535, the usual technique is Linux's: recycle hardware ASIDs with a generation counter and flush on rollover. Under CHERI, many compartments can share one address space and one ASID ([[hw-cheri]]). Unmapping a page flushes just that page in that ASID (`flush_page`); unmapping a table, or freeing an ASID for reuse, flushes the ASID (`flush_asid`).
 

@@ -8,7 +8,7 @@ sources: ["[[2026-10-20-685b0203#m12|§m12]]"]
 
 # The process factory
 
-The process factory is the interface through which a program asks the process manager to start another program, as [[kernel-process-model#Spawning]] describes: no fork, no exec, code named by its hash. `init` serves it (`user/init/factory.rs`), starting programs from its boot pack ([[prog-runtime#The second program]]). It is plain IPC words for now, with the labels and layout in `sap_abi::factory` (`abi/lib.rs:434`); a `TODO` makes it a Cap'n Proto interface once RPC exists (M6).
+The process factory is the interface through which a program asks the process manager to start another program, as [[kernel-process-model#Spawning]] describes: no fork, no exec, code named by its hash. `init` serves it (`user/init/factory.rs`), starting programs from its boot pack ([[prog-runtime#The second program]]). It is plain IPC words for now, with the labels and layout in `sap_abi::factory` (`abi/lib.rs:437`); a `TODO` makes it a Cap'n Proto interface once RPC exists (M6).
 
 ## The calls
 
@@ -43,7 +43,7 @@ Everything arrives on `init`'s one endpoint, told apart by badge (`user/init/fac
 
 ## What is checked
 
-`check_factory` (`user/check/main.rs:1603`) starts `peer` through the factory, using the peer's hash that `init` passes in `check`'s bootstrap message:
+`check_factory` (`user/check/main.rs:1607`) starts `peer` through the factory, using the peer's hash that `init` passes in `check`'s bootstrap message:
 - a peer that exits with code 7: `WAIT` reports `EXITED` and 7 and returns untyped memory, after which the handle slot is empty, and the returned memory starts the peer again;
 - a peer that reads an unmapped address: `FAULTED`, with the label `fault::VM`;
 - a peer blocked calling an endpoint nobody answers: `KILL`, then `WAIT` reports `KILLED`;

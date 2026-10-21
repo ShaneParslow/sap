@@ -379,6 +379,9 @@ pub struct BootInfo {
     /// Ticks per second of the time counter, which user mode reads with
     /// `rdtime` on RISC-V.
     pub timer_hz: u64,
+    /// Nonzero if user mode may use CHERI capabilities, whose registers the
+    /// kernel saves whole.
+    pub cheri: usize,
     /// Address of the root task's IPC buffer.
     pub ipc_buffer: usize,
     /// log2 of the number of slots in the root task's CNode.

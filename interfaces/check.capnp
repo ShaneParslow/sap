@@ -14,6 +14,8 @@ struct CheckImports {
   # starting it through the factory.
   factory @2 :UInt32;
   peerHash @3 :Data;
+  # Whether user mode may use CHERI capabilities.
+  cheri @4 :Bool;
 }
 
 struct Untyped {

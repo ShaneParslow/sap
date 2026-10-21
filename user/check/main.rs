@@ -51,6 +51,8 @@ struct Env {
     /// The process factory, and the hash of the peer in its boot pack.
     factory: usize,
     peer_hash: [u8; 32],
+    /// Whether user mode may use CHERI capabilities.
+    cheri: bool,
     /// Untyped memory, in consecutive slots, described in order in
     /// `untyped_list`.
     untyped: SlotRange,
@@ -78,6 +80,7 @@ fn env(startup: &'static Startup) -> Result<Env, capnp::Error> {
         asid_pool: import(imports.get_asid_pool()),
         factory: import(imports.get_factory()),
         peer_hash: imports.get_peer_hash()?.try_into().expect("check: the peer's hash is 32 bytes"),
+        cheri: imports.get_cheri(),
         untyped: SlotRange { start: first, end: first + regions.len() as usize },
         untyped_list,
     })
@@ -137,6 +140,7 @@ fn sap_main(a0: usize, _: usize, _: usize) -> ! {
     measure_transfer(info);
     check_capnp();
     check_factory(info);
+    check_cheri(info);
     println!("check: all checks passed");
     process::exit(0)
 }
@@ -1658,4 +1662,56 @@ fn check_factory(info: &Env) {
 
     expect("revoke", slot(region).revoke(), Ok(()));
     println!("check: the process factory starts programs by hash with the caller's memory, reports exits, faults and kills, and gives the memory back");
+}
+
+/// With CHERI: a capability in a user register survives a system call and
+/// timer interrupts, which the kernel saves and restores whole, and a
+/// register the kernel writes a result into comes back as an integer, with
+/// no tag. The capability is DDC, which every thread has (the root, for
+/// now).
+fn check_cheri(info: &Env) {
+    if !info.cheri {
+        return;
+    }
+    let (kept, written): (usize, usize);
+    // SAFETY: reads DDC into registers and polls slot 0, which holds
+    // nothing; touches no memory. The RVY instructions are raw encodings:
+    // `yaddrw` (set the address) and `ytagr` (read the tag).
+    unsafe {
+        core::arch::asm!(
+            "csrr s2, 0x03f",
+            "csrr a0, 0x03f",
+            ".insn r 0x7b, 0, 0x0b, a0, a0, x0",
+            "ecall",
+            ".insn r 0x7b, 0, 0x7a, {kept}, s2, x4",
+            ".insn r 0x7b, 0, 0x7a, {written}, a0, x4",
+            kept = lateout(reg) kept,
+            written = lateout(reg) written,
+            inout("a7") sap_rt::abi::syscall::POLL => _,
+            out("a0") _, out("a1") _, out("a2") _, out("s2") _,
+            options(nostack),
+        );
+    }
+    assert_eq!(kept, 1, "a capability in s2 keeps its tag through a system call");
+    assert_eq!(written, 0, "a result the kernel writes into a0 is an integer");
+
+    // Spin through a few timer interrupts (100 Hz) with a capability in s3.
+    let deadline = sys::time() + info.timer_hz / 20;
+    let survived: usize;
+    // SAFETY: registers and the time counter only.
+    unsafe {
+        core::arch::asm!(
+            "csrr s3, 0x03f",
+            "1: rdtime {now}",
+            "bltu {now}, {deadline}, 1b",
+            ".insn r 0x7b, 0, 0x7a, {survived}, s3, x4",
+            now = out(reg) _,
+            deadline = in(reg) deadline,
+            survived = lateout(reg) survived,
+            out("s3") _,
+            options(nostack, nomem),
+        );
+    }
+    assert_eq!(survived, 1, "a capability in s3 keeps its tag through timer interrupts");
+    println!("check: CHERI capabilities in user registers survive system calls and interrupts; kernel-written results are integers");
 }
