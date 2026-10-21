@@ -1,9 +1,8 @@
 ---
 status: implemented
 summary: How the kernel boots on QEMU virt riscv64 today - OpenSBI enters _start in S-mode, the entry code turns on a boot page table and jumps to the kernel's upper-half address, riscv_start turns the device tree into architecture-neutral boot information and sets up traps, paging and the timer, and kmain runs boot checks and starts the root task. Also the console, log and shutdown.
-updated: 2026-10-19
+updated: 2026-10-20
 code: [rust-toolchain.toml, Cargo.toml, .cargo/config.toml, kernel/Cargo.toml, kernel/build.rs, kernel/arch/riscv/linker.ld, kernel/arch/riscv/entry.rs, kernel/arch/riscv/mod.rs, kernel/arch/riscv/sbi.rs, kernel/arch/riscv/test_device.rs, kernel/arch/mod.rs, kernel/boot.rs, kernel/devicetree.rs, kernel/console.rs, kernel/log.rs, kernel/main.rs]
-verified: 852c5a9
 sources: ["[[2026-10-08-22c3947b-wiki-setup]]"]
 ---
 
@@ -18,6 +17,8 @@ The repository is one Cargo workspace (`Cargo.toml`): the kernel, the shared `ab
 Dependencies, all `no_std`: `fdt` (pinned to 0.1.5) for the device tree, `riscv` for CSR access and trap causes, `sbi-rt` for SBI calls, `bitflags`, and `elf` for loading the root task.
 
 A successful run prints the OpenSBI banner, the kernel log, the root task's greeting, and exits with status 0. A panic or a fault in the root task exits with status 1.
+
+On the `cheri` branch, the kernel's `cheri` feature (`kernel/Cargo.toml`) builds it for CHERI-RISC-V ([[kernel-traps-riscv#With CHERI]]); `toolchain/run.sh` builds it so and boots it on the RVY emulator with the CHERI OpenSBI and 1 GiB of RAM ([[hw-cheri#Platform support]]).
 
 ## Boot sequence
 
