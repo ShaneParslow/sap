@@ -118,6 +118,7 @@ pub fn invoke(slot: *mut Slot, cap: ArchCap, m: &mut Message) -> Result<usize, u
             let mut perms = Perms::READ;
             perms.set(Perms::WRITE, granted & rights::WRITE != 0);
             perms.set(Perms::EXECUTE, attributes & attr::EXECUTE_NEVER == 0);
+            perms.set(Perms::CAPABILITIES, attributes & attr::CAPABILITIES != 0);
             let level = (size_bits as usize - 12) / 9;
             paging::map_user_page(root, va, pa, level, perms).map_err(|e| match e {
                 MapError::MissingTable => error::FAILED_LOOKUP,

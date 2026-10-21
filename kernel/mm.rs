@@ -16,6 +16,9 @@ bitflags! {
         const READ = 1 << 0;
         const WRITE = 1 << 1;
         const EXECUTE = 1 << 2;
+        /// The page may hold CHERI capabilities (only with the `cheri`
+        /// feature).
+        const CAPABILITIES = 1 << 3;
     }
 }
 

@@ -52,7 +52,7 @@ A capability address is resolved like a page-table walk (`resolve`, `kernel/cspa
 - a thread is taken off the CPU and its own slots are deleted (`thread::finalise`);
 - a page table that is an address-space root frees its ASID; a mapped one is unmapped.
 
-Deleting a frame capability that maps its frame unmaps it whether or not it was the last, since each frame capability is its own mapping (`kernel/arch/riscv/vspace.rs:167`). The object's memory isn't reclaimed by deletion; that happens when the untyped memory it came from is revoked.
+Deleting a frame capability that maps its frame unmaps it whether or not it was the last, since each frame capability is its own mapping (`kernel/arch/riscv/vspace.rs:168`). The object's memory isn't reclaimed by deletion; that happens when the untyped memory it came from is revoked.
 
 **Nesting and cycles.** The CNode graph is built by userspace, and the kernel can't trust its shape. Anyone holding a CNode capability with the right to copy can put a capability to a CNode inside itself, directly or through others, so cycles and arbitrarily long chains are possible ([[2026-10-08-22c3947b#m30|§m30]]). They are harmless for lookups, which consume at least one address bit per level and so stop after at most 64. Deletion is where they matter, because deleting the last capability to a CNode deletes everything in it:
 - **Cycles.** The slot is emptied *before* the object is finalised, so a CNode that contains (directly or not) the slot being deleted can't reach it again: a cycle ends instead of looping.
@@ -65,7 +65,7 @@ seL4 solves all three with "zombie" capabilities: a capability being finalised b
 
 ## Invocation
 
-`CALL` (`kernel/invocation.rs:81`) takes the invoked capability's address in `a0`, a message info word in `a1` (label, number of extra capabilities, length, laid out as in seL4, `abi/lib.rs:280`), and message words 0–3 in `a2`–`a5`. Words 4 and up, and the addresses of up to 16 extra capabilities, are in the thread's IPC buffer (`abi/lib.rs:310`), a 2 KiB block the kernel reaches through the frame capability in the TCB. The reply's label is an error code (`abi/lib.rs:73`, numbered as seL4's) and its result words come back in the same registers.
+`CALL` (`kernel/invocation.rs:81`) takes the invoked capability's address in `a0`, a message info word in `a1` (label, number of extra capabilities, length, laid out as in seL4, `abi/lib.rs:285`), and message words 0–3 in `a2`–`a5`. Words 4 and up, and the addresses of up to 16 extra capabilities, are in the thread's IPC buffer (`abi/lib.rs:315`), a 2 KiB block the kernel reaches through the frame capability in the TCB. The reply's label is an error code (`abi/lib.rs:73`, numbered as seL4's) and its result words come back in the same registers.
 
 The capability's type picks the object, and the label picks the operation (`abi/lib.rs:118`). Threads have their own operations, on [[kernel-threads#Thread invocations]]. CNodes support (`kernel/invocation.rs:135`):
 
@@ -86,7 +86,7 @@ On the user side, `sap-sys` (`user/sys/`, [[prog-runtime#Crates]]) wraps `CALL` 
 
 ## Retyping untyped memory
 
-Retyping is the only way kernel objects come into existence after boot, so every object's memory is charged to whoever held the untyped capability ([[kernel-objects-and-syscalls#Kernel memory]]). `UNTYPED_RETYPE` (`kernel/invocation.rs:109`, `kernel/untyped.rs:64`) takes an object type (`abi/lib.rs:254`), a size where the type has one, a destination CNode named by (index, depth) from a root CNode passed as an extra capability (depth 0 names the root itself, as in seL4), and a range of empty slots in it, at most 256.
+Retyping is the only way kernel objects come into existence after boot, so every object's memory is charged to whoever held the untyped capability ([[kernel-objects-and-syscalls#Kernel memory]]). `UNTYPED_RETYPE` (`kernel/invocation.rs:109`, `kernel/untyped.rs:64`) takes an object type (`abi/lib.rs:259`), a size where the type has one, a destination CNode named by (index, depth) from a root CNode passed as an extra capability (depth 0 names the root itself, as in seL4), and a range of empty slots in it, at most 256.
 
 | Type | Size of one object |
 |---|---|
@@ -114,7 +114,7 @@ Userspace builds address spaces from capabilities, as on seL4 for RISC-V (`kerne
 | Operation | Effect |
 |---|---|
 | `ASID_POOL_ASSIGN` | make an unmapped page table the root of a new address space: give it a free ASID, empty its user half, and copy in the kernel's upper half |
-| `PAGE_TABLE_MAP` | install a page table at the first level below the root that has no table for the address (`install_table`, `kernel/arch/riscv/paging.rs:352`); `DELETE_FIRST` if every level already has one |
+| `PAGE_TABLE_MAP` | install a page table at the first level below the root that has no table for the address (`install_table`, `kernel/arch/riscv/paging.rs:351`); `DELETE_FIRST` if every level already has one |
 | `PAGE_TABLE_UNMAP` | remove it and clear its entries |
 | `FRAME_MAP` | map a frame at an address aligned to its size, with rights masked by the capability's and an execute-never attribute; the tables above must exist (`FAILED_LOOKUP` otherwise) |
 | `FRAME_UNMAP` | remove the mapping |
@@ -130,13 +130,13 @@ Deleting a capability undoes what it did (see [[#Delete, finalise, revoke]]), so
 
 | Slots | Capability |
 |---|---|
-| 1–6 | its TCB, its CNode, its address space (a root page table with ASID 1), its IPC buffer frame, its boot-info frame, the ASID pool (`abi/lib.rs:332`) |
+| 1–6 | its TCB, its CNode, its address space (a root page table with ASID 1), its IPC buffer frame, its boot-info frame, the ASID pool (`abi/lib.rs:337`) |
 | a range | every frame mapped in its address space (image, stack) |
 | a range | every page table of its address space |
 | a range | all remaining free memory as untyped, split into naturally aligned power-of-two blocks of at most 2^38 bytes |
 | the rest | empty |
 
-The boot-info page (`BootInfo`, `abi/lib.rs:376`), mapped read-only, gives the ranges, the frequency of the `time` counter (which user mode may read, [[kernel-traps-riscv#Timer]]), the IPC buffer address, the CNode's radix, and each untyped block's address and size; its address arrives in the root task's first argument register. The kernel finds the frames and page tables by walking the address space it built (`arch::walk_user`). Creating the untyped capabilities uses up the boot allocator, so from then on all memory is the root task's to retype. On QEMU with 128 MiB (debug build): 11 frames, 4 page tables, 27 untyped blocks totalling about 126 MiB (largest 32 MiB), and 4,047 empty slots. The counts move with the size of `init`.
+The boot-info page (`BootInfo`, `abi/lib.rs:381`), mapped read-only, gives the ranges, the frequency of the `time` counter (which user mode may read, [[kernel-traps-riscv#Timer]]), the IPC buffer address, the CNode's radix, and each untyped block's address and size; its address arrives in the root task's first argument register. The kernel finds the frames and page tables by walking the address space it built (`arch::walk_user`). Creating the untyped capabilities uses up the boot allocator, so from then on all memory is the root task's to retype. On QEMU with 128 MiB (debug build): 11 frames, 4 page tables, 27 untyped blocks totalling about 126 MiB (largest 32 MiB), and 4,047 empty slots. The counts move with the size of `init`.
 
 ASIDs come from a fixed table of 4,096 entries in the kernel (`kernel/arch/riscv/vspace.rs:26`); a `TODO` says to retype ASID pools from untyped memory, as seL4 does.
 

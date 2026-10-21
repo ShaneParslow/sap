@@ -9,7 +9,7 @@ sources: ["[[2026-10-20-685b0203#m12|§m12]]"]
 
 # The process factory
 
-The process factory is the interface through which a program asks the process manager to start another program, as [[kernel-process-model#Spawning]] describes: no fork, no exec, code named by its hash. `init` serves it (`user/init/factory.rs`), starting programs from its boot pack ([[prog-runtime#The second program]]). It is plain IPC words for now, with the labels and layout in `sap_abi::factory` (`abi/lib.rs:437`); a `TODO` makes it a Cap'n Proto interface once RPC exists (M6).
+The process factory is the interface through which a program asks the process manager to start another program, as [[kernel-process-model#Spawning]] describes: no fork, no exec, code named by its hash. `init` serves it (`user/init/factory.rs`), starting programs from its boot pack ([[prog-runtime#The second program]]). It is plain IPC words for now, with the labels and layout in `sap_abi::factory` (`abi/lib.rs:442`); a `TODO` makes it a Cap'n Proto interface once RPC exists (M6).
 
 ## The calls
 

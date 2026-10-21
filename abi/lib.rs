@@ -234,6 +234,11 @@ pub mod reg {
 pub mod attr {
     /// Map without execute permission.
     pub const EXECUTE_NEVER: usize = 1 << 0;
+    /// The page may hold CHERI capabilities: tagged capabilities can be
+    /// stored to it and keep their tags when loaded. For a process's
+    /// private pages, not frames shared with another address space.
+    /// Ignored by a kernel without CHERI.
+    pub const CAPABILITIES: usize = 1 << 1;
 }
 
 /// Capability rights, as in seL4.

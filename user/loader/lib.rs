@@ -248,7 +248,11 @@ fn segment(image: &[u8], s: &elf::segment::ProgramHeader, limit: usize) -> Resul
         return Err(LoadError::BadImage("segment outside the image's address range"));
     }
     let granted = if s.p_flags & PF_W != 0 { rights::READ | rights::WRITE } else { rights::READ };
-    let attributes = if s.p_flags & PF_X != 0 { 0 } else { attr::EXECUTE_NEVER };
+    let mut attributes = if s.p_flags & PF_X != 0 { 0 } else { attr::EXECUTE_NEVER };
+    if s.p_flags & PF_W != 0 {
+        // Private to the process: it may keep capabilities there.
+        attributes |= attr::CAPABILITIES;
+    }
     Ok(Segment { vaddr, filesz, memsz, offset, granted, attributes })
 }
 
@@ -331,7 +335,7 @@ pub fn load(image: &[u8], parent: &Parent, slots: &mut Slots, launch: &Launch) -
         let frame = retype(parent, slots, object::FRAME_4K, 0)?;
         let va = STACK_TOP - (i + 1) * PAGE;
         ensure_tables(parent, slots, space, va)?;
-        vspace::map_frame(frame, space, va, rw, attr::EXECUTE_NEVER)?;
+        vspace::map_frame(frame, space, va, rw, attr::EXECUTE_NEVER | attr::CAPABILITIES)?;
     }
     let buffer = retype(parent, slots, object::FRAME_4K, 0)?;
     ensure_tables(parent, slots, space, ipc_buffer)?;

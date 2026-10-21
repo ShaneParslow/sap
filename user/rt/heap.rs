@@ -115,7 +115,7 @@ impl Grower {
         let rw = rights::READ | rights::WRITE;
         for page in 0..pages {
             let va = self.top + page * PAGE;
-            vspace::map_frame_with_tables(first + page, self.vspace, va, rw, attr::EXECUTE_NEVER, &mut new_table)?;
+            vspace::map_frame_with_tables(first + page, self.vspace, va, rw, attr::EXECUTE_NEVER | attr::CAPABILITIES, &mut new_table)?;
         }
         // SAFETY: the new pages are mapped read-write, unused, and directly
         // above what the list already has (or start it).

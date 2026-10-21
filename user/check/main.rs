@@ -1775,5 +1775,30 @@ fn check_cheri(info: &Env) {
         );
     }
     assert_eq!(narrowed, 0x1000, "a thread's DDC is its own, kept across a system call");
-    println!("check: CHERI capabilities in user registers survive system calls and interrupts; kernel-written results are integers; DDC and the pc are bounded to user addresses, and DDC is per thread");
+
+    // Capabilities in memory: the loader and the heap map private pages
+    // with `attr::CAPABILITIES`, so DDC stored to the stack or the heap
+    // with `sy` comes back tagged with `ly`.
+    #[repr(C, align(16))]
+    struct Slot([usize; 2]);
+    let mut on_stack = Slot([0; 2]);
+    let mut on_heap = Box::new(Slot([0; 2]));
+    for (slot, place) in [(&mut on_stack as *mut Slot, "the stack"), (&mut *on_heap as *mut Slot, "the heap")] {
+        let tag: usize;
+        // SAFETY: `slot` is 16 aligned, writable bytes this function owns.
+        unsafe {
+            core::arch::asm!(
+                "csrr {c}, 0x03f",
+                ".insn s 0x7b, 2, {c}, 0({p})",
+                ".insn i 0x7b, 1, {c}, 0({p})",
+                ".insn r 0x7b, 0, 0x7a, {tag}, {c}, x4",
+                c = out(reg) _,
+                p = in(reg) slot,
+                tag = lateout(reg) tag,
+                options(nostack),
+            );
+        }
+        assert_eq!(tag, 1, "a capability stored to {place} keeps its tag");
+    }
+    println!("check: CHERI capabilities survive system calls and interrupts in registers, and loads and stores on the stack and heap; kernel-written results are integers; DDC and the pc are bounded to user addresses, and DDC is per thread");
 }

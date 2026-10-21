@@ -65,9 +65,7 @@ bitflags! {
 
 /// The kernel's writable memory: with CHERI it may hold capabilities, since
 /// TCBs (in the direct map) hold user registers whole.
-// TODO: user mappings never get `CAP` yet, so user capabilities live only
-// in registers; decide which user pages may hold them (not frames shared
-// between address spaces) when programs use capabilities in memory.
+// User mappings get it when the mapper asks (`attr::CAPABILITIES`).
 const KERNEL_RW: Flags = {
     let rw = Flags::READ.union(Flags::WRITE).union(Flags::GLOBAL);
     if cfg!(feature = "cheri") { rw.union(Flags::CAP) } else { rw }
@@ -343,6 +341,7 @@ fn user_flags(perms: Perms) -> Flags {
     flags.set(Flags::READ, perms.contains(Perms::READ));
     flags.set(Flags::WRITE, perms.contains(Perms::WRITE));
     flags.set(Flags::EXECUTE, perms.contains(Perms::EXECUTE));
+    flags.set(Flags::CAP, cfg!(feature = "cheri") && perms.contains(Perms::CAPABILITIES));
     flags
 }
 

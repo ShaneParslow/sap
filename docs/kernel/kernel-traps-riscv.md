@@ -45,12 +45,13 @@ RVY instructions are written as raw encodings (`.insn`) through assembler macros
 `check_cheri` in `check` (`user/check/main.rs:1672`) checks that:
 - DDC held in `s2` through a system call and in `s3` through timer interrupts keeps its tag, while the system call's `a0` result comes back untagged;
 - DDC and the program counter capability, read with `auipc` in capability mode, have base 0, length `USER_END` and no `ASR`;
-- a DDC narrowed to one page stays narrowed through a system call, which the kernel serves through its own DDC.
+- a DDC narrowed to one page stays narrowed through a system call, which the kernel serves through its own DDC;
+- DDC stored with `sy` to the stack and to the heap, pages mapped with `attr::CAPABILITIES` ([[kernel-memory-riscv#Kernel address space]]), loads back tagged with `ly`.
 
-Saving registers with ordinary stores, or not restoring the thread's DDC, makes it fail. The kernel tells user mode that capabilities are on with `BootInfo::cheri` ([[kernel-root-task]]).
+Saving registers with ordinary stores, not restoring the thread's DDC, or mapping user pages without `pte.y` makes it fail. The kernel tells user mode that capabilities are on with `BootInfo::cheri` ([[kernel-root-task]]).
 
 > [!todo] Not built
-> Every thread of every process gets the same user root, so capabilities don't yet separate anything that page tables don't; capabilities bounded per compartment come with compartments ([[ipc-paging-vs-cheri]]). User pages can't hold capabilities (no `pte.y`). The thread-identifier CSRs aren't saved per thread, and user mode can't set them, since writing them needs `ASR`.
+> Every thread of every process gets the same user root, so capabilities don't yet separate anything that page tables don't; capabilities bounded per compartment come with compartments ([[ipc-paging-vs-cheri]]). Which user pages may hold capabilities is the mapper's choice, and nothing yet stops a process mapping a shared frame with `attr::CAPABILITIES`. The thread-identifier CSRs aren't saved per thread, and user mode can't set them, since writing them needs `ASR`.
 
 ## Dispatch
 
