@@ -1,7 +1,7 @@
 ---
 status: log
 summary: Dated log of decisions and reversals, each with its reason and source. Topic pages state the current conclusion; this page records how it was reached.
-updated: 2026-10-19
+updated: 2026-10-20
 ---
 
 # Decisions
@@ -10,6 +10,9 @@ Newest first. "Adopted" means the human chose it; "proposed" entries are recorde
 
 | Date | Decision | Why | Source | Pages |
 |---|---|---|---|---|
+| 2026-10-20 | M7: `init` becomes the process manager and its boot checks move into a program it spawns; capabilities in a bootstrap message are slot indices in integer fields until Cap'n Proto RPC brings capability tables; code is named by the BLAKE3 hash of its image. | The checks become the factory's first client; capability fields come with RPC (M6); no hash had been chosen, and nothing yet depends on the choice. | [[2026-10-20-685b0203#m12\|§m12]] | [[kernel-process-model]], [[prog-loading]], [[cap-process-authority]] |
+| 2026-10-20 | The CHERI-RISC-V toolchain (the RVY forks of LLVM, QEMU and OpenSBI) lives in the repository as shallow submodules on the `cheri` branch, built by `toolchain/build.sh`. | The human works on two machines; no distribution packages exist. Supersedes a PKGBUILD installing to `/usr/lib/cheri-rvy-llvm`. | [[2026-10-20-685b0203#m12\|§m12]] | [[hw-cheri]] |
+| 2026-10-20 | Start CHERI now, in parallel with M7, on a `cheri` branch, targeting the RVY draft of the RISC-V standard (0.9.10) rather than Morello or the older Cambridge ISA (v9). Revises the 10-19 order, which kept CHERI at M10. | Everything above the kernel is userspace, so alternatives can be tried side by side; RVY is the standards track and needs no new architecture port; Morello is a prototype with no successor; v9 is being replaced. | [[2026-10-20-685b0203#m2\|§m2]], [[2026-10-20-685b0203#m4\|§m4]] | [[hw-cheri]], [[roadmap]] |
 | 2026-10-19 | *Proposed:* ring copy stays the path for every message a ring can take; page transfer only carries what doesn't fit. | On QEMU, transfer lost to copying at every size up to 60 KiB, since each page costs six system calls; making transfer cost per message rather than per page is open until hardware numbers exist. | [[2026-10-16-2c1ac53c#m22\|§m22]] | [[ipc-page-transfer]], [[ipc-channels]] |
 | 2026-10-19 | *Implementation:* page transfer is a call on the receiver's endpoint, announced by a ring record, moving up to 16 frames; the receiver requires each to be an unmapped 4 KiB frame with no other capability, maps it read-only, reads in place, and moves the frames back in its reply before publishing its answer. | The human asked to go ahead; returning the frames keeps the sender's memory reusable; replying before publishing avoids waiting for ring space that a blocked sender can't free. | [[2026-10-16-2c1ac53c#m22\|§m22]] | [[ipc-page-transfer]] |
 | 2026-10-19 | *Implementation:* received capabilities are examined with a CNode invocation, `CNODE_IDENTIFY` (type, exclusive, mapped), never by invoking them. *Replaces* a frame invocation that answered only "exclusive", tried first. | Invoking a capability does its type's operation: a peer that mapped a capability it had been sent, which was an endpoint, called the endpoint and blocked. | [[2026-10-16-2c1ac53c#m22\|§m22]] | [[kernel-capabilities]], [[ipc-page-transfer]] |

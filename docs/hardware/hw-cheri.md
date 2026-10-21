@@ -1,7 +1,7 @@
 ---
 status: decided
 summary: CHERI support is wanted from the start as an accelerator, never a correctness requirement. What CHERI is, its standardization status, what it fixes for sap (bounds, unforgeability, sealed handles, cheap compartment calls) and what it doesn't.
-updated: 2026-10-19
+updated: 2026-10-20
 sources: ["[[2026-09-27-future-of-computing#m3|§m3]]", "[[2026-09-27-future-of-computing#m7|§m7]]", "[[2026-09-27-future-of-computing#m13|§m13]]", "[[2026-09-27-future-of-computing#m17|§m17]]", "[[2026-09-27-future-of-computing#m23|§m23]]", "[[2026-09-27-future-of-computing#m25|§m25]]"]
 ---
 
@@ -59,9 +59,9 @@ What the lints don't see, each a known place to check rather than a scattered ri
 
 ## Platform support
 
-- **Emulation:** CHERI-QEMU covers CHERI-RISC-V and Morello ([[2026-09-27-future-of-computing#m29|§m29]]).
+- **Emulation:** CHERI-QEMU covers CHERI-RISC-V and Morello ([[2026-09-27-future-of-computing#m29|§m29]]). Upstream QEMU has no CHERI support (as of October 2026); three forks matter. [CHERI-Alliance/qemu](https://github.com/CHERI-Alliance/qemu) builds the older Cambridge ISA (v9, `qemu-system-riscv64xcheri`, what CheriBSD and the Sail model test against), the 0.9.3 draft of the standard (`riscv64cheristd`) and Morello. The draft standard itself, RVY, was at 0.9.10 in October 2026, and its emulator, compiler and firmware live in forks from Capabilities-Limited that cheribuild builds as `rvy-qemu`, `rvy-llvm` and `cheri-alliance-opensbi` (QEMU 7.1 base, branch `user/qwattash/rvfi-fixes-0910`, `qemu-system-riscv64y`). cheribuild builds RVY software purecap only; it marks the hybrid ABI unsupported by the toolchain. An RVY hart resets with CHERI disabled (`menvcfg.Y` and `senvcfg.Y` clear), so sap's unmodified kernel boots on `qemu-system-riscv64y` with the plain OpenSBI and passes every `init` check ([[2026-10-20-685b0203-ipc-cost-and-cheri]]). sap keeps the three RVY forks as submodules in `toolchain/` on the `cheri` branch, built by `toolchain/build.sh`.
 - **Rust (as of October 2026):** CHERI support exists only outside mainline Rust: a Morello compiler from the University of Kent (Rust 1.72.1, with `std` on CheriBSD), and a CHERIoT compiler for embedded RISC-V tracking nightly, where `core` and `alloc` compile and testing is ongoing ([Rust for Morello](https://www.cs.kent.ac.uk/people/staff/mjb211/rust/index.htm), [CHERI Alliance Rust working group](https://cheri-alliance.org/who-we-are/working-groups/rust-cheri/)). No purecap compiler for 64-bit CHERI-RISC-V was found. Since sap's userspace is Rust, purecap user programs wait on a compiler; code built for plain RISC-V runs unchanged in CHERI's hybrid mode, so the kernel and today's programs can run on CHERI-QEMU first.
 - **seL4:** no CHERI support in mainline as far as the chat knew; building on seL4 would mean the paging variant only ([[2026-09-27-future-of-computing#m31|§m31]]). This is one of the arguments in [[kernel-choice]].
 
 > [!question] Open
-> Which CHERI-RISC-V variant and toolchain to target (the standardization track versus the older Cambridge ISA in CHERI-QEMU), and at what milestone CHERI enters the roadmap. See [[roadmap]].
+> How to follow the RVY draft as it changes (0.9.9 to 0.9.10 took a month), and whether to target the hybrid ABI at all, since the toolchain builds RVY software purecap only. RVY was chosen over Morello and the Cambridge v9 ISA on 2026-10-20 ([[2026-10-20-685b0203#m4|§m4]], [[decisions]]).

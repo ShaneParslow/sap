@@ -1,8 +1,8 @@
 ---
 status: proposed
 summary: How code becomes a running process - a userspace process manager (decided) reads a code object by hash and builds the process from kernel objects; native code is static ELF, other formats are handled by loader components; a small per-architecture process ABI; components that don't assume they own an address space, so per-process versus shared address spaces is a deployment choice; and a boot image that breaks the loader/store circularity.
-updated: 2026-10-11
-sources: ["[[2026-10-08-22c3947b#m18|§m18]]", "[[2026-10-08-22c3947b#m20|§m20]]"]
+updated: 2026-10-20
+sources: ["[[2026-10-20-685b0203#m12|§m12]]", "[[2026-10-08-22c3947b#m18|§m18]]", "[[2026-10-08-22c3947b#m20|§m20]]"]
 ---
 
 # Program loading
@@ -15,7 +15,7 @@ The **process manager**, a userspace component, as in seL4, where the kernel kno
 
 **Decided (2026-10-11):** the *process factory* is an RPC interface hosted by the process manager, not a kernel object. The kernel only needs threads, address spaces and capability tables, as seL4 shows. The human's reason: it makes multiple executable formats and interpreters easy, since each is just another loader behind the same interface ([[2026-10-08-22c3947b#m20|§m20]]).
 
-The kernel itself loads exactly one program, the root task, as seL4 does; it is built today as a static position-independent ELF embedded in the kernel ([[kernel-root-task]]). The process manager will be that root task. The first piece of its loader exists in `sap-rt`, and the root task already uses it to start a second program in its own process ([[prog-runtime#The loader]]).
+The kernel itself loads exactly one program, the root task, as seL4 does; it is built today as a static position-independent ELF embedded in the kernel ([[kernel-root-task]]). The process manager is that root task: `init` becomes it, and the boot checks it runs today move into a program it spawns, the factory's first client (decided 2026-10-20, [[2026-10-20-685b0203#m12|§m12]]). The first piece of its loader exists in `sap-rt`, and the root task already uses it to start a second program in its own process ([[prog-runtime#The loader]]).
 
 ## Code objects and formats
 
@@ -37,7 +37,7 @@ The process manager loads one format itself, and every other format is a **loade
 - **Wasm:** a Wasm runtime is an ordinary native program whose world includes the module to run. Loading a Wasm component means spawning the runtime with the module as an import ([[prog-representation]]).
 - **Linux binaries:** handled by the compatibility layer, a POSIX personality component or a Linux VM ([[system-legacy-compat]]).
 
-Because code is immutable and identified by hash, read-only segments (text, read-only data) can be mapped straight from the store's frames into every process running that code, deduplicated by hash. Writable segments are copied. The `exports` list lets the activator start a program when its interface is first needed ([[kernel-process-model#Starting on demand]]) and lets a registry index implementations by interface ([[system-package-registry]]).
+Code is named by the BLAKE3 hash of its image (decided 2026-10-20, [[2026-10-20-685b0203#m12|§m12]]). Because code is immutable and identified by hash, read-only segments (text, read-only data) can be mapped straight from the store's frames into every process running that code, deduplicated by hash. Writable segments are copied. The `exports` list lets the activator start a program when its interface is first needed ([[kernel-process-model#Starting on demand]]) and lets a registry index implementations by interface ([[system-package-registry]]).
 
 **All code is position-independent**, kernel-loaded or not (decided 2026-10-11, [[2026-10-08-22c3947b#m22|§m22]]). Mappings are never both writable and executable.
 

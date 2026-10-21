@@ -1,7 +1,7 @@
 ---
 status: hub
 summary: Ordered work items - the kernel decision, the bring-up milestones on RISC-V, and design exercises that can run in parallel.
-updated: 2026-10-19
+updated: 2026-10-20
 sources: ["[[2026-09-27-future-of-computing#m9|§m9]]", "[[2026-09-27-future-of-computing#m11|§m11]]", "[[2026-09-27-future-of-computing#m28|§m28]]", "[[2026-09-27-future-of-computing#m29|§m29]]"]
 ---
 
@@ -21,10 +21,10 @@ The order agreed on 2026-10-19 ([[2026-10-16-2c1ac53c#m10|§m10]]), from the ite
 1. ~~I4, splitting `sap-rt`~~ (done).
 2. ~~I5, provenance hygiene in user code~~ (done).
 3. ~~**M5**, Cap'n Proto messages across the rings~~ (done). It left one question: page transfer loses to copying on QEMU, and its per-page cost needs hardware numbers ([[ipc-page-transfer#Open questions]]).
-4. **M7**, the process manager: programs start their runtime from the bootstrap message, and the loader moves onto the runtime's slot allocator.
+4. **M7**, the process manager: `init` becomes it, and its boot checks move into a program it spawns; programs start their runtime from a startup record and the bootstrap message; code in a boot pack is named by its BLAKE3 hash; the loader moves onto the runtime's slot allocator ([[2026-10-20-685b0203#m12|§m12]]).
 5. **I2**, `std`, once thread-local storage, a log service and the process ABI exist.
 
-CHERI stays at M10: the provenance lint and the rules in [[hw-cheri#Keeping the door open]] keep it reachable, and Rust has no CHERI-RISC-V purecap compiler yet ([[hw-cheri#Platform support]]).
+In parallel, on the `cheri` branch ([[2026-10-20-685b0203#m4|§m4]]): **a CHERI spike** on the RVY draft standard. First the toolchain (in-tree submodules), then a CHERI-aware OpenSBI, then the kernel saving capability registers and giving user threads their capabilities, then one compartment transport to compare with the rings ([[ipc-paging-vs-cheri#Moving ownership]]). Purecap Rust user programs still wait for a compiler ([[hw-cheri#Platform support]]); M10 is where CHERI becomes a supported configuration.
 
 ## Bring-up milestones
 
