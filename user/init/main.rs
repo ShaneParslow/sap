@@ -9,6 +9,8 @@
 
 extern crate alloc;
 
+mod pack;
+
 use alloc::boxed::Box;
 use alloc::format;
 use alloc::vec::Vec;
@@ -91,6 +93,9 @@ fn sap_main(boot_info: usize, _: usize, _: usize) -> ! {
 }
 
 fn report(info: &BootInfo) {
+    for program in pack::PROGRAMS {
+        println!("init: boot pack: {} {}", program.name, program.hash);
+    }
     let untyped = &info.untyped_list[..info.untyped.len()];
     let bytes: usize = untyped.iter().map(|u| 1usize << u.size_bits).sum();
     let largest = untyped.iter().map(|u| u.size_bits).max().unwrap_or(0);
@@ -864,7 +869,10 @@ fn check_faults(info: &BootInfo) {
 }
 
 /// The second program, built by this crate's build script.
-static PEER: &[u8] = include_bytes!(env!("PEER_ELF"));
+/// The peer's image from the boot pack.
+fn peer_image() -> &'static [u8] {
+    pack::find(&pack::PEER).expect("the boot pack's peer doesn't match its hash")
+}
 
 /// A peer's bootstrap message and its length, built without the heap
 /// (which `check_heap` wants untouched): `mode`, then the indices of its
@@ -915,7 +923,8 @@ fn check_process(info: &BootInfo) {
     let mut slots = Slots { next: base + 3, end: base + 200 };
     let (bootstrap, len) = peer_bootstrap(Mode::Call, 0);
     let launch = Launch { priority: 255, budget_bits: Some(16), imports: &[(badged, rights::WRITE | rights::GRANT)], bootstrap: &bootstrap[..len] };
-    let peer = loader::load(PEER, &parent, &mut slots, &launch);
+    assert!(pack::find(&pack::Hash([0; 32])).is_none(), "the boot pack has no program of that hash");
+    let peer = loader::load(peer_image(), &parent, &mut slots, &launch);
     // The process ABI's slots: its own objects, its budget, its import.
     let theirs = |index| SlotRef { root: peer.cnode, index, depth: loader::CNODE_RADIX }.identify().map(|id| id.object_type).map_err(|e| e.0);
     for (index, wanted) in [
@@ -993,7 +1002,7 @@ fn connect_peer(parent: &Parent, slots: &mut Slots, mode: Mode, data_pages: usiz
     let (bootstrap, len) = peer_bootstrap(mode, data_pages);
     let imports = [(ep, rights::READ), (theirs, rights::READ), (my_bell, rights::WRITE), (reply, rights::ALL)];
     let launch = Launch { priority: 255, budget_bits: None, imports: &imports, bootstrap: &bootstrap[..len] };
-    let peer = loader::load(PEER, parent, slots, &launch);
+    let peer = loader::load(peer_image(), parent, slots, &launch);
     let out = RingLayout::new(here, data_pages);
     let back = RingLayout::new(here + out.pages() * PAGE, data_pages);
     let offset = CHANNEL_THERE.wrapping_sub(here);

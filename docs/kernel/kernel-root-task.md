@@ -13,7 +13,7 @@ The kernel loads exactly one program, the **root task**, as seL4 does. Every oth
 
 ## Building it
 
-The root task is `user/init`, a crate in the workspace ([[kernel-boot-riscv#Building and running]]). The kernel's build script (`kernel/build.rs`) builds it in release mode with the shared `build_user_program` helper ([[prog-rust-toolchain#Building a program from a build script]]) and passes the result's path to the kernel, which embeds it with `include_bytes!` (`kernel/root_task.rs:25`). `user/init/build.rs` builds the second program the same way ([[prog-runtime#The second program]]).
+The root task is `user/init`, a crate in the workspace ([[kernel-boot-riscv#Building and running]]). The kernel's build script (`kernel/build.rs`) builds it in release mode with the shared `build_user_program` helper ([[prog-rust-toolchain#Building a program from a build script]]) and passes the result's path to the kernel, which embeds it with `include_bytes!` (`kernel/root_task.rs:25`). `user/init/build.rs` builds the programs `init` starts the same way, into its boot pack ([[prog-runtime#The second program]]).
 
 `user/init` is built for sap's own target as a **static position-independent executable**, in line with the decision that all code is position-independent ([[prog-loading]]), with `core` built from source so that it is position-independent too ([[prog-rust-toolchain]]). Each segment starts on its own page (`-z separate-loadable-segments`), so segments can be mapped with different permissions, and every relocation is in the writable segment: the linker is told to refuse any other (`-z text`).
 
