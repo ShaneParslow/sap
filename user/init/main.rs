@@ -1,8 +1,8 @@
 //! The root task, and the process manager it is becoming (M7). It starts
-//! the programs in its boot pack and hears when they exit or fault. Today
-//! that is one program, `check`, the kernel checks, which gets the
-//! authority only the root task holds at boot: untyped memory and the ASID
-//! pool.
+//! `check`, the kernel checks, which gets the authority only the root task
+//! holds at boot: untyped memory and the ASID pool. Then it serves the
+//! process factory (`factory`), which starts programs from the boot pack
+//! for its clients, until `check` exits.
 
 #![no_std]
 #![no_main]
@@ -12,6 +12,7 @@
 
 extern crate alloc;
 
+mod factory;
 mod pack;
 
 use alloc::vec;
@@ -19,9 +20,10 @@ use alloc::vec::Vec;
 
 use capnp::message::{Builder, SingleSegmentAllocator};
 use sap_interfaces::check_capnp::check_imports;
+use factory::{Answer, Factory};
 use sap_loader::{self as loader, Give, Launch, Parent, Slots, LAUNCH};
 use sap_ring::as_bytes_mut;
-use sap_rt::abi::{fault, init_slot, launcher, object, rights, BootInfo, UntypedDesc};
+use sap_rt::abi::{fault, init_slot, launcher, object, rights, BootInfo, UntypedDesc, MAX_EXTRA_CAPS, MAX_MESSAGE_LENGTH};
 use sap_rt::address::mapped;
 use sap_rt::cnode::SlotRef;
 use sap_rt::runtime::{self, Resources};
@@ -48,28 +50,61 @@ fn sap_main(boot_info: usize, _: usize, _: usize) -> ! {
     let own = own_untyped(info);
     runtime::start(Resources { cnode: init_slot::CNODE, slots: info.empty.start..info.empty.end, untyped: own, vspace: init_slot::VSPACE, heap: HEAP });
 
-    // Where the programs init starts report their exit and faults.
-    let (ep, reply, badged) = (new_object(own, object::ENDPOINT), new_object(own, object::REPLY), slot());
-    SlotRef::new(init_slot::CNODE, badged).mint_from(SlotRef::new(init_slot::CNODE, ep), rights::WRITE | rights::GRANT, CHECK_BADGE).expect("init: badge");
-    start_check(info, own, badged);
+    // One endpoint for everything: `check` reports its exit and faults
+    // here, and the factory's clients and processes call it, each through
+    // a capability with its own badge.
+    let parent = Parent {
+        cnode: init_slot::CNODE,
+        vspace: init_slot::VSPACE,
+        asid_pool: init_slot::ASID_POOL,
+        authority: init_slot::TCB,
+        untyped: own,
+        scratch: SCRATCH,
+        timer_hz: info.timer_hz,
+    };
+    let (ep, mut reply, check_launcher, factory_cap) = (new_object(own, object::ENDPOINT), new_object(own, object::REPLY), slot(), slot());
+    let endpoint = SlotRef::new(init_slot::CNODE, ep);
+    SlotRef::new(init_slot::CNODE, check_launcher).mint_from(endpoint, rights::WRITE | rights::GRANT, CHECK_BADGE).expect("init: badge");
+    let factory_rights = rights::WRITE | rights::GRANT | rights::GRANT_REPLY;
+    SlotRef::new(init_slot::CNODE, factory_cap).mint_from(endpoint, factory_rights, factory::FACTORY_BADGE).expect("init: badge");
+    let mut factory = Factory::new(ep, own, parent);
+    start_check(info, &parent, check_launcher, factory_cap);
 
-    let mut words = [0usize; 4];
+    let mut words = [0usize; MAX_MESSAGE_LENGTH];
     loop {
+        ipc::set_receive_window(init_slot::CNODE, factory.window, MAX_EXTRA_CAPS);
         let message = ipc::recv(ep, reply, &mut words).expect("init: receive");
-        match (message.badge, message.info.label()) {
-            (CHECK_BADGE, launcher::EXIT) if words[0] == 0 => {
+        let (badge, label) = (message.badge, message.info.label());
+        let words = &words[..message.info.length()];
+        if badge != CHECK_BADGE {
+            match factory.handle(badge, label, words, message.info.extra_caps(), reply) {
+                Some(Answer::Reply(label, words, caps)) => {
+                    let _ = ipc::reply(reply, label, &words, &caps);
+                }
+                Some(Answer::Later) => reply = factory.fresh_reply(),
+                Some(Answer::Nothing) => {}
+                None => {
+                    println!("init: ignored a message with badge {badge:#x}, label {label}");
+                    let _ = ipc::reply(reply, sap_rt::abi::factory::BAD_REQUEST, &[], &[]);
+                }
+            }
+            factory.clear_window();
+            continue;
+        }
+        match label {
+            launcher::EXIT if words.first() == Some(&0) => {
                 println!("init: check exited successfully");
                 debug::halt(false)
             }
-            (CHECK_BADGE, launcher::EXIT) => {
-                println!("init: check exited with code {}", words[0]);
+            launcher::EXIT => {
+                println!("init: check exited with code {:?}", words.first());
                 debug::halt(true)
             }
-            (CHECK_BADGE, fault::VM | fault::USER_EXCEPTION) => {
+            fault::VM | fault::USER_EXCEPTION if words.len() >= fault::LENGTH => {
                 println!("init: check faulted at pc {:#x}, address {:#x}, cause {}", words[fault::PC], words[fault::ADDRESS], words[fault::CAUSE]);
                 debug::halt(true)
             }
-            (badge, label) => println!("init: ignored a message with badge {badge}, label {label}"),
+            _ => println!("init: ignored a message from check with label {label}"),
         }
     }
 }
@@ -115,18 +150,20 @@ fn new_object(from: usize, object_type: usize) -> usize {
     at
 }
 
-/// Start `check` from the boot pack, built from `own`, with every other
-/// untyped region moved to it, a copy of the ASID pool, and `launcher` as
-/// its launcher and fault handler.
-fn start_check(info: &BootInfo, own: usize, launcher: usize) {
+/// Start `check` from the boot pack, built from init's own untyped memory,
+/// with every other untyped region moved to it, a copy of the ASID pool and
+/// `factory`, and `launcher` as its launcher and fault handler.
+fn start_check(info: &BootInfo, parent: &Parent, launcher: usize, factory: usize) {
+    let own = parent.untyped;
     let image = pack::find(&pack::CHECK).expect("init: the boot pack's check doesn't match its hash");
     assert!(pack::find(&pack::Hash([0; 32])).is_none(), "init: the boot pack has no program of that hash");
 
-    // Imports: the ASID pool, then the untyped regions in boot order.
+    // Imports: the ASID pool, the factory, then the untyped regions in boot
+    // order.
     let regions = || (info.untyped.start..info.untyped.end).zip(&info.untyped_list).filter(|&(cptr, u)| u.is_device == 0 && cptr != own);
-    let mut imports = vec![(init_slot::ASID_POOL, Give::Copy(rights::ALL))];
+    let mut imports = vec![(init_slot::ASID_POOL, Give::Copy(rights::ALL)), (factory, Give::Move)];
     imports.extend(regions().map(|(cptr, _)| (cptr, Give::Move)));
-    let count = imports.len();
+    let count = imports.len() - 2;
 
     // On the heap: the stack is only 16 KiB.
     let mut scratch = vec![0u64; 512];
@@ -134,10 +171,12 @@ fn start_check(info: &BootInfo, own: usize, launcher: usize) {
     let mut message = Builder::new(&mut allocator);
     let mut root = message.init_root::<check_imports::Builder>();
     root.set_asid_pool(0);
-    let mut list = root.init_untyped((count - 1) as u32);
+    root.set_factory(1);
+    root.set_peer_hash(&pack::PEER.0);
+    let mut list = root.init_untyped(count as u32);
     for (i, (_, &UntypedDesc { paddr, size_bits, .. })) in regions().enumerate() {
         let mut region = list.reborrow().get(i as u32);
-        region.set_import(1 + i as u32);
+        region.set_import(2 + i as u32);
         region.set_size_bits(size_bits);
         region.set_paddr(paddr as u64);
     }
@@ -147,15 +186,6 @@ fn start_check(info: &BootInfo, own: usize, launcher: usize) {
     let bootstrap: Vec<u8> = segments[0].to_vec();
     drop(message);
 
-    let parent = Parent {
-        cnode: init_slot::CNODE,
-        vspace: init_slot::VSPACE,
-        asid_pool: init_slot::ASID_POOL,
-        authority: init_slot::TCB,
-        untyped: own,
-        scratch: SCRATCH,
-        timer_hz: info.timer_hz,
-    };
     let first = slots::alloc_range(256).expect("init: slots for check");
     let mut slots = Slots { next: first, end: first + 256 };
     let launch = Launch {
@@ -168,8 +198,8 @@ fn start_check(info: &BootInfo, own: usize, launcher: usize) {
         bootstrap: &bootstrap,
         ..LAUNCH
     };
-    let check = loader::load(image, &parent, &mut slots, &launch).expect("init: load check");
+    let check = loader::load(image, parent, &mut slots, &launch).expect("init: load check");
     tcb::set_fault_handler(check.tcb, Some(launcher)).expect("init: fault handler");
-    println!("init: starting check ({} KiB image, {} untyped regions)", image.len() / 1024, count - 1);
+    println!("init: starting check ({} KiB image, {} untyped regions)", image.len() / 1024, count);
     check.start().expect("init: start check");
 }

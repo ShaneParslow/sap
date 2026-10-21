@@ -10,6 +10,10 @@ struct CheckImports {
   asidPool @0 :UInt32;
   # Untyped memory, as the kernel describes it to the root task.
   untyped @1 :List(Untyped);
+  # The process factory, and the hash of `peer` in the boot pack, for
+  # starting it through the factory.
+  factory @2 :UInt32;
+  peerHash @3 :Data;
 }
 
 struct Untyped {

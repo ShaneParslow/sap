@@ -44,6 +44,7 @@ const HEAP: AddressRange = AddressRange { start: 0x10_0000_0000, end: 0x10_4000_
 pub const DEFAULT_CNODE_RADIX: usize = 6;
 
 /// What the loader takes from its caller.
+#[derive(Clone, Copy)]
 pub struct Parent {
     /// The caller's root CNode, address space, ASID pool and an authority
     /// thread for priorities.

@@ -22,7 +22,7 @@ The **bootstrap capability** is a typed interface matching the program's declare
 
 ## Spawning
 
-No fork, no exec. A launcher holding a **process-factory** capability calls `spawn(code, initial_caps)`. The code is identified by its content hash in the store, so what runs can be verified ([[2026-09-27-future-of-computing#m25|§m25]]).
+No fork, no exec. A launcher holding a **process-factory** capability calls `spawn(code, initial_caps)`. The code is identified by its content hash in the store, so what runs can be verified ([[2026-09-27-future-of-computing#m25|§m25]]). A first version is built: `init` serves `SPAWN`, `WAIT` and `KILL` for programs in its boot pack, with memory the client provides ([[prog-process-factory]]).
 
 Example: a `resize` program declares its imports ([[2026-09-27-future-of-computing#m29|§m29]]):
 

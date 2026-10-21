@@ -7,7 +7,9 @@
 //!   channel;
 //! - `misbehave`: answer one request, then break the channel's rules;
 //! - `sumBytes`: sum the bytes of each record or page transfer (for
-//!   measuring).
+//!   measuring);
+//! - `exit` and `crash`: exit with a code, or fault, for checking how a
+//!   process manager hears of either.
 //!
 //! It runs without a heap: Cap'n Proto messages are built in a fixed buffer.
 
@@ -72,40 +74,45 @@ impl From<capnp::NotInSchema> for BadBootstrap {
     }
 }
 
-/// Read the bootstrap message.
-fn imports(startup: &'static Startup) -> Result<(Mode, Peer), BadBootstrap> {
+/// Read the bootstrap message: the mode, its capabilities and the exit code.
+fn imports(startup: &'static Startup) -> Result<(Mode, Peer, usize), BadBootstrap> {
     let segments = [process::bootstrap(startup)];
     let reader = Reader::new(SegmentArray::new(&segments), ReaderOptions::new());
     let imports = reader.get_root::<peer_imports::Reader>()?;
     let import = |index: u32| process::import(startup, index).ok_or(BadBootstrap::NoImport(index));
     let mode = imports.get_mode()?;
-    let endpoint = import(imports.get_endpoint())?;
-    let peer = if mode == Mode::Call {
-        Peer { endpoint, data_pages: 0, notification: 0, doorbell: 0, reply: 0, free: 0 }
-    } else {
-        Peer {
-            endpoint,
+    let nothing = Peer { endpoint: 0, data_pages: 0, notification: 0, doorbell: 0, reply: 0, free: 0 };
+    let peer = match mode {
+        Mode::Exit | Mode::Crash => nothing,
+        Mode::Call => Peer { endpoint: import(imports.get_endpoint())?, ..nothing },
+        _ => Peer {
+            endpoint: import(imports.get_endpoint())?,
             data_pages: imports.get_data_pages() as usize,
             notification: import(imports.get_notification())?,
             doorbell: import(imports.get_doorbell())?,
             reply: import(imports.get_reply())?,
             free: startup.free.start,
-        }
+        },
     };
-    Ok((mode, peer))
+    Ok((mode, peer, imports.get_exit_code() as usize))
 }
 
 #[unsafe(no_mangle)]
 fn sap_main(a0: usize, _: usize, _: usize) -> ! {
     // SAFETY: the loader started this process with its startup record.
     let startup = unsafe { process::startup(a0) };
-    let (mode, peer) = imports(startup).expect("peer: bootstrap message");
+    let (mode, peer, code) = imports(startup).expect("peer: bootstrap message");
     match mode {
         Mode::Call => call_parent(peer.endpoint),
         Mode::EchoWords => echo_words(channel(peer)),
         Mode::ServeEcho => serve_echo(peer, channel(peer)),
         Mode::Misbehave => misbehave(peer, channel(peer)),
         Mode::SumBytes => sum_bytes(peer, channel(peer)),
+        Mode::Exit => process::exit(code),
+        Mode::Crash => {
+            // SAFETY: deliberately reads an address nothing is mapped at.
+            let _ = unsafe { core::ptr::read_volatile(mapped::<usize>(0x1000)) };
+        }
     }
     loop {
         let _ = tcb::suspend(process_slot::TCB);

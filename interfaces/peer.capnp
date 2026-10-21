@@ -12,6 +12,10 @@ enum Mode {
   serveEcho @2;
   misbehave @3;
   sumBytes @4;
+  # Exit with `exitCode`.
+  exit @5;
+  # Read address 0, which faults.
+  crash @6;
 }
 
 struct PeerImports {
@@ -25,4 +29,5 @@ struct PeerImports {
   notification @3 :UInt32;
   doorbell @4 :UInt32;
   reply @5 :UInt32;
+  exitCode @6 :UInt32;
 }

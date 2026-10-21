@@ -19,7 +19,7 @@ use alloc::vec::Vec;
 use core::alloc::Layout;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use sap_rt::abi::{attr, error, fault, identify, object, process_slot, recv_source, reg, rights, SlotRange, Startup, UntypedDesc, MAX_BOOT_UNTYPED};
+use sap_rt::abi::{attr, error, factory, fault, identify, object, process_slot, recv_source, reg, rights, SlotRange, Startup, UntypedDesc, MAX_BOOT_UNTYPED};
 use sap_rt::address::mapped;
 use sap_rt::cnode::SlotRef;
 use sap_rt::sys::Error;
@@ -48,6 +48,9 @@ struct Env {
     /// Free slots.
     empty: SlotRange,
     asid_pool: usize,
+    /// The process factory, and the hash of the peer in its boot pack.
+    factory: usize,
+    peer_hash: [u8; 32],
     /// Untyped memory, in consecutive slots, described in order in
     /// `untyped_list`.
     untyped: SlotRange,
@@ -73,6 +76,8 @@ fn env(startup: &'static Startup) -> Result<Env, capnp::Error> {
         cnode_radix: startup.cnode_radix,
         empty: startup.free,
         asid_pool: import(imports.get_asid_pool()),
+        factory: import(imports.get_factory()),
+        peer_hash: imports.get_peer_hash()?.try_into().expect("check: the peer's hash is 32 bytes"),
         untyped: SlotRange { start: first, end: first + regions.len() as usize },
         untyped_list,
     })
@@ -131,6 +136,7 @@ fn sap_main(a0: usize, _: usize, _: usize) -> ! {
     check_echo_service(info);
     measure_transfer(info);
     check_capnp();
+    check_factory(info);
     println!("check: all checks passed");
     process::exit(0)
 }
@@ -899,6 +905,11 @@ static PEER: &[u8] = include_bytes!(env!("PEER_ELF"));
 /// (which `check_heap` wants untouched): `mode`, then the indices of its
 /// imports in the order `connect_peer` and `check_process` give them.
 fn peer_bootstrap(mode: Mode, data_pages: usize) -> ([u8; 256], usize) {
+    peer_bootstrap_with(mode, data_pages, 0)
+}
+
+/// A peer's bootstrap message with an exit code, for `Mode::Exit`.
+fn peer_bootstrap_with(mode: Mode, data_pages: usize, exit_code: u32) -> ([u8; 256], usize) {
     let mut scratch = [0u64; 32];
     let mut allocator = SingleSegmentAllocator::new(as_bytes_mut(&mut scratch));
     let mut message = Builder::new(&mut allocator);
@@ -909,6 +920,7 @@ fn peer_bootstrap(mode: Mode, data_pages: usize) -> ([u8; 256], usize) {
     imports.set_notification(1);
     imports.set_doorbell(2);
     imports.set_reply(3);
+    imports.set_exit_code(exit_code);
     let segments = message.get_segments_for_output();
     assert_eq!(segments.len(), 1, "a bootstrap message is one segment");
     // Copied out: the allocator zeroes its buffer when the message goes.
@@ -1529,4 +1541,121 @@ fn check_capnp() {
     let over = reader.get_root::<request::Reader>().and_then(|r| r.get_numbers().and_then(|_| r.get_blob()).map(drop));
     assert!(over.is_err(), "a traversal past the limit should be refused");
     println!("check: Cap'n Proto messages build without a heap, read back, and refuse bad pointers, UTF-8 and traversal");
+}
+
+/// What a `SPAWN` returned: its label, and the slot the handle (on
+/// success) or the memory (on a refusal) came back in.
+struct Spawned {
+    label: usize,
+    back: usize,
+}
+
+/// Ask the factory to start the program named `hash` with `bootstrap`,
+/// built from the untyped memory in `memory` (moved), with `imports`
+/// (copied).
+fn factory_spawn(info: &Env, hash: &[u8; 32], bootstrap: &[u8], memory: Option<usize>, imports: &[usize]) -> Spawned {
+    let mut words = [0usize; 120];
+    for (i, chunk) in hash.chunks(8).enumerate() {
+        words[i] = u64::from_le_bytes(chunk.try_into().unwrap()) as usize;
+    }
+    words[factory::HASH_WORDS] = bootstrap.len();
+    let packed = &mut words[factory::HASH_WORDS + 1..];
+    for (i, chunk) in bootstrap.chunks(8).enumerate() {
+        let mut word = [0u8; 8];
+        word[..chunk.len()].copy_from_slice(chunk);
+        packed[i] = u64::from_le_bytes(word) as usize;
+    }
+    let len = factory::HASH_WORDS + 1 + bootstrap.len().div_ceil(8);
+    let mut caps = [ipc::Give::copy(0); 16];
+    let mut n = 0;
+    if let Some(memory) = memory {
+        caps[0] = ipc::Give::moved(memory);
+        n = 1;
+    }
+    for &cap in imports {
+        caps[n] = ipc::Give::copy(cap);
+        n += 1;
+    }
+    let back = slots::alloc().expect("slot");
+    ipc::set_receive_window(process_slot::CNODE, back, 1);
+    let reply = ipc::call(info.factory, factory::SPAWN, &words[..len], &caps[..n], &mut []).expect("spawn: call");
+    Spawned { label: reply.info.label(), back }
+}
+
+/// `WAIT` on `handle`: how the process ended, its code, and the slot its
+/// memory came back in; or the reply's label if it isn't `OK`. The kernel
+/// answers a call through an empty slot with the label `FAILED_LOOKUP`.
+fn factory_wait(handle: usize) -> Result<(usize, usize, usize), usize> {
+    let back = slots::alloc().expect("slot");
+    ipc::set_receive_window(process_slot::CNODE, back, 1);
+    let mut out = [0usize; 2];
+    let reply = ipc::call(handle, factory::WAIT, &[], &[], &mut out).expect("wait: call");
+    if reply.info.label() != factory::OK {
+        return Err(reply.info.label());
+    }
+    assert_eq!(reply.info.length(), 2, "wait: the reply");
+    Ok((out[0], out[1], back))
+}
+
+/// The process factory: start the peer from init's boot pack with memory
+/// this process provides; hear how it ended (an exit code, a fault, a
+/// kill) and get the memory back; and the refusals.
+fn check_factory(info: &Env) {
+    let region = untyped_at_least(info, 22);
+    let in_root = SlotRef { root: process_slot::CNODE, index: 0, depth: 0 };
+    let memory = |bits| {
+        let at = slots::alloc().expect("slot");
+        expect("child memory", untyped::retype(region, object::UNTYPED, bits, in_root, at, 1), Ok(()));
+        at
+    };
+    let kind = |s: usize| slot(s).identify().map(|id| id.object_type).map_err(|e| e.0);
+    let peer = info.peer_hash;
+
+    // An exit code, and the memory back, usable again.
+    let (bootstrap, len) = peer_bootstrap_with(Mode::Exit, 0, 7);
+    let spawned = factory_spawn(info, &peer, &bootstrap[..len], Some(memory(20)), &[]);
+    assert_eq!((spawned.label, kind(spawned.back)), (factory::OK, Ok(object::ENDPOINT)), "spawn: a handle");
+    let (how, code, back) = factory_wait(spawned.back).expect("wait");
+    assert_eq!((how, code, kind(back)), (factory::EXITED, 7, Ok(object::UNTYPED)), "an exit, and the memory back");
+    assert_eq!(factory_wait(spawned.back).err(), Some(error::FAILED_LOOKUP), "the handle is gone after the wait");
+    let again = factory_spawn(info, &peer, &bootstrap[..len], Some(back), &[]);
+    let (how, code, back) = factory_wait(again.back).expect("wait");
+    assert_eq!((how, code, kind(back)), (factory::EXITED, 7, Ok(object::UNTYPED)), "the returned memory builds a process again");
+
+    // A fault.
+    let (bootstrap, len) = peer_bootstrap(Mode::Crash, 0);
+    let crashed = factory_spawn(info, &peer, &bootstrap[..len], Some(back), &[]);
+    let (how, code, back) = factory_wait(crashed.back).expect("wait");
+    assert_eq!((how, code), (factory::FAULTED, fault::VM), "a fault");
+
+    // A kill: the peer calls an endpoint nobody answers, and blocks.
+    let ep = slots::alloc().expect("slot");
+    expect("endpoint", untyped::retype(region, object::ENDPOINT, 0, in_root, ep, 1), Ok(()));
+    let (bootstrap, len) = peer_bootstrap(Mode::Call, 0);
+    let blocked = factory_spawn(info, &peer, &bootstrap[..len], Some(back), &[ep]);
+    assert_eq!(blocked.label, factory::OK, "spawn with an import");
+    let killed = ipc::call(blocked.back, factory::KILL, &[], &[], &mut []).expect("kill");
+    assert_eq!(killed.info.label(), factory::OK, "kill");
+    let (how, _, back) = factory_wait(blocked.back).expect("wait");
+    assert_eq!(how, factory::KILLED, "a kill");
+
+    // Refusals, each giving the memory back.
+    let unknown = factory_spawn(info, &[0; 32], &bootstrap[..len], Some(back), &[]);
+    assert_eq!((unknown.label, kind(unknown.back)), (factory::NO_SUCH_PROGRAM, Ok(object::UNTYPED)), "an unknown program");
+    let small = factory_spawn(info, &peer, &bootstrap[..len], Some(memory(14)), &[]);
+    assert_eq!((small.label, kind(small.back)), (factory::LOAD_FAILED, Ok(object::UNTYPED)), "too little memory");
+    let not_memory = factory_spawn(info, &peer, &bootstrap[..len], Some(ep), &[]);
+    assert_eq!((not_memory.label, kind(not_memory.back)), (factory::BAD_REQUEST, Ok(object::ENDPOINT)), "an endpoint as memory");
+    let nothing = factory_spawn(info, &peer, &bootstrap[..len], None, &[]);
+    assert_eq!(nothing.label, factory::BAD_REQUEST, "no memory");
+    // A length word claiming more bytes than the request carries.
+    let mut lying = [0usize; factory::HASH_WORDS + 1];
+    lying[factory::HASH_WORDS] = 64;
+    let back = slots::alloc().expect("slot");
+    ipc::set_receive_window(process_slot::CNODE, back, 1);
+    let reply = ipc::call(info.factory, factory::SPAWN, &lying, &[ipc::Give::moved(unknown.back)], &mut []).expect("spawn: call");
+    assert_eq!((reply.info.label(), kind(back)), (factory::BAD_REQUEST, Ok(object::UNTYPED)), "a bootstrap longer than the request");
+
+    expect("revoke", slot(region).revoke(), Ok(()));
+    println!("check: the process factory starts programs by hash with the caller's memory, reports exits, faults and kills, and gives the memory back");
 }
