@@ -42,6 +42,8 @@ extern "C" fn riscv_start(hart_id: usize, dtb: usize, image_pa: usize) -> ! {
     let mut alloc = BootAllocator::new(mm::free_regions(&boot.memory, &boot.reserved));
     let devices = test_device.map(|start| Region { start, size: PAGE_SIZE });
     paging::init(&boot, devices.as_slice(), &mut alloc);
+    #[cfg(feature = "cheri")]
+    trap::enable_cheri();
 
     timer::init(boot.timer_hz);
     crate::kmain(boot, alloc)

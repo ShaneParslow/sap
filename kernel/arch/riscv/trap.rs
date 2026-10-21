@@ -71,10 +71,15 @@ pub struct UserContext {
     /// the tag from it (`return_to_user`).
     pub sepc: Reg,
     pub sstatus: Reg,
+    /// The thread's default data capability, which its integer-mode loads
+    /// and stores go through. Zero for a thread the kernel set up, which
+    /// then gets the user root (`USER_ROOT`).
+    #[cfg(feature = "cheri")]
+    pub ddc: Reg,
 }
 
 const CONTEXT_SIZE: usize = core::mem::size_of::<UserContext>();
-const _: () = assert!(CONTEXT_SIZE == 34 * SLOT);
+const _: () = assert!(CONTEXT_SIZE == if cfg!(feature = "cheri") { 35 } else { 34 } * SLOT);
 
 /// `sstatus.SPP`: the privilege the trap came from (set = supervisor).
 const SSTATUS_SPP: usize = 1 << 8;
@@ -163,8 +168,9 @@ impl UserContext {
 
 // RVY instructions, as raw encodings since Rust's assembler doesn't know
 // them: switch to capability or integer pointer mode; load and store a
-// whole capability; set a capability's address; read its tag; copy it; and
-// rebuild a capability's tag from an authorising one.
+// whole capability; set a capability's address; read its tag; copy it;
+// rebuild a capability's tag from an authorising one; set its bounds
+// exactly; and clear permissions.
 #[cfg(feature = "cheri")]
 global_asm!(
     r#"
@@ -191,6 +197,12 @@ global_asm!(
     .endm
     .macro YBLD cd, cs1, cs2
     .insn r 0x7b, 0, 0x0f, \cd, \cs1, \cs2
+    .endm
+    .macro YBNDSW cd, cs, rs
+    .insn r 0x7b, 0, 0x1b, \cd, \cs, \rs
+    .endm
+    .macro YPERMC cd, cs, rs
+    .insn r 0x7b, 0, 0x13, \cd, \cs, \rs
     .endm
     # The default data capability.
     .equ CSR_DDC, 0x03f
@@ -265,6 +277,12 @@ trap_entry:
     SY      t0, 32*{slot}, sp
     csrr    t0, sstatus
     sd      t0, 33*{slot}(sp)
+    # The user's DDC, then the kernel's: the context capability, made from
+    # the root (return_to_user), since the kernel's integer-mode loads and
+    # stores go through DDC.
+    csrr    t0, CSR_DDC
+    SY      t0, 34*{slot}, sp
+    csrw    CSR_DDC, sp
     YMODESWI
 .else
     .irp n, 1,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31
@@ -294,25 +312,38 @@ return_to_user:
     # comes from this thread.
     # TODO: bounded capabilities for the context and for user code and data,
     # rather than the root (needed once processes are compartments).
+    lla     t3, USER_ROOT
     YMODESWY
     csrr    t1, CSR_DDC
+    YADDRW  t3, t1, t3
+    LY      t3, 0, t3               # the user root
     YADDRW  t1, t1, a0
     csrw    sscratch, t1
     YMV     sp, t1
     ld      t0, 33*{slot}(sp)
     csrw    sstatus, t0
     # The saved pc. If kernel code changed its address, the tag is gone:
-    # rebuild it from the metadata, with DDC as the authority; a thread
-    # the kernel set up has no metadata, and gets DDC's.
+    # rebuild it from the metadata, with the user root as the authority; a
+    # thread the kernel set up has no metadata, and gets the user root's.
     LY      t0, 32*{slot}, sp
     YTAGR   t2, t0
     bnez    t2, 2f
     ld      t2, 32*{slot}+8(sp)
     bnez    t2, 3f
-    YADDRW  t0, t1, t0
+    YADDRW  t0, t3, t0
     j       2f
-3:  YBLD    t0, t1, t0
+3:  YBLD    t0, t3, t0
 2:  csrw    sepc, t0
+    # The thread's DDC, as it left it; all zero for a thread the kernel set
+    # up, which gets the user root. Last of the CSRs: the code below
+    # reaches the context through sp, not DDC.
+    LY      t0, 34*{slot}, sp
+    ld      t2, 34*{slot}(sp)
+    ld      t4, 34*{slot}+8(sp)
+    or      t2, t2, t4
+    bnez    t2, 4f
+    YMV     t0, t3
+4:  csrw    CSR_DDC, t0
     .irp n, 1,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31
     LY      x\n, \n*{slot}, sp
     .endr
@@ -349,8 +380,6 @@ unsafe extern "C" {
 /// and mark the kernel as running (`sscratch` = 0; firmware may leave it
 /// set).
 pub fn init() {
-    #[cfg(feature = "cheri")]
-    enable_cheri();
     // SAFETY: nothing else uses sscratch; 0 means "the kernel is running".
     unsafe { riscv::register::sscratch::write(0) };
     let entry = trap_entry as *const () as usize;
@@ -358,22 +387,77 @@ pub fn init() {
     unsafe { stvec::write(stvec::Stvec::new(entry, stvec::TrapMode::Direct)) };
 }
 
+/// The capability every user thread's DDC and program counter capability
+/// start from, and the most a kernel-changed pc is rebuilt to: the root,
+/// bounded to user addresses (`0..USER_END`) and without the permission to
+/// access system registers. Set once by `enable_cheri`; read by
+/// `return_to_user`.
+#[cfg(feature = "cheri")]
+#[repr(C, align(16))]
+struct Capability(core::cell::UnsafeCell<[usize; 2]>);
+
+// SAFETY: written once at boot, before any user thread runs, and read
+// only by the trap code after that.
+#[cfg(feature = "cheri")]
+unsafe impl Sync for Capability {}
+
+#[cfg(feature = "cheri")]
+#[unsafe(no_mangle)]
+static USER_ROOT: Capability = Capability(core::cell::UnsafeCell::new([0; 2]));
+
+/// `ASR` in the permissions `ypermc` takes: access to system registers.
+#[cfg(feature = "cheri")]
+const PERMISSION_ASR: usize = 1 << 16;
+
+#[cfg(feature = "cheri")]
+global_asm!(
+    r#"
+    # make_user_root(): derive USER_ROOT from the root (the kernel's DDC).
+    .globl make_user_root
+make_user_root:
+    lla     t2, USER_ROOT
+    YMODESWY
+    csrr    t0, CSR_DDC
+    YADDRW  t1, t0, t2              # a capability to USER_ROOT
+    YADDRW  t0, t0, zero
+    li      t2, {user_end}
+    YBNDSW  t0, t0, t2
+    li      t2, {asr}
+    YPERMC  t0, t0, t2
+    SY      t0, 0, t1
+    YMODESWI
+    ret
+"#,
+    user_end = const super::paging::USER_END,
+    asr = const PERMISSION_ASR,
+);
+
+#[cfg(feature = "cheri")]
+unsafe extern "C" {
+    fn make_user_root();
+}
+
 /// `senvcfg.Y`: CHERI instructions and capability state in user mode
 /// (bit 9 since RVY 0.9.9).
 #[cfg(feature = "cheri")]
 const SENVCFG_Y: usize = 1 << 9;
 
-/// Let user mode use CHERI. The bit only sticks if the firmware turned
-/// CHERI on for supervisor mode (`menvcfg.Y`), so it doubles as the check
-/// that this kernel, which saves capabilities, runs on a CHERI hart.
+/// Let user mode use CHERI, and make the user root. The `senvcfg.Y` bit
+/// only sticks if the firmware turned CHERI on for supervisor mode
+/// (`menvcfg.Y`), so it doubles as the check that this kernel, which saves
+/// capabilities, runs on a CHERI hart. Call after `paging::init`: the boot
+/// page table doesn't let pages hold capabilities, so storing the user
+/// root would fault.
 #[cfg(feature = "cheri")]
-fn enable_cheri() {
+pub fn enable_cheri() {
     let senvcfg: usize;
     // SAFETY: setting senvcfg.Y changes only what user mode may do.
     unsafe {
         core::arch::asm!("csrs senvcfg, {y}", "csrr {v}, senvcfg", y = in(reg) SENVCFG_Y, v = out(reg) senvcfg);
     }
     assert!(senvcfg & SENVCFG_Y != 0, "a kernel built with the cheri feature needs CHERI (RVY) hardware and firmware that enables it");
+    // SAFETY: runs once, before any user thread; writes only USER_ROOT.
+    unsafe { make_user_root() };
     crate::info!("trap: CHERI on for user mode; user capabilities are saved whole");
 }
 
