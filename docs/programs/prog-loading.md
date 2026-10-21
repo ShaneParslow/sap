@@ -33,7 +33,7 @@ struct Code {
 
 The process manager loads one format itself, and every other format is a **loader component**, so the human's "driver per executable format" is right, with the trusted path kept to one format:
 
-- **Native: static ELF, position-independent.** The process manager reads the `PT_LOAD` segments and maps them; no dynamic linker, no `PT_INTERP`. A language that wants dynamic linking ships its own loader inside the program ([[iface-bindings-and-languages]]). The ELF parser is small and its input is untrusted, so it must be bounds-checked like any message.
+- **Native: static ELF, position-independent.** The process manager reads the `PT_LOAD` segments and maps them; no dynamic linker, no `PT_INTERP`. A language that wants dynamic linking ships its own loader inside the program ([[iface-bindings-and-languages]]). The ELF parser is small and its input is untrusted, so it must be bounds-checked like any message; `sap-loader` checks segments and relocations against the image and returns errors instead of panicking ([[prog-runtime#The loader]]).
 - **Wasm:** a Wasm runtime is an ordinary native program whose world includes the module to run. Loading a Wasm component means spawning the runtime with the module as an import ([[prog-representation]]).
 - **Linux binaries:** handled by the compatibility layer, a POSIX personality component or a Linux VM ([[system-legacy-compat]]).
 

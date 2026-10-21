@@ -30,7 +30,7 @@ use sap_interfaces::check_capnp::check_imports;
 use sap_interfaces::echo;
 use sap_interfaces::echo_capnp::{reply, request};
 use sap_interfaces::peer_capnp::{peer_imports, Mode};
-use sap_loader::{self as loader, Give, Launch, Parent, Slots, LAUNCH};
+use sap_loader::{self as loader, Give, Launch, LoadError, Parent, Slots, LAUNCH};
 use sap_ring::transfer::{Frames, Sender, TransferError, MAX_LEN, MAX_PAGES};
 use sap_ring::{as_bytes, as_bytes_mut, Consumer, Layout as RingLayout, Producer, RingError, PAGE};
 
@@ -945,7 +945,23 @@ fn check_process(info: &Env) {
     let (bootstrap, len) = peer_bootstrap(Mode::Call, 0);
     let imports = [(badged, Give::Copy(rights::WRITE | rights::GRANT))];
     let launch = Launch { priority: 255, budget_bits: Some(16), imports: &imports, bootstrap: &bootstrap[..len], ..LAUNCH };
-    let peer = loader::load(PEER, &parent, &mut slots, &launch);
+
+    // Refused loads: errors, not panics, since a process manager loads on
+    // others' behalf.
+    let refused = |result: Result<loader::Process, LoadError>| result.err();
+    assert_eq!(refused(loader::load(&[0x7f; 64], &parent, &mut slots, &launch)), Some(LoadError::BadImage("not an ELF file")));
+    let too_many = [(badged, Give::Copy(rights::READ)); 64];
+    let crowded = Launch { imports: &too_many, ..LAUNCH };
+    assert_eq!(refused(loader::load(PEER, &parent, &mut slots, &crowded)), Some(LoadError::BadLaunch("too many imports")));
+    let small = slots.next;
+    slots.next += 1;
+    expect("small untyped", untyped::retype(parent_untyped, object::UNTYPED, 14, in_root, small, 1), Ok(()));
+    let starved = Parent { untyped: small, ..parent };
+    let result = refused(loader::load(PEER, &starved, &mut slots, &launch));
+    assert_eq!(result, Some(LoadError::Sys(Error(error::NOT_ENOUGH_MEMORY))), "a load from 16 KiB of untyped memory");
+    expect("clean up the partial process", slot(small).revoke(), Ok(()));
+
+    let peer = loader::load(PEER, &parent, &mut slots, &launch).expect("load the peer");
     // The process ABI's slots: its own objects, its budget, its import.
     let theirs = |index| peer.slot(index).identify().map(|id| id.object_type).map_err(|e| e.0);
     for (index, wanted) in [
@@ -964,7 +980,7 @@ fn check_process(info: &Env) {
     expect("scratch page", untyped::retype(parent_untyped, object::FRAME_4K, 0, in_root, slots.next, 1), Ok(()));
     let marker = slots.next;
     expect("map scratch", vspace::map_frame(marker, process_slot::VSPACE, scratch, rights::READ | rights::WRITE, attr::EXECUTE_NEVER), Ok(()));
-    peer.start();
+    peer.start().expect("start the peer");
 
     let mut words = [0usize; 8];
     let first = ipc::recv(ep, reply, &mut words).expect("receive the peer's call");
@@ -1023,7 +1039,7 @@ fn connect_peer(parent: &Parent, slots: &mut Slots, mode: Mode, data_pages: usiz
     let (bootstrap, len) = peer_bootstrap(mode, data_pages);
     let imports = [(ep, Give::Copy(rights::READ)), (theirs, Give::Copy(rights::READ)), (my_bell, Give::Copy(rights::WRITE)), (reply, Give::Copy(rights::ALL))];
     let launch = Launch { priority: 255, imports: &imports, bootstrap: &bootstrap[..len], ..LAUNCH };
-    let peer = loader::load(PEER, parent, slots, &launch);
+    let peer = loader::load(PEER, parent, slots, &launch).expect("load the peer");
     let out = RingLayout::new(here, data_pages);
     let back = RingLayout::new(here + out.pages() * PAGE, data_pages);
     let offset = CHANNEL_THERE.wrapping_sub(here);
@@ -1044,11 +1060,11 @@ fn connect_peer(parent: &Parent, slots: &mut Slots, mode: Mode, data_pages: usiz
             };
             let mapped = vspace::map_frame_with_tables(frame, process_slot::VSPACE, va, if init_writes { rw } else { ro }, attr::EXECUTE_NEVER, new_table);
             expect("map here", mapped, Ok(()));
-            peer.map_frame(parent, slots, copy, va.wrapping_add(offset), if init_writes { ro } else { rw });
+            peer.map_frame(parent, slots, copy, va.wrapping_add(offset), if init_writes { ro } else { rw }).expect("map for the peer");
         }
     }
-    peer.map_tables(parent, slots, TRANSFER_THERE);
-    peer.start();
+    peer.map_tables(parent, slots, TRANSFER_THERE).expect("page tables for transfers");
+    peer.start().expect("start the peer");
     // SAFETY: both rings are mapped here with the rights each end needs,
     // and this thread is the only user of these ends.
     unsafe { Channel { out: Producer::new(out, their_bell, mine), back: Consumer::new(back, their_bell, mine), ep } }

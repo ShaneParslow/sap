@@ -168,8 +168,8 @@ fn start_check(info: &BootInfo, own: usize, launcher: usize) {
         bootstrap: &bootstrap,
         ..LAUNCH
     };
-    let check = loader::load(image, &parent, &mut slots, &launch);
+    let check = loader::load(image, &parent, &mut slots, &launch).expect("init: load check");
     tcb::set_fault_handler(check.tcb, Some(launcher)).expect("init: fault handler");
     println!("init: starting check ({} KiB image, {} untyped regions)", image.len() / 1024, count - 1);
-    check.start();
+    check.start().expect("init: start check");
 }
