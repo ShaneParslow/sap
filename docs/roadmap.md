@@ -20,7 +20,7 @@ Tooling: QEMU's `virt` machine loads its bundled OpenSBI by default (`-bios defa
 The order agreed on 2026-10-19 ([[2026-10-16-2c1ac53c#m10|§m10]]), from the items below:
 1. ~~I4, splitting `sap-rt`~~ (done).
 2. ~~I5, provenance hygiene in user code~~ (done).
-3. ~~**M5**, Cap'n Proto messages across the rings~~ (done). It left one question: page transfer loses to copying on QEMU, and its per-page cost needs hardware numbers ([[ipc-page-transfer#Open questions]]).
+3. ~~**M5**, Cap'n Proto messages across the rings~~ (done). It left one question: page transfer loses to copying, on QEMU and on the D1 board, where the mapping calls' TLB flushes are half of each page's cost ([[ipc-page-transfer#Open questions]]).
 4. **M7**, the process manager: `init` becomes it, and its boot checks move into a program it spawns; programs start their runtime from a startup record and the bootstrap message; code in a boot pack is named by its BLAKE3 hash; the loader moves onto the runtime's slot allocator ([[2026-10-20-685b0203#m12|§m12]]). Built: the startup record and bootstrap message, the boot pack, the checks as a program `init` starts, and the process factory with exit, fault and kill ([[prog-process-factory]]). Still open for M7: programs starting their runtime from the bootstrap automatically, and the loader on the runtime's slot allocator.
 5. **I2**, `std`, once thread-local storage, a log service and the process ABI exist.
 

@@ -1,15 +1,15 @@
 ---
 status: implemented
-summary: Messages too large for a ring travel as whole frames whose capabilities the kernel moves to the receiver - the call protocol, why an unmapped frame with no other capability can be read in place, identifying a capability before invoking it, and what QEMU measured (copying wins at every size up to 60 KiB while each page costs six system calls).
-updated: 2026-10-19
-code: [user/ring/transfer.rs, user/peer/main.rs, user/check/main.rs, user/sys/cnode.rs, user/loader/lib.rs, kernel/invocation.rs, kernel/cspace.rs, kernel/arch/riscv/caps.rs, abi/lib.rs]
+summary: Messages too large for a ring travel as whole frames whose capabilities the kernel moves to the receiver - the call protocol, why an unmapped frame with no other capability can be read in place, identifying a capability before invoking it, and what QEMU and the D1 board measured (copying wins at every size up to 60 KiB; each page costs six system calls, and on the D1 the two TLB flushes dominate).
+updated: 2026-10-20
+code: [kernel/arch/riscv/paging.rs, user/ring/transfer.rs, user/peer/main.rs, user/check/main.rs, user/sys/cnode.rs, user/loader/lib.rs, kernel/invocation.rs, kernel/cspace.rs, kernel/arch/riscv/caps.rs, abi/lib.rs]
 verified: 8b9862c
 sources: ["[[2026-09-27-future-of-computing#m15|§m15]]", "[[2026-10-16-2c1ac53c#m16|§m16]]", "[[2026-10-16-2c1ac53c#m22|§m22]]"]
 ---
 
 # Page transfer
 
-A message too large for a ring travels as whole 4 KiB frames: the sender writes it into frames it owns, the kernel moves their capabilities to the receiver, and the receiver reads the message in place, knowing nobody else can write it. This is the "transfer large" half of the copy-small, transfer-large rule in [[ipc-channels#Size and streaming]], built in roadmap milestone M5 ([[roadmap]]) as the `transfer` module of `sap-ring` (`user/ring/transfer.rs`). On QEMU it is slower than copying at every size measured; see [[#What it costs]].
+A message too large for a ring travels as whole 4 KiB frames: the sender writes it into frames it owns, the kernel moves their capabilities to the receiver, and the receiver reads the message in place, knowing nobody else can write it. This is the "transfer large" half of the copy-small, transfer-large rule in [[ipc-channels#Size and streaming]], built in roadmap milestone M5 ([[roadmap]]) as the `transfer` module of `sap-ring` (`user/ring/transfer.rs`). On QEMU and on the D1 board it is slower than copying at every size measured; see [[#What it costs]].
 
 ## Protocol
 
@@ -56,24 +56,27 @@ The sender checks returned capabilities the same way, because the receiver could
 - **ring copy:** check copies the bytes into a ring of 32 data pages, the peer copies them out and sums them;
 - **page transfer:** check copies the bytes into its frames, and the peer sums them in place.
 
-QEMU 11.1 on one CPU, release build, ranges over four boots:
+On QEMU 11.1 (one CPU, release build, ranges over four boots) and on the Allwinner D1 board ([[hw-isa#Real hardware]]: one C906 at 1 GHz, caches on, release build, two boots, which agreed to within 1%):
 
-| Bytes | Ring copy | Page transfer |
-|---|---|---|
-| 256 | 25–35 µs | 84–105 µs |
-| 4,096 | 34–56 µs | 101–141 µs |
-| 8,192 | 42–72 µs | 164–209 µs |
-| 16,384 | 65–116 µs | 299–391 µs |
-| 32,768 | 98–131 µs | 558–658 µs |
-| 61,440 | 151–232 µs | 987–1,224 µs |
+| Bytes | QEMU copy | QEMU transfer | D1 copy | D1 transfer |
+|---|---|---|---|---|
+| 256 | 25–35 µs | 84–105 µs | 17.3–17.8 µs | 86.7–87.6 µs |
+| 4,096 | 34–56 µs | 101–141 µs | 42.3–42.4 µs | 112.4–113.1 µs |
+| 8,192 | 42–72 µs | 164–209 µs | 69.5–69.8 µs | 184.5–186.3 µs |
+| 16,384 | 65–116 µs | 299–391 µs | 119.7–120.0 µs | 331.3–331.4 µs |
+| 32,768 | 98–131 µs | 558–658 µs | 220.8–221.2 µs | 609.8–612.0 µs |
+| 61,440 | 151–232 µs | 987–1,224 µs | 390.7–391.0 µs | 1,079–1,083 µs |
 
-Copying wins at every size up to the 60 KiB both paths can carry. A transfer costs about 90 µs plus about 70 µs per page. Copying costs about 30 µs plus about 10 µs per page, for two copies and a checksum.
+Copying wins at every size up to the 60 KiB both paths can carry, on both. On the D1 a transfer costs about 45 µs plus about 69 µs per page, and copying about 17 µs plus about 25 µs per page, for two copies and a checksum. The lines diverge, so no larger message would reverse the result as built. QEMU's per-page costs were about 70 µs and 10 µs: emulation flattered copying, but only by a factor of 2.5, and transfer's own cost was about right.
 
-The per-page cost is system calls. Each page takes six: on the sender, map, unmap, and identify when it comes back; on the receiver, identify, map and unmap. On top of those, each message takes one call and one reply. In the same runs, an identify took 8–14 µs and a map plus unmap 26–42 µs.
+The per-page cost is system calls, and mostly the mapping ones. Each page takes six: on the sender, map, unmap, and identify when it comes back; on the receiver, identify, map and unmap. On top of those, each message takes one call and one reply. On the D1 a yield takes 0.7 µs and an identify 0.9–1.0 µs, but a map plus an unmap takes 16.8–17.1 µs, so the two map–unmap pairs are about half of each page's 69 µs. (Uncached, before the caches were turned on, a yield took 10.3 µs and an identify 18.2 µs.)
 
-These are QEMU's proportions, not hardware's. Under emulation a system call costs microseconds and copying runs at close to host speed, so the measurement exaggerates the cost of transfer relative to copying. It does not locate the crossover on hardware ([[hw-isa#Real hardware]]).
+**The TLB flush is what makes mapping expensive.** Both map and unmap end with `sfence.vma` for the page and address space (`flush_page`, `kernel/arch/riscv/paging.rs:312`). Three throwaway kernels on the D1 located the cost:
+- flushing twice instead of once added 1.4 µs per map plus unmap, so the instruction itself costs about 0.7 µs;
+- skipping the flush after map cut a map plus unmap from 17 to 12 µs, and a 60 KiB transfer from 1,081 to 861 µs, still more than twice the copy;
+- skipping both flushes broke the checks: the C906 does keep stale translations.
 
-What does carry over is the shape: as built, the cost of a transfer grows with the number of pages, the same way copying does. On hardware a system call costs on the order of hundreds of nanoseconds and copying a page about as much or less, though neither was measured here. Transfer is unlikely to win until its cost is per message rather than per page. The options for that are listed under [[#Open questions]].
+So each flush costs about 5 µs, nearly all of it after the instruction, presumably refilling TLB entries it removed. That suggests the C906 flushes more than the one page named, which is inferred, not confirmed. Either way, a design that changes mappings per page pays this per page, and remapping per message (see [[#Open questions]]) would pay it once.
 
 ## Alternatives
 
@@ -90,7 +93,9 @@ What does carry over is the shape: as built, the cost of a transfer grows with t
 >   - remapping as part of the IPC: frames named in a call are unmapped from the sender, checked, and mapped read-only into a window the receiver named, and the reply maps them back. That leaves only the call and the reply, plus the TLB flush that unmapping needs. It is L4's model, in which IPC carries map and grant items for flexpages; seL4 dropped it for capability transfer.
 >   - 2 MiB frames for large messages.
 >
->   Which of these is worth the kernel complexity depends on hardware numbers. CHERI removes the mapping changes altogether ([[ipc-paging-vs-cheri]]).
+>   - no flush after map: the D1 run without it passed every check and saved a fifth of a transfer's cost, but RISC-V lets a core cache a missing translation unless it has Svvptc, so it is only safe with a fault handler that, on a fault at an address whose entry is now valid, flushes and retries (Linux does this for kernel mappings on cores without Svvptc).
+>
+>   On the D1 the mapping calls, through their TLB flushes, are about half of each page's cost ([[#What it costs]]), so the options that remove per-page mapping changes matter most; range invocations alone would save the call overhead but not the flushes. CHERI removes the mapping changes altogether ([[ipc-paging-vs-cheri]]).
 > - **Building in place.** The sender writes into the frames, but it has to know the message's length before it maps them. Building a Cap'n Proto message directly in the frames needs a size estimate, or mapping all 16 frames.
 > - **Messages over 64 KiB:** several calls, larger frames, or a raised capability limit.
 > - **A receiver that blocks.** The receiver receives the announced call with a blocking receive, so a sender that publishes the record and never calls stalls that connection's receiver. Binding the receiver's notification to its thread, so that one receive waits for both rings and calls ([[kernel-ipc#Bound notifications]]), would remove that.
