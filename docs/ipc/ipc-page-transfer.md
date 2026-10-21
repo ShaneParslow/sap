@@ -3,6 +3,7 @@ status: implemented
 summary: Messages too large for a ring travel as whole frames whose capabilities the kernel moves to the receiver - the call protocol, why an unmapped frame with no other capability can be read in place, identifying a capability before invoking it, and what QEMU measured (copying wins at every size up to 60 KiB while each page costs six system calls).
 updated: 2026-10-19
 code: [user/ring/transfer.rs, user/peer/main.rs, user/check/main.rs, user/sys/cnode.rs, user/loader/lib.rs, kernel/invocation.rs, kernel/cspace.rs, kernel/arch/riscv/caps.rs, abi/lib.rs]
+verified: deed361
 sources: ["[[2026-09-27-future-of-computing#m15|§m15]]", "[[2026-10-16-2c1ac53c#m16|§m16]]", "[[2026-10-16-2c1ac53c#m22|§m22]]"]
 ---
 

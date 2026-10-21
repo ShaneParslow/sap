@@ -3,6 +3,7 @@ status: implemented
 summary: The user-side crates every sap program links today - sap-sys (stateless system-call and invocation wrappers), sap-rt (the thread start convention and the process ABI's startup record and bootstrap message, entry point, debug console, panic handler, and a runtime with a slot allocator, notification-backed mutexes and an optional heap for alloc), sap-ring, and sap-loader, the ELF loader the root task uses to start other programs in their own processes.
 updated: 2026-10-20
 code: [abi/lib.rs, user/rt/process.rs, interfaces/peer.capnp, user/sys/arch/riscv.rs, user/rt/arch/riscv.rs, user/loader/arch/riscv.rs, user/sys/address.rs, clippy.toml, user/rt/lib.rs, user/rt/runtime.rs, user/rt/Cargo.toml, user/sys/lib.rs, user/rt/slots.rs, user/rt/sync.rs, user/rt/heap.rs, user/sys/vspace.rs, user/sys/sys.rs, user/sys/ipc.rs, user/loader/lib.rs, user/ring/lib.rs, user/rt/debug.rs, user/peer/main.rs, user/init/main.rs, user/init/build.rs, user/init/pack.rs, user/check/main.rs, user/check/build.rs, interfaces/check.capnp, user/init/factory.rs, kernel/root_task.rs]
+verified: deed361
 sources: ["[[2026-10-08-22c3947b-wiki-setup]]"]
 ---
 

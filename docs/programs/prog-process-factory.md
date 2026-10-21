@@ -3,6 +3,7 @@ status: implemented
 summary: The process factory init serves - SPAWN a program from the boot pack by its BLAKE3 hash with a bootstrap message, imports and untyped memory the client provides; WAIT for it to end and get the memory back; KILL it - with badged capabilities on one endpoint telling clients, processes and handles apart, and every process destroyed by revoking the client's memory.
 updated: 2026-10-20
 code: [abi/lib.rs, user/init/factory.rs, user/init/main.rs, user/check/main.rs, user/peer/main.rs, interfaces/peer.capnp, interfaces/check.capnp]
+verified: deed361
 sources: ["[[2026-10-20-685b0203#m12|§m12]]"]
 ---
 

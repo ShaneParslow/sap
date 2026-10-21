@@ -3,6 +3,7 @@ status: implemented
 summary: The shared-memory channel as built - each direction a single-producer/single-consumer ring of variable-length records in producer-written data pages, with each side's index on a page only it writes; publication by release store; bodies copied out with volatile reads by default, or lent in place from a trusted producer; every header checked against the ring; wake-up flags with sequentially consistent fences; notifications as doorbells; Cap'n Proto messages as record bodies; and what runs on one CPU showed.
 updated: 2026-10-19
 code: [user/ring/lib.rs, user/loader/lib.rs, user/peer/main.rs, user/check/main.rs, user/interfaces/lib.rs]
+verified: deed361
 sources: ["[[2026-10-08-22c3947b#m33|§m33]]", "[[2026-10-08-22c3947b#m34|§m34]]", "[[2026-10-16-2c1ac53c#m16|§m16]]", "[[2026-10-16-2c1ac53c#m18|§m18]]"]
 ---
 
