@@ -395,3 +395,62 @@ pub struct BootInfo {
 }
 
 const _: () = assert!(core::mem::size_of::<BootInfo>() <= 4096);
+
+/// Slots of every process's CNode that its launcher fills, other than the
+/// root task's (`init_slot`). The process's imports follow, in
+/// `Startup::imports`.
+pub mod process_slot {
+    pub const NULL: usize = 0;
+    /// The process's main thread.
+    pub const TCB: usize = 1;
+    /// The process's CNode, guarded so that slot numbers are capability
+    /// addresses.
+    pub const CNODE: usize = 2;
+    pub const VSPACE: usize = 3;
+    /// Untyped memory: the process's memory budget. Empty if it has none.
+    pub const UNTYPED: usize = 4;
+    /// The first slot of the process's imports.
+    // TODO: a slot for the connection to the launcher, over which exit is
+    // reported (M7, process factory).
+    pub const FIRST_IMPORT: usize = 8;
+}
+
+/// A range of virtual addresses, `start..end`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct AddressRange {
+    pub start: usize,
+    pub end: usize,
+}
+
+/// What a process's launcher tells it at startup, in a read-only page whose
+/// address arrives in its first argument register. The bootstrap message
+/// follows the record in the same page.
+#[repr(C)]
+pub struct Startup {
+    /// Ticks per second of the time counter.
+    pub timer_hz: u64,
+    pub ipc_buffer: usize,
+    pub stack: AddressRange,
+    /// Addresses nothing is mapped at, for the runtime's heap.
+    pub heap: AddressRange,
+    /// log2 of the number of slots in the process's CNode.
+    pub cnode_radix: usize,
+    /// The capabilities the bootstrap message refers to, in order.
+    pub imports: SlotRange,
+    /// Empty slots the process may use.
+    pub free: SlotRange,
+    /// Length in bytes of the bootstrap message: a Cap'n Proto message in
+    /// the flat (single-segment) encoding, starting at `BOOTSTRAP_OFFSET`.
+    /// Its root struct is the program's imports.
+    pub bootstrap_len: usize,
+}
+
+/// Where the bootstrap message starts in the startup page.
+pub const BOOTSTRAP_OFFSET: usize = 128;
+/// The longest bootstrap message.
+// TODO: larger bootstraps, in frames of their own (M7, if a program needs
+// more than a page).
+pub const MAX_BOOTSTRAP: usize = 4096 - BOOTSTRAP_OFFSET;
+
+const _: () = assert!(core::mem::size_of::<Startup>() <= BOOTSTRAP_OFFSET);

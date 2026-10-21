@@ -49,6 +49,8 @@ This is the only part of loading that is per-architecture, and it is small: a sh
 - the thread-pointer register for thread-local storage (`tp` on RISC-V, `fs` on x86-64) and who sets it up (the runtime, from `PT_TLS`);
 - the syscall instruction and register convention, shared with the kernel ([[kernel-objects-and-syscalls]]).
 
+The startup record, the fixed slots and the bootstrap message are built ([[prog-runtime#The process ABI]]); thread-local storage is not.
+
 Rust programs start on the bare `riscv64gc-unknown-none-elf` target with a `sap-rt` runtime crate. A proper target triple and a port of Rust's standard library come later.
 
 ## Address spaces

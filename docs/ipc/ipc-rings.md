@@ -56,7 +56,7 @@ Each process has one notification for everything it waits for, in both direction
 
 ## Setting one up
 
-Today the root task sets up each channel by hand (`connect_peer` in `user/init/main.rs:939`):
+Today the root task sets up each channel by hand (`connect_peer` in `user/init/main.rs:974`):
 - it retypes two notifications and mints a badged signal capability for each;
 - it loads an instance of `user/peer` ([[prog-runtime#The loader]]), telling it the ring size and what to do;
 - for each page of both rings it retypes a frame, maps it into its own address space and, through a copy of the capability, into the peer's at an agreed address, writable only on the side that owns the page;
@@ -67,9 +67,9 @@ Channel creation as one operation is still an open question ([[ipc-channels]]).
 
 ## What runs show
 
-- **Word records** (`check_ring`, `user/init/main.rs:1037`): `init` sends 10,000 records of two words, with at most 48 in flight, through one-page rings; the peer (`echo_words`, `user/peer/main.rs:88`) sends each back with its words incremented, and `init` checks order, contents and a checksum. On QEMU with one CPU each side slept about 420 times, roughly once per 24 records, the same as the fixed-slot rings before.
-- **The echo service** (`check_echo_service`, `user/init/main.rs:1109`): 300 Cap'n Proto requests of varying size (180 KiB in all, text, number lists and blobs up to 900 bytes) through two-page rings to a peer with no heap (`serve_echo`, `user/peer/main.rs:134`), which answers each with a summarising reply; `init` reads alternate replies copied and in place and checks every field. A request that isn't Cap'n Proto, and one longer than the peer's buffer, each come back as an error record while the peer carries on.
-- **A lying peer** (`misbehave`, `user/peer/main.rs:235`): its reply isn't Cap'n Proto, which fails to parse, and it then publishes a header claiming a body longer than what it published, which `init` refuses as `Corrupt`.
+- **Word records** (`check_ring`, `user/init/main.rs:1069`): `init` sends 10,000 records of two words, with at most 48 in flight, through one-page rings; the peer (`echo_words`, `user/peer/main.rs:142`) sends each back with its words incremented, and `init` checks order, contents and a checksum. On QEMU with one CPU each side slept about 420 times, roughly once per 24 records, the same as the fixed-slot rings before.
+- **The echo service** (`check_echo_service`, `user/init/main.rs:1141`): 300 Cap'n Proto requests of varying size (180 KiB in all, text, number lists and blobs up to 900 bytes) through two-page rings to a peer with no heap (`serve_echo`, `user/peer/main.rs:188`), which answers each with a summarising reply; `init` reads alternate replies copied and in place and checks every field. A request that isn't Cap'n Proto, and one longer than the peer's buffer, each come back as an error record while the peer carries on.
+- **A lying peer** (`misbehave`, `user/peer/main.rs:289`): its reply isn't Cap'n Proto, which fails to parse, and it then publishes a header claiming a body longer than what it published, which `init` refuses as `Corrupt`.
 
 On one CPU, polling can't help, because the other side can't run until this one sleeps or its time slice ends. What keeps sleeps rare is batching: the producer fills the window before the consumer runs. With several CPUs, the consumer's polling would catch records while the producer is still writing. The adaptive wait is designed for that case, and it needs measuring once sap runs on more than one hart.
 

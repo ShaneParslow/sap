@@ -1,13 +1,15 @@
 //! A second program, loaded by the root task into its own process, to check
-//! IPC between address spaces. Its third argument picks what it does:
-//! - 0: a call over an endpoint (slot `a0`) and an isolation check;
-//! - 1: echo word records over a channel of two rings;
-//! - 2: serve the echo interface (`interfaces/echo.capnp`) over a channel;
-//! - 3: answer one request, then break the channel's rules;
-//! - 4: sum the bytes of each record or page transfer (for measuring).
+//! IPC between address spaces. Its bootstrap message (`PeerImports` in
+//! `interfaces/peer.capnp`) picks what it does:
+//! - `call`: a call over an endpoint and an isolation check;
+//! - `echoWords`: echo word records over a channel of two rings;
+//! - `serveEcho`: serve the echo interface (`interfaces/echo.capnp`) over a
+//!   channel;
+//! - `misbehave`: answer one request, then break the channel's rules;
+//! - `sumBytes`: sum the bytes of each record or page transfer (for
+//!   measuring).
 //!
-//! In the channel modes, `a0` is the number of data pages per ring. It runs
-//! without a heap: Cap'n Proto messages are built in a fixed buffer.
+//! It runs without a heap: Cap'n Proto messages are built in a fixed buffer.
 
 #![no_std]
 #![no_main]
@@ -21,40 +23,92 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use capnp::message::{Builder, Reader, ReaderOptions, SegmentArray, SingleSegmentAllocator};
 use sap_interfaces::echo::{BYTES, ERROR, REPLY, REQUEST, STOP, SUM, TRANSFER, WORDS};
 use sap_interfaces::echo_capnp::{reply, request};
+use sap_interfaces::peer_capnp::{peer_imports, Mode};
 use sap_ring::transfer::{Frames, Receiver, TransferError};
 use sap_ring::{as_bytes, as_bytes_mut, Consumer, Layout, Producer, RingError, PAGE};
+use sap_rt::abi::{process_slot, Startup};
 use sap_rt::address::mapped;
-use sap_rt::{ipc, notification, println, tcb};
+use sap_rt::{ipc, notification, println, process, tcb};
 
 /// An address mapped only in the root task's address space.
 const PARENT_ONLY: usize = 0x38_0000_0000;
 
 /// Where the parent maps the channel in this process (init's check uses
-/// the same address), and the capability slots it fills for channel modes.
+/// the same address), and where frames received by page transfer are
+/// mapped (the parent adds the page tables).
 const RING_BASE: usize = 0x20_0000_0000;
-const MY_NOTIFICATION: usize = 1;
-const PARENT_DOORBELL: usize = 3;
-/// For page transfers: the endpoint the parent calls, a reply object, this
-/// process's address space and CNode, the slots transferred frames arrive
-/// in, and where they are mapped (the parent adds the page tables).
-const MY_ENDPOINT: usize = 4;
-const MY_REPLY: usize = 5;
-const MY_VSPACE: usize = 6;
-const MY_CNODE: usize = 7;
-const TRANSFER_SLOTS: usize = 16;
 const TRANSFER_BASE: usize = RING_BASE + 0x10_0000;
 
+/// What the bootstrap message gives: capabilities as slots of this
+/// process's CNode.
+#[derive(Clone, Copy)]
+struct Peer {
+    endpoint: usize,
+    data_pages: usize,
+    notification: usize,
+    doorbell: usize,
+    reply: usize,
+    /// The first of the empty slots, where page transfers arrive.
+    free: usize,
+}
+
+/// Why the bootstrap message couldn't be used.
+#[derive(Debug)]
+#[allow(dead_code, reason = "the fields are read by Debug, in the panic message")]
+enum BadBootstrap {
+    Message(capnp::Error),
+    NoImport(u32),
+}
+
+impl From<capnp::Error> for BadBootstrap {
+    fn from(e: capnp::Error) -> Self {
+        Self::Message(e)
+    }
+}
+
+impl From<capnp::NotInSchema> for BadBootstrap {
+    fn from(e: capnp::NotInSchema) -> Self {
+        Self::Message(e.into())
+    }
+}
+
+/// Read the bootstrap message.
+fn imports(startup: &'static Startup) -> Result<(Mode, Peer), BadBootstrap> {
+    let segments = [process::bootstrap(startup)];
+    let reader = Reader::new(SegmentArray::new(&segments), ReaderOptions::new());
+    let imports = reader.get_root::<peer_imports::Reader>()?;
+    let import = |index: u32| process::import(startup, index).ok_or(BadBootstrap::NoImport(index));
+    let mode = imports.get_mode()?;
+    let endpoint = import(imports.get_endpoint())?;
+    let peer = if mode == Mode::Call {
+        Peer { endpoint, data_pages: 0, notification: 0, doorbell: 0, reply: 0, free: 0 }
+    } else {
+        Peer {
+            endpoint,
+            data_pages: imports.get_data_pages() as usize,
+            notification: import(imports.get_notification())?,
+            doorbell: import(imports.get_doorbell())?,
+            reply: import(imports.get_reply())?,
+            free: startup.free.start,
+        }
+    };
+    Ok((mode, peer))
+}
+
 #[unsafe(no_mangle)]
-fn sap_main(a0: usize, me: usize, mode: usize) -> ! {
+fn sap_main(a0: usize, _: usize, _: usize) -> ! {
+    // SAFETY: the loader started this process with its startup record.
+    let startup = unsafe { process::startup(a0) };
+    let (mode, peer) = imports(startup).expect("peer: bootstrap message");
     match mode {
-        1 => echo_words(channel(a0)),
-        2 => serve_echo(channel(a0)),
-        3 => misbehave(channel(a0), a0),
-        4 => sum_bytes(channel(a0)),
-        _ => call_parent(a0),
+        Mode::Call => call_parent(peer.endpoint),
+        Mode::EchoWords => echo_words(channel(peer)),
+        Mode::ServeEcho => serve_echo(peer, channel(peer)),
+        Mode::Misbehave => misbehave(peer, channel(peer)),
+        Mode::SumBytes => sum_bytes(peer, channel(peer)),
     }
     loop {
-        let _ = tcb::suspend(me);
+        let _ = tcb::suspend(process_slot::TCB);
     }
 }
 
@@ -72,14 +126,14 @@ fn call_parent(ep: usize) {
 }
 
 /// The channel's two rings: inbound from the parent, then outbound.
-fn channel(data_pages: usize) -> (Consumer, Producer) {
-    let inbound = Layout::new(RING_BASE, data_pages);
-    let outbound = Layout::new(RING_BASE + inbound.pages() * PAGE, data_pages);
+fn channel(peer: Peer) -> (Consumer, Producer) {
+    let inbound = Layout::new(RING_BASE, peer.data_pages);
+    let outbound = Layout::new(RING_BASE + inbound.pages() * PAGE, peer.data_pages);
     // SAFETY: the parent mapped both rings this way before starting us.
     unsafe {
         (
-            Consumer::new(inbound, PARENT_DOORBELL, MY_NOTIFICATION),
-            Producer::new(outbound, PARENT_DOORBELL, MY_NOTIFICATION),
+            Consumer::new(inbound, peer.doorbell, peer.notification),
+            Producer::new(outbound, peer.doorbell, peer.notification),
         )
     }
 }
@@ -103,10 +157,10 @@ fn echo_words((mut inbound, mut outbound): (Consumer, Producer)) {
 }
 
 /// The receiving side of page transfers, armed to receive.
-fn transfer_receiver() -> Receiver {
-    let frames = Frames { cnode: MY_CNODE, first: TRANSFER_SLOTS, vspace: MY_VSPACE, base: TRANSFER_BASE };
-    // SAFETY: the parent leaves those slots empty and that range unused,
-    // with page tables in place.
+fn transfer_receiver(peer: Peer) -> Receiver {
+    let frames = Frames { cnode: process_slot::CNODE, first: peer.free, vspace: process_slot::VSPACE, base: TRANSFER_BASE };
+    // SAFETY: the startup record says those slots are empty, and the parent
+    // leaves that range unused, with page tables in place.
     let receiver = unsafe { Receiver::new(frames) };
     receiver.arm();
     receiver
@@ -114,13 +168,13 @@ fn transfer_receiver() -> Receiver {
 
 /// Take the page transfer that a `TRANSFER` record with `id` announced, lend
 /// its message to `read`, and give the frames back.
-fn take_transfer<R>(receiver: &Receiver, id: u64, read: impl FnOnce(&[u8]) -> R) -> Result<R, TransferError> {
+fn take_transfer<R>(peer: Peer, receiver: &Receiver, id: u64, read: impl FnOnce(&[u8]) -> R) -> Result<R, TransferError> {
     let mut words = [0usize; 2];
-    let call = ipc::recv(MY_ENDPOINT, MY_REPLY, &mut words).map_err(TransferError::Sys)?;
+    let call = ipc::recv(peer.endpoint, peer.reply, &mut words).map_err(TransferError::Sys)?;
     let (len, sent_id) = Receiver::header(&words);
     let count = call.info.extra_caps();
     let result = if call.info.length() == 2 && sent_id == id { receiver.read(count, len, read) } else { Err(TransferError::BadHeader) };
-    let _ = receiver.give_back(MY_REPLY, count);
+    let _ = receiver.give_back(peer.reply, count);
     if result.is_err() {
         // Anything the caller couldn't take back.
         receiver.clear();
@@ -131,11 +185,11 @@ fn take_transfer<R>(receiver: &Receiver, id: u64, read: impl FnOnce(&[u8]) -> R)
 /// Answer each request with a reply that summarises it, or an error record
 /// if it can't be read, until a stop record. Requests too large for the
 /// ring arrive by page transfer and are read in place.
-fn serve_echo((mut inbound, mut outbound): (Consumer, Producer)) {
+fn serve_echo(peer: Peer, (mut inbound, mut outbound): (Consumer, Producer)) {
     let mut request_words = [0u64; 256];
     let mut scratch = [0u64; 256];
     let mut allocator = SingleSegmentAllocator::new(as_bytes_mut(&mut scratch));
-    let receiver = transfer_receiver();
+    let receiver = transfer_receiver(peer);
     loop {
         let record = match inbound.recv(&mut request_words) {
             Ok(record) => record,
@@ -159,7 +213,7 @@ fn serve_echo((mut inbound, mut outbound): (Consumer, Producer)) {
             }
             TRANSFER => {
                 let mut message = Builder::new(&mut allocator);
-                match take_transfer(&receiver, record.id, |body| answer(body, &mut message)) {
+                match take_transfer(peer, &receiver, record.id, |body| answer(body, &mut message)) {
                     Ok(Ok(())) => outbound.send(REPLY, record.id, message.get_segments_for_output()[0]),
                     _ => outbound.send(ERROR, record.id, &[]),
                 }
@@ -186,10 +240,10 @@ fn checksum(bytes: &[u8]) -> u64 {
 /// Answer each `BYTES` record, copied out of the ring, and each page
 /// transfer, read in place, with the checksum of its bytes, until a stop
 /// record. The parent times the two.
-fn sum_bytes((mut inbound, mut outbound): (Consumer, Producer)) {
+fn sum_bytes(peer: Peer, (mut inbound, mut outbound): (Consumer, Producer)) {
     // SAFETY: this function runs once, on this process's only thread.
     let buffer = unsafe { &mut *SUM_BUFFER.0.get() };
-    let receiver = transfer_receiver();
+    let receiver = transfer_receiver(peer);
     loop {
         let record = inbound.recv(buffer).expect("peer: ring");
         let sum = match record.kind {
@@ -198,7 +252,7 @@ fn sum_bytes((mut inbound, mut outbound): (Consumer, Producer)) {
                 break;
             }
             BYTES => checksum(&as_bytes(buffer)[..record.len]),
-            TRANSFER => take_transfer(&receiver, record.id, checksum).expect("peer: transfer"),
+            TRANSFER => take_transfer(peer, &receiver, record.id, checksum).expect("peer: transfer"),
             _ => panic!("peer: unexpected record"),
         };
         outbound.send(SUM, record.id, &sum.to_le_bytes());
@@ -232,7 +286,8 @@ fn answer(body: &[u8], message: &mut Builder<&mut SingleSegmentAllocator>) -> Re
 
 /// Answer the first request with a reply that isn't Cap'n Proto, then
 /// publish a record that claims to be longer than what was published.
-fn misbehave((mut inbound, mut outbound): (Consumer, Producer), data_pages: usize) {
+fn misbehave(peer: Peer, (mut inbound, mut outbound): (Consumer, Producer)) {
+    let data_pages = peer.data_pages;
     let mut words = [0u64; 256];
     let record = inbound.recv(&mut words).expect("peer: ring");
     outbound.send(REPLY, record.id, &[0xff; 64]);
@@ -246,5 +301,5 @@ fn misbehave((mut inbound, mut outbound): (Consumer, Producer), data_pages: usiz
     // SAFETY: inside the outbound ring's data pages, which this side writes.
     unsafe { mapped::<u64>(layout.base + PAGE + (at % capacity) * 8).write_volatile((u64::from(REPLY) << 32) | 1024) };
     produced.store(at + 2, Ordering::Release);
-    let _ = notification::signal(PARENT_DOORBELL);
+    let _ = notification::signal(peer.doorbell);
 }

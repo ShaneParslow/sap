@@ -21,7 +21,7 @@ A transfer is a call on the receiver's endpoint, announced by a ring record so t
 5. It replies to the call, moving the frames back (`give_back`), and publishes its answer as an ordinary ring record. Replying first matters: a sender blocked in its call can't drain the ring, so an answer published first could wait forever for space.
 6. The sender checks what came back the same way the receiver checked what it got, and reuses the frames.
 
-The echo service takes requests of up to 60 KiB this way (`take_transfer`, `user/peer/main.rs:117`). Plain messages with an id, rather than Cap'n Proto RPC, carry it, as for the rings ([[ipc-rings#Records]]).
+The echo service takes requests of up to 60 KiB this way (`take_transfer`, `user/peer/main.rs:171`). Plain messages with an id, rather than Cap'n Proto RPC, carry it, as for the rings ([[ipc-rings#Records]]).
 
 ## Why the receiver can read in place
 
@@ -51,7 +51,7 @@ The sender checks returned capabilities the same way, because the receiver could
 
 ## What it costs
 
-`measure_transfer` (`user/init/main.rs:1229`) times 64 round trips per size. Each moves `n` bytes to a peer, which reads every byte once and answers with a checksum:
+`measure_transfer` (`user/init/main.rs:1261`) times 64 round trips per size. Each moves `n` bytes to a peer, which reads every byte once and answers with a checksum:
 - **ring copy:** init copies the bytes into a ring of 32 data pages, the peer copies them out and sums them;
 - **page transfer:** init copies the bytes into its frames, and the peer sums them in place.
 

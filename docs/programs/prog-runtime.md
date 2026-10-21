@@ -1,8 +1,8 @@
 ---
 status: implemented
-summary: The user-side crates every sap program links today - sap-sys (stateless system-call and invocation wrappers), sap-rt (the thread start convention, entry point, debug console, panic handler, and a runtime with a slot allocator, notification-backed mutexes and an optional heap for alloc), sap-ring, and sap-loader, the ELF loader the root task uses to start other programs in their own processes.
-updated: 2026-10-19
-code: [user/sys/arch/riscv.rs, user/rt/arch/riscv.rs, user/loader/arch/riscv.rs, user/sys/address.rs, clippy.toml, user/rt/lib.rs, user/rt/runtime.rs, user/rt/Cargo.toml, user/sys/lib.rs, user/rt/slots.rs, user/rt/sync.rs, user/rt/heap.rs, user/sys/vspace.rs, user/sys/sys.rs, user/sys/ipc.rs, user/loader/lib.rs, user/ring/lib.rs, user/rt/debug.rs, user/peer/main.rs, user/init/main.rs, user/init/build.rs, kernel/root_task.rs]
+summary: The user-side crates every sap program links today - sap-sys (stateless system-call and invocation wrappers), sap-rt (the thread start convention and the process ABI's startup record and bootstrap message, entry point, debug console, panic handler, and a runtime with a slot allocator, notification-backed mutexes and an optional heap for alloc), sap-ring, and sap-loader, the ELF loader the root task uses to start other programs in their own processes.
+updated: 2026-10-20
+code: [abi/lib.rs, user/rt/process.rs, interfaces/peer.capnp, user/sys/arch/riscv.rs, user/rt/arch/riscv.rs, user/loader/arch/riscv.rs, user/sys/address.rs, clippy.toml, user/rt/lib.rs, user/rt/runtime.rs, user/rt/Cargo.toml, user/sys/lib.rs, user/rt/slots.rs, user/rt/sync.rs, user/rt/heap.rs, user/sys/vspace.rs, user/sys/sys.rs, user/sys/ipc.rs, user/loader/lib.rs, user/ring/lib.rs, user/rt/debug.rs, user/peer/main.rs, user/init/main.rs, user/init/build.rs, kernel/root_task.rs]
 sources: ["[[2026-10-08-22c3947b-wiki-setup]]"]
 ---
 
@@ -19,7 +19,13 @@ Every thread starts with:
 
 The kernel follows it for the root task, whose `a0` is the address of the boot-info page (`kernel/root_task.rs:223`), and every thread `sap-rt` starts follows it too. `tp` is free because there is no thread-local storage yet, so it serves as the per-thread pointer to the IPC buffer (`ipc_buffer`, `user/sys/sys.rs:13`); a `TODO` moves it to a real thread-local once the Rust target has TLS.
 
-`_start` calls the program's `sap_main(a0, a1, a2)` (`user/rt/lib.rs`). There is no bootstrap message yet: a program started by another gets three words and capabilities in agreed slots, a stand-in for the typed bootstrap of [[kernel-process-model]] (M7).
+`_start` calls the program's `sap_main(a0, a1, a2)` (`user/rt/lib.rs`).
+
+## The process ABI
+
+A process started by a launcher, rather than by the kernel, gets the address of its **startup record** in `a0`: a read-only page holding a `Startup` (`abi/lib.rs:430`) and, `BOOTSTRAP_OFFSET` (128) bytes in, the bootstrap message (`abi/lib.rs:450`). The record gives the time counter's frequency, the IPC buffer and stack addresses, an address range for the heap, the CNode's size, and two slot ranges: the imports and the free slots. Its CNode has fixed slots for its runtime capabilities (`process_slot`, `abi/lib.rs:402`): its thread (1), its CNode, guarded so slot numbers are capability addresses (2), its address space (3) and its untyped memory budget (4, empty if it has none). Its imports start at slot 8.
+
+The **bootstrap message** is a Cap'n Proto message in the flat single-segment encoding whose root struct is the program's imports, as [[kernel-process-model]] describes. A capability in it is, for now, the index of an import in an integer field (`TODO` until RPC capability tables, M6). It fits in the rest of the page, at most 3,968 bytes. `sap_rt::process` reads it: `startup(a0)` gives the record (`user/rt/process.rs:13`), `bootstrap` the message bytes (line 21) and `import` the slot of an import index, checked against the range (line 30). A program reads the message in place with ordinary references, which is sound because nobody writes the page once the process runs ([[ipc-validation#Double fetch]]).
 
 ## Crates
 
@@ -48,24 +54,25 @@ A program hands the runtime what it may use on the program's behalf, once, befor
 > [!todo] Not built
 > The heap never shrinks: freed memory returns to the free list but stays mapped. The loader still uses its own bump allocator for slots (`Slots`) and adds page tables by retyping one and deleting it if every level exists, which spends untyped memory that only a revoke recovers; both should move to the runtime's allocator and `map_frame_with_tables`.
 
-`init`'s `check_heap` (`user/init/main.rs:1328`) checks that nothing is mapped before the first allocation, growth past 2 MiB (across level-0 page tables), a page-aligned allocation, reuse of freed memory without growth, formatting into a `String`, two threads allocating 40,000 vectors each at once, and a thread that finds a mutex held sleeping until `init` unlocks it. The heap gets the largest untyped region other than the first (`runtime_untyped`, line 44), and the other checks pick theirs around it, since several revoke their region when done.
+`init`'s `check_heap` (`user/init/main.rs:1360`) checks that nothing is mapped before the first allocation, growth past 2 MiB (across level-0 page tables), a page-aligned allocation, reuse of freed memory without growth, formatting into a `String`, two threads allocating 40,000 vectors each at once, and a thread that finds a mutex held sleeping until `init` unlocks it. The heap gets the largest untyped region other than the first (`runtime_untyped`, line 45), and the other checks pick theirs around it, since several revoke their region when done.
 
 ## The loader
 
-`sap_loader::load` (`user/loader/lib.rs:146`) starts a program in a new process, given an ELF image, untyped memory to build it from, free slots in the caller's CNode, and an unused 1 GiB region of the caller's address space for scratch mappings (`Parent`, line 42). It is the first piece of the process manager (M7, [[prog-loading]]), doing in userspace what the kernel does once for the root task ([[kernel-root-task]]):
+`sap_loader::load` (`user/loader/lib.rs:158`) starts a program in a new process, given an ELF image, untyped memory to build it from, free slots in the caller's CNode, and an unused 1 GiB region of the caller's address space for scratch mappings (`Parent`, line 44), and a `Launch` (line 61): a priority, the size of an untyped budget if any, the caller's capabilities to give as imports with the rights for each, and the bootstrap message. It is the first piece of the process manager (M7, [[prog-loading]]), doing in userspace what the kernel does once for the root task ([[kernel-root-task]]):
 
-1. Retypes a page table and makes it the root of a new address space with an ASID; retypes a CNode (64 slots, `CNODE_RADIX`, line 39) and a TCB.
-2. For each page of each loadable segment, retypes a frame, maps it at the scratch address in the caller's space, fills it with the file bytes that fall in that page plus the relative relocations whose targets do, unmaps it, and maps it into the new address space with the segment's permissions (writable and executable together is refused). Page tables are added as needed (`ensure_tables`, line 117), installing whatever levels are missing.
-3. Maps a 16 KiB stack and an IPC buffer at the same addresses the root task uses.
-4. Configures the thread with a guarded copy of the new CNode (so full-width addresses name its slots directly), the new address space and the IPC buffer; sets its priority and start registers per the convention; leaves it stopped.
+1. Retypes a page table and makes it the root of a new address space with an ASID; retypes a CNode (64 slots, `CNODE_RADIX`, line 41) and a TCB.
+2. For each page of each loadable segment, retypes a frame, maps it at the scratch address in the caller's space, fills it with the file bytes that fall in that page plus the relative relocations whose targets do, unmaps it, and maps it into the new address space with the segment's permissions (writable and executable together is refused). Page tables are added as needed (`ensure_tables`, line 130), installing whatever levels are missing.
+3. Maps a 16 KiB stack and an IPC buffer at the same addresses the root task uses, and the startup page, filled with the record and the bootstrap message, read-only below the IPC buffer (`STARTUP`, line 37). The heap range it gives is 1 GiB at `0x10_0000_0000` (line 39).
+4. Configures the thread with a guarded copy of the new CNode (so full-width addresses name its slots directly), the new address space and the IPC buffer; sets its priority and start registers, `a0` at the startup record; leaves it stopped.
+5. Fills the process ABI's slots: copies of the thread, the guarded CNode and the address space; the budget, retyped as a new untyped object from the caller's and moved in, since copying untyped memory would mark the caller's full ([[kernel-capabilities#Retyping untyped memory]]); and copies of the imports.
 
-The caller then copies capabilities into the new process's slots (`Process::give`), adds page tables where it will map more frames later (`Process::map_tables`, `user/loader/lib.rs:92`), and starts it. To let the process name its own slots, it gives it a copy of the guarded CNode capability (`guarded_cnode`), not the plain one: with the plain one, full-width addresses don't resolve. Everything was retyped from the untyped memory the caller passed, so revoking that untyped memory destroys the whole process: its thread, address space, CNode and pages.
+The caller can still copy more capabilities into the process's slots (`Process::give`), adds page tables where it will map more frames later (`Process::map_tables`, `user/loader/lib.rs:105`), and starts it. Everything was retyped from the untyped memory the caller passed, so revoking that untyped memory destroys the whole process: its thread, address space, CNode and pages.
 
 The loader handles exactly what sap programs are built as: static position-independent RISC-V ELF with only relative relocations ([[kernel-root-task#Building it]]). Other formats and interpreters are separate loaders, per [[prog-loading#Code objects and formats]].
 
 ## The second program
 
-`user/peer` is a small program the root task loads with `sap_loader::load` to check IPC between address spaces. Its third start argument picks what it does: the endpoint checks below, or, over a channel of two rings, echoing word records, serving the echo interface, or breaking the ring's rules on purpose ([[ipc-rings#What runs show]]). It builds without the heap. `user/init/build.rs` builds it and embeds it, as the kernel embeds `init`, and rebuilds it whenever the peer, `sap-rt` or the ABI crate changes. `check_process` in `init` (`user/init/main.rs:871`) gives the peer a badged endpoint capability and its own thread capability, sets `init` as its fault handler, and starts it. Then it checks:
+`user/peer` is a small program the root task loads with `sap_loader::load` to check IPC between address spaces. Its bootstrap message, `PeerImports` in `interfaces/peer.capnp`, picks what it does: the endpoint checks below, or, over a channel of two rings, echoing word records, serving the echo interface, or breaking the ring's rules on purpose ([[ipc-rings#What runs show]]); and it names the endpoint, notifications and reply object it uses by import index. `init` builds the message without the heap and copies it out of Cap'n Proto's single-segment allocator before the builder goes, since that allocator zeroes its buffer then (`peer_bootstrap`, `user/init/main.rs:872`). The peer builds without the heap. `user/init/build.rs` builds it and embeds it, as the kernel embeds `init`, and rebuilds it whenever the peer, `sap-rt` or the ABI crate changes. `check_process` in `init` (`user/init/main.rs:894`) starts the peer with a badged endpoint as its one import and a 64 KiB budget, checks the type of every process ABI slot through the peer's CNode, sets `init` as its fault handler, and starts it. Then it checks:
 - the peer's six-word `CALL` arrives with the badge;
 - the reply's words reach the peer, which reports their sum back;
 - the peer's read of an address mapped only in `init`'s address space faults, and the fault comes back to `init` as a `VM` fault at that address.
@@ -73,4 +80,4 @@ The loader handles exactly what sap programs are built as: static position-indep
 Revoking the untyped memory then removes the peer entirely.
 
 > [!todo] Not built
-> A typed bootstrap message; an untyped allocator; thread-local storage; process exit and supervision.
+> An untyped allocator; thread-local storage; process exit and supervision; capability fields in the bootstrap message.

@@ -6,12 +6,11 @@
 //! The image is a static position-independent ELF, like the root task's.
 //! Each page is filled through a scratch mapping in the caller's address
 //! space, with relocations applied, then mapped into the new address space
-//! with its segment's permissions. The new thread follows the start
-//! convention: `sp` at the top of its stack, `tp` at its IPC buffer, three
-//! arguments in `a0`..`a2`.
-//!
-//! TODO: no bootstrap message yet; arguments are three words and the
-//! parent copies capabilities into fixed slots (M7, typed bootstrap).
+//! with its segment's permissions. The new thread follows the process ABI:
+//! `sp` at the top of its stack, `tp` at its IPC buffer, and `a0` at its
+//! startup record (`sap_abi::Startup`), a read-only page that also holds
+//! the bootstrap message. Its CNode holds its runtime capabilities in the
+//! `process_slot` slots, then its imports.
 
 #![no_std]
 #![feature(strict_provenance_lints)]
@@ -23,7 +22,7 @@ mod arch;
 use elf::abi::{ET_DYN, PF_W, PF_X, PT_LOAD};
 use elf::endian::LittleEndian;
 use elf::ElfBytes;
-use sap_abi::{attr, error, object, reg, rights};
+use sap_abi::{attr, error, object, process_slot, reg, rights, AddressRange, SlotRange, Startup, BOOTSTRAP_OFFSET, MAX_BOOTSTRAP};
 
 use sap_sys::cnode::{SlotRef, WORD};
 use sap_sys::{tcb, untyped, vspace};
@@ -35,6 +34,9 @@ const USER_END: usize = 1 << 38;
 const STACK_PAGES: usize = 4;
 const STACK_TOP: usize = USER_END - PAGE;
 const IPC_BUFFER: usize = STACK_TOP - STACK_PAGES * PAGE - 2 * PAGE;
+const STARTUP: usize = IPC_BUFFER - 2 * PAGE;
+/// Where the process's heap may grow.
+const HEAP: AddressRange = AddressRange { start: 0x10_0000_0000, end: 0x10_4000_0000 };
 /// log2 of the new process's slot count; slot 0 stays empty.
 pub const CNODE_RADIX: usize = 6;
 
@@ -51,6 +53,21 @@ pub struct Parent {
     /// An unused, 1 GiB-aligned region of the caller's address space for
     /// filling pages.
     pub scratch: usize,
+    /// Ticks per second of the time counter, passed on in startup records.
+    pub timer_hz: u64,
+}
+
+/// What the new process starts with, besides its image.
+pub struct Launch<'a> {
+    pub priority: usize,
+    /// log2 of the size of the untyped memory the process gets as its
+    /// budget, made from the caller's; none if `None`.
+    pub budget_bits: Option<usize>,
+    /// The caller's capabilities to copy into the process's import slots,
+    /// in order, each with the rights to give it.
+    pub imports: &'a [(usize, usize)],
+    /// The bootstrap message, at most `MAX_BOOTSTRAP` bytes.
+    pub bootstrap: &'a [u8],
 }
 
 /// Free slots of the caller's root CNode, handed out in order.
@@ -72,10 +89,6 @@ impl Slots {
 pub struct Process {
     pub tcb: usize,
     pub cnode: usize,
-    /// The CNode capability the thread's capability space is rooted at,
-    /// with a guard so that full-width addresses name its slots. Give the
-    /// process a copy of this one to let it name its own slots.
-    pub guarded_cnode: usize,
     pub vspace: usize,
 }
 
@@ -141,9 +154,11 @@ fn filled_frame(parent: &Parent, slots: &mut Slots, fill: impl FnOnce(&mut [u8; 
     frame
 }
 
-/// Load `image` into a new process at `priority`, with `args` in its first
-/// three argument registers.
-pub fn load(image: &[u8], parent: &Parent, slots: &mut Slots, priority: usize, args: [usize; 3]) -> Process {
+/// Load `image` into a new process.
+pub fn load(image: &[u8], parent: &Parent, slots: &mut Slots, launch: &Launch) -> Process {
+    let first_free = process_slot::FIRST_IMPORT + launch.imports.len();
+    assert!(first_free <= 1 << CNODE_RADIX, "loader: too many imports");
+    assert!(launch.bootstrap.len() <= MAX_BOOTSTRAP, "loader: bootstrap message too long");
     let elf = ElfBytes::<LittleEndian>::minimal_parse(image).expect("loader: not an ELF file");
     assert!(
         elf.ehdr.e_machine == arch::MACHINE && elf.ehdr.e_type == ET_DYN,
@@ -211,6 +226,25 @@ pub fn load(image: &[u8], parent: &Parent, slots: &mut Slots, priority: usize, a
     ensure_tables(parent, slots, space, IPC_BUFFER);
     vspace::map_frame(buffer, space, IPC_BUFFER, rw, attr::EXECUTE_NEVER).expect("loader: map IPC buffer");
 
+    let startup = filled_frame(parent, slots, |bytes| {
+        bytes.fill(0);
+        let record = Startup {
+            timer_hz: parent.timer_hz,
+            ipc_buffer: IPC_BUFFER,
+            stack: AddressRange { start: STACK_TOP - STACK_PAGES * PAGE, end: STACK_TOP },
+            heap: HEAP,
+            cnode_radix: CNODE_RADIX,
+            imports: SlotRange { start: process_slot::FIRST_IMPORT, end: first_free },
+            free: SlotRange { start: first_free, end: 1 << CNODE_RADIX },
+            bootstrap_len: launch.bootstrap.len(),
+        };
+        // SAFETY: the page is aligned for the record and large enough.
+        unsafe { bytes.as_mut_ptr().cast::<Startup>().write(record) };
+        bytes[BOOTSTRAP_OFFSET..BOOTSTRAP_OFFSET + launch.bootstrap.len()].copy_from_slice(launch.bootstrap);
+    });
+    ensure_tables(parent, slots, space, STARTUP);
+    vspace::map_frame(startup, space, STARTUP, rights::READ, attr::EXECUTE_NEVER).expect("loader: map startup record");
+
     // The thread's capability space is the new CNode, with a guard so that
     // full-width addresses name its slots directly.
     let guarded = slots.take();
@@ -219,12 +253,25 @@ pub fn load(image: &[u8], parent: &Parent, slots: &mut Slots, priority: usize, a
         .mint_from(SlotRef::new(parent.cnode, cnode), rights::ALL, guard)
         .expect("loader: guarded CNode");
     tcb::configure(thread, guarded, space, Some((buffer, IPC_BUFFER))).expect("loader: configure");
-    tcb::set_priority(thread, parent.authority, priority).expect("loader: priority");
+    tcb::set_priority(thread, parent.authority, launch.priority).expect("loader: priority");
     let mut regs = [0; reg::COUNT];
     regs[reg::PC] = LOAD_BASE + elf.ehdr.e_entry as usize;
     regs[reg::SP] = STACK_TOP;
     regs[reg::TP] = IPC_BUFFER;
-    regs[reg::A0..reg::A0 + 3].copy_from_slice(&args);
+    regs[reg::A0] = STARTUP;
     tcb::write_registers(thread, false, &regs).expect("loader: registers");
-    Process { tcb: thread, cnode, guarded_cnode: guarded, vspace: space }
+
+    let process = Process { tcb: thread, cnode, vspace: space };
+    process.give(parent, process_slot::TCB, thread, rights::ALL);
+    process.give(parent, process_slot::CNODE, guarded, rights::ALL);
+    process.give(parent, process_slot::VSPACE, space, rights::ALL);
+    if let Some(bits) = launch.budget_bits {
+        let budget = retype(parent, slots, object::UNTYPED, bits);
+        let dest = SlotRef { root: cnode, index: process_slot::UNTYPED, depth: CNODE_RADIX };
+        dest.move_from(SlotRef::new(parent.cnode, budget)).expect("loader: give the budget");
+    }
+    for (i, &(cap, rights)) in launch.imports.iter().enumerate() {
+        process.give(parent, process_slot::FIRST_IMPORT + i, cap, rights);
+    }
+    process
 }

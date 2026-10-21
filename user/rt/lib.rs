@@ -8,7 +8,9 @@
 //!
 //! Every thread starts with `sp` at the top of its stack, `tp` pointing at
 //! its IPC buffer, and up to three arguments in `a0`..`a2`. For the root
-//! task, `a0` is the address of the kernel's boot-info page.
+//! task, `a0` is the address of the kernel's boot-info page; for a process
+//! started by a launcher, it is the address of its startup record
+//! (`process::startup`).
 
 #![no_std]
 #![feature(strict_provenance_lints)]
@@ -19,6 +21,7 @@ mod arch;
 pub mod debug;
 #[cfg(feature = "heap")]
 pub mod heap;
+pub mod process;
 pub mod runtime;
 pub mod slots;
 pub mod sync;

@@ -15,7 +15,7 @@ use alloc::vec::Vec;
 use core::alloc::Layout;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use sap_rt::abi::{attr, error, fault, identify, init_slot, object, recv_source, reg, rights, BootInfo};
+use sap_rt::abi::{attr, error, fault, identify, init_slot, object, process_slot, recv_source, reg, rights, BootInfo};
 use sap_rt::address::mapped;
 use sap_rt::cnode::SlotRef;
 use sap_rt::sys::Error;
@@ -24,7 +24,8 @@ use sap_rt::{debug, heap, ipc, notification, println, slots, sync, sys, tcb, unt
 use capnp::message::{Builder, Reader, ReaderOptions, SegmentArray, SingleSegmentAllocator};
 use sap_interfaces::echo;
 use sap_interfaces::echo_capnp::{reply, request};
-use sap_loader::{self as loader, Parent, Slots};
+use sap_interfaces::peer_capnp::{peer_imports, Mode};
+use sap_loader::{self as loader, Launch, Parent, Slots};
 use sap_ring::transfer::{Frames, Sender, TransferError, MAX_LEN, MAX_PAGES};
 use sap_ring::{as_bytes, as_bytes_mut, Consumer, Layout as RingLayout, Producer, RingError, PAGE};
 
@@ -865,6 +866,28 @@ fn check_faults(info: &BootInfo) {
 /// The second program, built by this crate's build script.
 static PEER: &[u8] = include_bytes!(env!("PEER_ELF"));
 
+/// A peer's bootstrap message and its length, built without the heap
+/// (which `check_heap` wants untouched): `mode`, then the indices of its
+/// imports in the order `connect_peer` and `check_process` give them.
+fn peer_bootstrap(mode: Mode, data_pages: usize) -> ([u8; 256], usize) {
+    let mut scratch = [0u64; 32];
+    let mut allocator = SingleSegmentAllocator::new(as_bytes_mut(&mut scratch));
+    let mut message = Builder::new(&mut allocator);
+    let mut imports = message.init_root::<peer_imports::Builder>();
+    imports.set_mode(mode);
+    imports.set_endpoint(0);
+    imports.set_data_pages(data_pages as u32);
+    imports.set_notification(1);
+    imports.set_doorbell(2);
+    imports.set_reply(3);
+    let segments = message.get_segments_for_output();
+    assert_eq!(segments.len(), 1, "a bootstrap message is one segment");
+    // Copied out: the allocator zeroes its buffer when the message goes.
+    let mut bytes = [0; 256];
+    bytes[..segments[0].len()].copy_from_slice(segments[0]);
+    (bytes, segments[0].len())
+}
+
 /// Load the peer into a process of its own and talk to it: a call across
 /// address spaces, and its attempt to read this process's memory, which
 /// faults and is reported here.
@@ -887,12 +910,24 @@ fn check_process(info: &BootInfo) {
         authority: init_slot::TCB,
         untyped: parent_untyped,
         scratch,
+        timer_hz: info.timer_hz,
     };
     let mut slots = Slots { next: base + 3, end: base + 200 };
-    // The peer's slot 1 is its endpoint, slot 2 its own thread.
-    let peer = loader::load(PEER, &parent, &mut slots, 255, [1, 2, 0]);
-    peer.give(&parent, 1, badged, rights::WRITE | rights::GRANT);
-    peer.give(&parent, 2, peer.tcb, rights::ALL);
+    let (bootstrap, len) = peer_bootstrap(Mode::Call, 0);
+    let launch = Launch { priority: 255, budget_bits: Some(16), imports: &[(badged, rights::WRITE | rights::GRANT)], bootstrap: &bootstrap[..len] };
+    let peer = loader::load(PEER, &parent, &mut slots, &launch);
+    // The process ABI's slots: its own objects, its budget, its import.
+    let theirs = |index| SlotRef { root: peer.cnode, index, depth: loader::CNODE_RADIX }.identify().map(|id| id.object_type).map_err(|e| e.0);
+    for (index, wanted) in [
+        (process_slot::TCB, object::TCB),
+        (process_slot::CNODE, object::CNODE),
+        (process_slot::VSPACE, object::PAGE_TABLE),
+        (process_slot::UNTYPED, object::UNTYPED),
+        (process_slot::FIRST_IMPORT, object::ENDPOINT),
+    ] {
+        assert_eq!(theirs(index), Ok(wanted), "the peer's slot {index}");
+    }
+    assert_eq!(theirs(process_slot::FIRST_IMPORT + 1), Err(error::FAILED_LOOKUP), "the peer has one import");
     expect("fault handler", tcb::set_fault_handler(peer.tcb, Some(badged)), Ok(()));
     // Something mapped at the scratch address, so the peer's read would
     // succeed if it could see this address space.
@@ -936,7 +971,7 @@ struct Channel {
 /// Load a peer in `mode` and connect it by a channel of two rings with
 /// `data_pages` data pages each, mapped here at `here`. Everything is made
 /// from `parent.untyped`, so revoking it removes the peer and the channel.
-fn connect_peer(parent: &Parent, slots: &mut Slots, mode: usize, data_pages: usize, here: usize) -> Channel {
+fn connect_peer(parent: &Parent, slots: &mut Slots, mode: Mode, data_pages: usize, here: usize) -> Channel {
     let in_root = SlotRef { root: init_slot::CNODE, index: 0, depth: 0 };
     let mut take = || {
         slots.next += 1;
@@ -955,7 +990,10 @@ fn connect_peer(parent: &Parent, slots: &mut Slots, mode: usize, data_pages: usi
     expect("endpoint", untyped::retype(parent.untyped, object::ENDPOINT, 0, in_root, ep, 1), Ok(()));
     expect("reply object", untyped::retype(parent.untyped, object::REPLY, 0, in_root, reply, 1), Ok(()));
 
-    let peer = loader::load(PEER, parent, slots, 255, [data_pages, 2, mode]);
+    let (bootstrap, len) = peer_bootstrap(mode, data_pages);
+    let imports = [(ep, rights::READ), (theirs, rights::READ), (my_bell, rights::WRITE), (reply, rights::ALL)];
+    let launch = Launch { priority: 255, budget_bits: None, imports: &imports, bootstrap: &bootstrap[..len] };
+    let peer = loader::load(PEER, parent, slots, &launch);
     let out = RingLayout::new(here, data_pages);
     let back = RingLayout::new(here + out.pages() * PAGE, data_pages);
     let offset = CHANNEL_THERE.wrapping_sub(here);
@@ -979,13 +1017,6 @@ fn connect_peer(parent: &Parent, slots: &mut Slots, mode: usize, data_pages: usi
             peer.map_frame(parent, slots, copy, va.wrapping_add(offset), if init_writes { ro } else { rw });
         }
     }
-    peer.give(parent, 1, theirs, rights::READ);
-    peer.give(parent, 2, peer.tcb, rights::ALL);
-    peer.give(parent, 3, my_bell, rights::WRITE);
-    peer.give(parent, 4, ep, rights::READ);
-    peer.give(parent, 5, reply, rights::ALL);
-    peer.give(parent, 6, peer.vspace, rights::ALL);
-    peer.give(parent, 7, peer.guarded_cnode, rights::ALL);
     peer.map_tables(parent, slots, TRANSFER_THERE);
     peer.start();
     // SAFETY: both rings are mapped here with the rights each end needs,
@@ -1027,6 +1058,7 @@ fn channel_resources(info: &BootInfo) -> (Parent, Slots) {
         authority: init_slot::TCB,
         untyped: untyped_at_least(info, 20),
         scratch: 0x38_0000_0000,
+        timer_hz: info.timer_hz,
     };
     (parent, Slots { next: first, end: first + 400 })
 }
@@ -1036,7 +1068,7 @@ fn channel_resources(info: &BootInfo) -> (Parent, Slots) {
 /// flight.
 fn check_ring(info: &BootInfo) {
     let (parent, mut slots) = channel_resources(info);
-    let Channel { mut out, mut back, .. } = connect_peer(&parent, &mut slots, 1, 1, 0x28_0000_0000);
+    let Channel { mut out, mut back, .. } = connect_peer(&parent, &mut slots, Mode::EchoWords, 1, 0x28_0000_0000);
     const MESSAGES: u64 = 10_000;
     const WINDOW: u64 = 48;
     let (mut sent, mut received, mut checksum) = (0u64, 0u64, 0u64);
@@ -1108,7 +1140,7 @@ fn check_reply(i: u64, blob_len: usize, body: &[u8]) {
 /// breaks the ring's rules.
 fn check_echo_service(info: &BootInfo) {
     let (parent, mut slots) = channel_resources(info);
-    let Channel { mut out, mut back, ep } = connect_peer(&parent, &mut slots, 2, 2, 0x28_0000_0000);
+    let Channel { mut out, mut back, ep } = connect_peer(&parent, &mut slots, Mode::ServeEcho, 2, 0x28_0000_0000);
     let mut scratch_words = [0u64; 512];
     let mut scratch = SingleSegmentAllocator::new(as_bytes_mut(&mut scratch_words));
     let mut reply_words = [0u64; 512];
@@ -1199,7 +1231,7 @@ fn check_echo_service(info: &BootInfo) {
 
     // A peer that answers with garbage, then publishes a record longer than
     // what it published: the garbage fails to parse, the record is refused.
-    let Channel { mut out, mut back, .. } = connect_peer(&parent, &mut slots, 3, 1, 0x28_0001_0000);
+    let Channel { mut out, mut back, .. } = connect_peer(&parent, &mut slots, Mode::Misbehave, 1, 0x28_0001_0000);
     let message = echo_request(1, small_blob(1), &mut scratch);
     out.send(echo::REQUEST, 1, message.get_segments_for_output()[0]);
     drop(message);
@@ -1229,7 +1261,7 @@ fn checksum(bytes: &[u8]) -> u64 {
 fn measure_transfer(info: &BootInfo) {
     const ROUNDS: u64 = 64;
     let (parent, mut slots) = channel_resources(info);
-    let Channel { mut out, mut back, ep } = connect_peer(&parent, &mut slots, 4, 32, 0x28_0000_0000);
+    let Channel { mut out, mut back, ep } = connect_peer(&parent, &mut slots, Mode::SumBytes, 32, 0x28_0000_0000);
     let (mut sender, first) = transfer_sender(&parent, &mut slots);
 
     // What one page costs: the system calls each side makes per page.
