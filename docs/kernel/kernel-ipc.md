@@ -3,6 +3,7 @@ status: implemented
 summary: Kernel IPC as implemented today - notifications (Signal, Wait, Poll), badges and their place in the derivation tree, endpoints with seL4 MCS-style reply objects (Send, Recv, Call, Reply, ReplyRecv and non-blocking variants), notifications bound to threads, capability transfer (up to 16 per message, moved or copied into a receive window), fault delivery to fault-handler endpoints, and blocking, cancellation and restarted system calls.
 updated: 2026-10-19
 code: [kernel/notification.rs, kernel/endpoint.rs, kernel/fault.rs, kernel/syscall.rs, kernel/invocation.rs, kernel/thread.rs, kernel/sched.rs, kernel/cap.rs, kernel/cspace.rs, kernel/untyped.rs, kernel/arch/riscv/trap.rs, abi/lib.rs, user/sys/notification.rs, user/sys/ipc.rs, user/sys/sys.rs, user/check/main.rs]
+verified: 8642317
 sources: ["[[2026-10-08-22c3947b#m33|§m33]]", "[[2026-10-08-22c3947b#m34|§m34]]"]
 ---
 
