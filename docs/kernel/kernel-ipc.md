@@ -2,7 +2,7 @@
 status: implemented
 summary: Kernel IPC as implemented today - notifications (Signal, Wait, Poll), badges and their place in the derivation tree, endpoints with seL4 MCS-style reply objects (Send, Recv, Call, Reply, ReplyRecv and non-blocking variants), notifications bound to threads, capability transfer (up to 16 per message, moved or copied into a receive window), fault delivery to fault-handler endpoints, and blocking, cancellation and restarted system calls.
 updated: 2026-10-19
-code: [kernel/notification.rs, kernel/endpoint.rs, kernel/fault.rs, kernel/syscall.rs, kernel/invocation.rs, kernel/thread.rs, kernel/sched.rs, kernel/cap.rs, kernel/cspace.rs, kernel/untyped.rs, kernel/arch/riscv/trap.rs, abi/lib.rs, user/sys/notification.rs, user/sys/ipc.rs, user/sys/sys.rs, user/init/main.rs]
+code: [kernel/notification.rs, kernel/endpoint.rs, kernel/fault.rs, kernel/syscall.rs, kernel/invocation.rs, kernel/thread.rs, kernel/sched.rs, kernel/cap.rs, kernel/cspace.rs, kernel/untyped.rs, kernel/arch/riscv/trap.rs, abi/lib.rs, user/sys/notification.rs, user/sys/ipc.rs, user/sys/sys.rs, user/check/main.rs]
 sources: ["[[2026-10-08-22c3947b#m33|§m33]]", "[[2026-10-08-22c3947b#m34|§m34]]"]
 ---
 
@@ -102,25 +102,25 @@ Several threads of one program each need their own IPC buffer. Every thread star
 
 ## Tests
 
-`user/init` (`check_notifications`) checks: minting two badges and refusing a re-badge; two signals with nobody waiting accumulating, so one poll returns both bits and the next finds nothing pending; a signal through the unbadged original being pending with no bits, and a `WAIT` after an unbadged and a badged signal returning at once with the badged bits; a send-only capability being refused a `WAIT`; a second thread blocked in `WAIT` waking once per signal with the right badge; a signal sent while that thread is suspended being taken by its restarted `WAIT` after `RESUME`; revoking one badge deleting its copies while the badge itself keeps working; and deleting the notification with the thread waiting, after which its restarted `WAIT` reports `FAILED_LOOKUP`.
+`user/check` (`check_notifications`) checks: minting two badges and refusing a re-badge; two signals with nobody waiting accumulating, so one poll returns both bits and the next finds nothing pending; a signal through the unbadged original being pending with no bits, and a `WAIT` after an unbadged and a badged signal returning at once with the badged bits; a send-only capability being refused a `WAIT`; a second thread blocked in `WAIT` waking once per signal with the right badge; a signal sent while that thread is suspended being taken by its restarted `WAIT` after `RESUME`; revoking one badge deleting its copies while the badge itself keeps working; and deleting the notification with the thread waiting, after which its restarted `WAIT` reports `FAILED_LOOKUP`.
 
-`check_ipc` uses a `spawn` helper (`spawn_with`) (`user/init/main.rs:509`) to start threads with their own stack and IPC buffer, and checks:
+`check_ipc` uses a `spawn` helper (`spawn_with`) (`user/check/main.rs:533`) to start threads with their own stack and IPC buffer, and checks:
 - a server thread answering with `REPLY_RECV`: a six-word `CALL` through a badged capability comes back with the badge as the label and every word incremented, so two words crossed the IPC buffers each way, and the reply carries no badge;
 - a plain `SEND` completing without an answer, counted by the server;
 - `RECV` on a send-only capability and `CALL` on a receive-only one refused;
 - `NB_RECV` finding nothing on an idle endpoint, and `NB_SEND` with nobody waiting dropping the message;
 - binding a notification to the server, binding twice refused, and a signal waking the server out of `RECV`;
 - a `CALL` to a receiver that lent no reply object being delivered and ending with `NO_REPLY`;
-- `init` receiving a call itself and deleting its reply object, after which the caller wakes with `NO_REPLY`;
+- `check` receiving a call itself and deleting its reply object, after which the caller wakes with `NO_REPLY`;
 - deleting the endpoint under the waiting server, whose restarted `RECV` then reports `FAILED_LOOKUP`.
 
 `check_cap_transfer` uses a "keeper" thread that receives into a window and counts what arrives:
 - two copies and a move arrive in order; the moved capability is gone from the sender, and a received copy works;
 - a message sent through a capability without grant arrives with no capabilities;
 - a one-slot window takes one of two capabilities, and a window whose first slot is occupied takes none;
-- a `CALL` through a capability with grant-reply gets a capability moved back in its reply, into `init`'s own window; through one without grant-reply, the reply arrives with none.
+- a `CALL` through a capability with grant-reply gets a capability moved back in its reply, into `check`'s own window; through one without grant-reply, the reply arrives with none.
 
 > [!todo] Not built
 > The IPC fast path, scheduling contexts donated on `CALL`, timeout faults, and handlers writing the faulting thread's registers in their reply.
 
-`check_faults` checks that a thread reading unmapped memory reports a `VM` fault with the right address, pc and badge; that its handler (`init`) can map a page there, write a value and reply 0, after which the thread's read completes with that value; that an illegal instruction answered with a nonzero label leaves the thread stopped at the instruction; and that a thread without a handler is suspended inside the faulting function while `init` carries on.
+`check_faults` checks that a thread reading unmapped memory reports a `VM` fault with the right address, pc and badge; that its handler (`check`) can map a page there, write a value and reply 0, after which the thread's read completes with that value; that an illegal instruction answered with a nonzero label leaves the thread stopped at the instruction; and that a thread without a handler is suspended inside the faulting function while `check` carries on.

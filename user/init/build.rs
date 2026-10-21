@@ -8,7 +8,7 @@ use std::path::PathBuf;
 include!("../build_program.rs");
 
 /// The programs in the boot pack, by crate name under user/.
-const PROGRAMS: &[&str] = &["peer"];
+const PROGRAMS: &[&str] = &["check"];
 
 fn main() {
     let dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());

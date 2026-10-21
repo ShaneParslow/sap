@@ -29,6 +29,6 @@ Pages are ordered by dependency: the first is a decision the others depend on, t
 | [[kernel-threads]] | implemented | Thread control blocks, thread invocations (configure, registers, resume, suspend, priorities), fixed-priority round-robin scheduling, the idle loop, and lock-free kernel globals on one hart. |
 | [[kernel-capabilities]] | implemented | Capability representation, slots and CNodes, the derivation tree, address resolution, delete and revoke, `CALL` and CNode operations, and the root task's initial capabilities. |
 | [[kernel-ipc]] | implemented | Notifications, badges, endpoints with MCS-style reply objects, bound notifications, blocking, cancellation and restarted system calls; capability transfer and fault delivery to come in M4. |
-| [[kernel-root-task]] | implemented | The one program the kernel loads itself: building and embedding `user/init`, loading a position-independent ELF, entering user mode, and the temporary debug syscalls. |
+| [[kernel-root-task]] | implemented | The one program the kernel loads itself: building and embedding `user/init`, loading a position-independent ELF, entering user mode, the temporary debug syscalls, and starting the kernel checks as a program of their own. |
 
 The kernel is Rust (`no_std`); its code is in `kernel/`, with architecture code under `kernel/arch/riscv/`.

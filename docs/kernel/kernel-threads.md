@@ -2,7 +2,7 @@
 status: implemented
 summary: Threads and scheduling as implemented today - the thread control block (saved user registers, its capability slots, state, priorities), the thread invocations that configure, start, stop and inspect threads, seL4-style fixed-priority round-robin scheduling with time slices, the idle loop, and lock-free kernel globals on one hart.
 updated: 2026-10-13
-code: [kernel/thread.rs, kernel/sched.rs, kernel/global.rs, kernel/syscall.rs, kernel/invocation.rs, user/sys/tcb.rs, user/init/main.rs, kernel/arch/riscv/trap.rs, kernel/arch/riscv/mod.rs, kernel/arch/riscv/vspace.rs, kernel/root_task.rs, kernel/main.rs, abi/lib.rs]
+code: [kernel/thread.rs, kernel/sched.rs, kernel/global.rs, kernel/syscall.rs, kernel/invocation.rs, user/sys/tcb.rs, user/check/main.rs, kernel/arch/riscv/trap.rs, kernel/arch/riscv/mod.rs, kernel/arch/riscv/vspace.rs, kernel/root_task.rs, kernel/main.rs, abi/lib.rs]
 verified: d25ecd2
 sources: ["[[2026-10-08-22c3947b-wiki-setup]]"]
 ---
@@ -62,7 +62,7 @@ Scheduler state is a `Global` (`kernel/global.rs:13`), a cell that hands out `&m
 
 ## Tests
 
-`user/init` starts a second thread in its own address space, on a stack it maps itself, running a loop that increments a shared counter (`check_threads` in `user/init/main.rs`). It checks that configuring with a non-root address space fails; that an authority can't grant more than its own `mcp`; that registers of the calling thread can't be written; that a priority-100 thread never runs while the priority-255 root task is runnable, even across yields; that at equal priority the counter moves while the root task spins without yielding, which only preemption can cause; that a suspended thread stops; that its registers show it stopped inside the loop, on its stack; that a resumed thread runs again; and that a deleted one never does.
+`user/check` starts a second thread in its own address space, on a stack it maps itself, running a loop that increments a shared counter (`check_threads` in `user/check/main.rs`). It checks that configuring with a non-root address space fails; that an authority can't grant more than its own `mcp`; that registers of the calling thread can't be written; that a priority-100 thread never runs while the priority-255 root task is runnable, even across yields; that at equal priority the counter moves while the root task spins without yielding, which only preemption can cause; that a suspended thread stops; that its registers show it stopped inside the loop, on its stack; that a resumed thread runs again; and that a deleted one never does.
 
 ## Syscalls
 

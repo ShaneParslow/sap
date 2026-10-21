@@ -1,7 +1,7 @@
 //! What a process started by a launcher receives: its startup record and
 //! bootstrap message (the process ABI, `sap_abi::Startup`).
 
-use sap_sys::abi::{Startup, BOOTSTRAP_OFFSET, MAX_BOOTSTRAP};
+use sap_sys::abi::{launcher, process_slot, Startup, BOOTSTRAP_OFFSET, MAX_BOOTSTRAP};
 use sap_sys::address::mapped;
 
 /// The startup record whose address the launcher passed in `a0`.
@@ -30,4 +30,14 @@ pub fn bootstrap(startup: &'static Startup) -> &'static [u8] {
 pub fn import(startup: &Startup, index: u32) -> Option<usize> {
     let slot = startup.imports.start.checked_add(index as usize)?;
     (slot < startup.imports.end).then_some(slot)
+}
+
+/// Report exit with `code` (0 for success) to the launcher, then stop. The
+/// launcher normally destroys the process when it hears; if nobody
+/// listens, the thread suspends itself.
+pub fn exit(code: usize) -> ! {
+    let _ = sap_sys::ipc::send(process_slot::LAUNCHER, launcher::EXIT, &[code], &[]);
+    loop {
+        let _ = sap_sys::tcb::suspend(process_slot::TCB);
+    }
 }

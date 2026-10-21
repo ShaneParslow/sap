@@ -409,10 +409,23 @@ pub mod process_slot {
     pub const VSPACE: usize = 3;
     /// Untyped memory: the process's memory budget. Empty if it has none.
     pub const UNTYPED: usize = 4;
+    /// An endpoint to whoever launched the process, which it calls to
+    /// report its exit (`launcher`). Empty if nobody listens.
+    pub const LAUNCHER: usize = 5;
+    /// The frame of the main thread's IPC buffer, as the root task has it.
+    pub const IPC_BUFFER: usize = 6;
     /// The first slot of the process's imports.
-    // TODO: a slot for the connection to the launcher, over which exit is
-    // reported (M7, process factory).
     pub const FIRST_IMPORT: usize = 8;
+}
+
+/// Labels of the calls a process makes on its `process_slot::LAUNCHER`
+/// endpoint. A launcher is normally also the process's fault handler, on
+/// the same endpoint, so fault labels (`fault`) arrive there too; these
+/// don't collide with them.
+pub mod launcher {
+    /// The process is done: word 0 is its exit code, 0 for success. No
+    /// reply comes.
+    pub const EXIT: usize = 0x100;
 }
 
 /// A range of virtual addresses, `start..end`.

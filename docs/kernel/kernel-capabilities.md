@@ -2,7 +2,7 @@
 status: implemented
 summary: Capabilities as implemented today, following seL4 - the capability representation, CNodes of 64-byte slots, the derivation tree kept as a linked list through the slots, resolving capability addresses through guarded CNodes, delete and revoke with finalisation, the CALL invocation path, CNode operations, retyping untyped memory, building address spaces from page-table and frame capabilities, and the capabilities the root task starts with.
 updated: 2026-10-19
-code: [kernel/cap.rs, kernel/cspace.rs, kernel/invocation.rs, kernel/untyped.rs, kernel/thread.rs, kernel/root_task.rs, kernel/arch/riscv/caps.rs, kernel/arch/riscv/vspace.rs, abi/lib.rs, user/sys/sys.rs, user/sys/cnode.rs, user/sys/untyped.rs, user/sys/vspace.rs, user/init/main.rs, kernel/arch/riscv/paging.rs]
+code: [kernel/cap.rs, kernel/cspace.rs, kernel/invocation.rs, kernel/untyped.rs, kernel/thread.rs, kernel/root_task.rs, kernel/arch/riscv/caps.rs, kernel/arch/riscv/vspace.rs, abi/lib.rs, user/sys/sys.rs, user/sys/cnode.rs, user/sys/untyped.rs, user/sys/vspace.rs, user/check/main.rs, kernel/arch/riscv/paging.rs]
 verified: d25ecd2
 sources: ["[[2026-10-08-22c3947b-wiki-setup]]"]
 ---
@@ -142,7 +142,7 @@ ASIDs come from a fixed table of 4,096 entries in the kernel (`kernel/arch/riscv
 
 ## Tests
 
-`user/init` checks each operation against its expected error code (`user/init/main.rs`):
+`user/check` checks each operation against its expected error code (`user/check/main.rs`):
 - CNodes: copy, copy into an occupied slot, copy of a copy, move, copy from an emptied slot, delete, delete of an empty slot, revoking untyped memory (which deletes a copy and the copy's copy), an out-of-range slot, and a wrong depth.
 - Retype: carving a 64 KiB region from a larger one; retyping a CNode, a TCB, a page table and frames from it; an occupied destination; an unknown type; copying untyped memory that has children (`REVOKE_FIRST`); copying untyped memory that has none, after which the original is full until the copy and its frame are gone; copying a capability into the new CNode through a two-level address; filling the region exactly, then `NOT_ENOUGH_MEMORY`; revoking the region, after which every object (including the copy inside the new CNode) is gone and the full 64 KiB can be retyped again.
 - Address spaces: mapping a frame before its tables (`FAILED_LOOKUP`); mapping a level-1 and a level-0 table at 1 GiB; a third table when every level is taken; mapping a frame, mapping it twice, over another mapping, unaligned, at a kernel address, write-only; writing through the mapping, unmapping, remapping read-only elsewhere and reading the value back; identifying frames (exclusive and mapped, then shared once copied, exclusive again once the copy is deleted), the IPC buffer frame (shared with the TCB's copy), a mapped page table, an unmapped 2 MiB frame, the ASID pool, untyped memory (never exclusive) and an empty slot; a 2 MiB frame in the level-1 table, whose physical address matches its untyped region; a new address space from a retyped table (refused before it has an ASID, refused a second ASID); unmapping a table, after which the frame can't be mapped until a new table is installed, and then reads the same value. Reading the first mapping after revoking the region faults.

@@ -10,12 +10,12 @@ test = false
 bench = false
 
 [dependencies]
+blake3 = { version = "1.8.7", default-features = false }
 capnp = { version = "0.27.2", default-features = false }
 sap-interfaces = { path = "../interfaces" }
 sap-rt = { path = "../rt" }
 sap-loader = { path = "../loader" }
 sap-ring = { path = "../ring" }
-blake3 = { version = "1.8.7", default-features = false }
 
 [build-dependencies]
 blake3 = "1.8.7"

@@ -1,15 +1,15 @@
 ---
 status: implemented
-summary: The one program the kernel starts by itself, as in seL4 - user/init, built on the sap-rt runtime as a static position-independent ELF and embedded in the kernel; how the kernel loads it (contiguous frames, relative relocations, W^X segments, a stack, IPC buffer and boot-info page) and starts it as a thread; and the debug syscalls it still uses.
-updated: 2026-10-19
-code: [kernel/build.rs, user/build_program.rs, user/riscv64gc-unknown-sap.json, kernel/root_task.rs, kernel/syscall.rs, abi/lib.rs, user/init/main.rs, user/init/build.rs, user/.cargo/config.toml, user/rt/lib.rs, user/rt/debug.rs]
+summary: The one program the kernel starts by itself, as in seL4 - user/init, built on the sap-rt runtime as a static position-independent ELF and embedded in the kernel; how the kernel loads it (contiguous frames, relative relocations, W^X segments, a stack, IPC buffer and boot-info page) and starts it as a thread; the debug syscalls it still uses; and what it does at boot: start the kernel checks as a program of their own and wait for their exit.
+updated: 2026-10-20
+code: [kernel/build.rs, user/build_program.rs, user/riscv64gc-unknown-sap.json, kernel/root_task.rs, kernel/syscall.rs, abi/lib.rs, user/init/main.rs, user/init/build.rs, interfaces/check.capnp, user/.cargo/config.toml, user/rt/lib.rs, user/rt/debug.rs]
 verified: af1edf1
 sources: ["[[2026-10-08-22c3947b-wiki-setup]]"]
 ---
 
 # The root task
 
-The kernel loads exactly one program, the **root task**, as seL4 does. Every other program is loaded by the root task, which will become the process manager ([[prog-loading]], milestone M7). Today the root task only proves that user mode works. Completes roadmap milestone M2 ([[roadmap]]).
+The kernel loads exactly one program, the **root task**, as seL4 does. Every other program is loaded by the root task, which is becoming the process manager ([[prog-loading]], milestone M7). Completes roadmap milestone M2 ([[roadmap]]).
 
 ## Building it
 
@@ -42,7 +42,11 @@ Until capability invocations exist (M3), two temporary calls stand in, like seL4
 | `0x100` | `DEBUG_PUTCHAR(byte)` | prints one byte on the kernel console |
 | `0x101` | `DEBUG_HALT(failure)` | logs and shuts down; nonzero reports failure |
 
-Unknown numbers log a warning and return `usize::MAX`. `user/init` prints through `DEBUG_PUTCHAR` (via `sap-rt`'s console), runs its checks ([[kernel-capabilities#Tests]]), and ends with `DEBUG_HALT`. Its formatting code reaches vtables through relocated pointers, so the output itself shows the relocations were applied.
+Unknown numbers log a warning and return `usize::MAX`. `user/init` and the programs it starts print through `DEBUG_PUTCHAR` (via `sap-rt`'s console), and `init` ends the boot with `DEBUG_HALT`. Formatting code reaches vtables through relocated pointers, so the output itself shows the relocations were applied.
+
+## What it does
+
+`init` (`sap_main`, `user/init/main.rs:44`) logs its boot pack and the boot information, keeps the smallest untyped region of at least 2 MiB for itself (`own_untyped`, line 99), starts its runtime there, and makes an endpoint on which the programs it starts report. Then it starts `check`, the kernel checks ([[kernel-capabilities#Tests]]), from the boot pack ([[prog-runtime#The second program]]) with `sap-loader` (`start_check`, line 121). `check` gets every other untyped region, moved, and a copy of the ASID pool, as imports described in its bootstrap message (`CheckImports`, `interfaces/check.capnp`); a 4,096-slot CNode and a 64 KiB stack; priority and maximum priority 255; and a badged capability to `init`'s endpoint as both its launcher and its fault handler. `init` then waits on the endpoint: `check`'s exit with code 0 ends the boot with success, any other code or a fault with failure. A check that fails panics, which halts the machine directly.
 
 Faults in other threads go to their fault handlers ([[kernel-ipc#Fault delivery]]); the root task has none, so a fault in it is logged and ends the boot with a failure. Tested: a null read (`address 0x8`), a read of a kernel address, and 30 million loop iterations under 100 Hz timer interrupts.
 

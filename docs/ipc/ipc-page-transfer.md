@@ -2,7 +2,7 @@
 status: implemented
 summary: Messages too large for a ring travel as whole frames whose capabilities the kernel moves to the receiver - the call protocol, why an unmapped frame with no other capability can be read in place, identifying a capability before invoking it, and what QEMU measured (copying wins at every size up to 60 KiB while each page costs six system calls).
 updated: 2026-10-19
-code: [user/ring/transfer.rs, user/peer/main.rs, user/init/main.rs, user/sys/cnode.rs, user/loader/lib.rs, kernel/invocation.rs, kernel/cspace.rs, kernel/arch/riscv/caps.rs, abi/lib.rs]
+code: [user/ring/transfer.rs, user/peer/main.rs, user/check/main.rs, user/sys/cnode.rs, user/loader/lib.rs, kernel/invocation.rs, kernel/cspace.rs, kernel/arch/riscv/caps.rs, abi/lib.rs]
 sources: ["[[2026-09-27-future-of-computing#m15|§m15]]", "[[2026-10-16-2c1ac53c#m16|§m16]]", "[[2026-10-16-2c1ac53c#m22|§m22]]"]
 ---
 
@@ -51,9 +51,9 @@ The sender checks returned capabilities the same way, because the receiver could
 
 ## What it costs
 
-`measure_transfer` (`user/init/main.rs:1270`) times 64 round trips per size. Each moves `n` bytes to a peer, which reads every byte once and answers with a checksum:
-- **ring copy:** init copies the bytes into a ring of 32 data pages, the peer copies them out and sums them;
-- **page transfer:** init copies the bytes into its frames, and the peer sums them in place.
+`measure_transfer` (`user/check/main.rs:1291`) times 64 round trips per size. Each moves `n` bytes to a peer, which reads every byte once and answers with a checksum:
+- **ring copy:** check copies the bytes into a ring of 32 data pages, the peer copies them out and sums them;
+- **page transfer:** check copies the bytes into its frames, and the peer sums them in place.
 
 QEMU 11.1 on one CPU, release build, ranges over four boots:
 

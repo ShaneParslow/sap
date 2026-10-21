@@ -31,14 +31,16 @@ const PAGE: usize = 4096;
 /// Where images are placed (as the kernel places the root task).
 const LOAD_BASE: usize = 0x1_0000;
 const USER_END: usize = 1 << 38;
-const STACK_PAGES: usize = 4;
+/// The stack ends a page below the top of user space, leaving a guard; the
+/// IPC buffer and then the startup page sit below it, each after a guard
+/// page. With the default stack size these are the root task's addresses.
 const STACK_TOP: usize = USER_END - PAGE;
-const IPC_BUFFER: usize = STACK_TOP - STACK_PAGES * PAGE - 2 * PAGE;
-const STARTUP: usize = IPC_BUFFER - 2 * PAGE;
+const DEFAULT_STACK_PAGES: usize = 4;
 /// Where the process's heap may grow.
 const HEAP: AddressRange = AddressRange { start: 0x10_0000_0000, end: 0x10_4000_0000 };
-/// log2 of the new process's slot count; slot 0 stays empty.
-pub const CNODE_RADIX: usize = 6;
+/// log2 of a new process's slot count unless the caller asks for more;
+/// slot 0 stays empty.
+pub const DEFAULT_CNODE_RADIX: usize = 6;
 
 /// What the loader takes from its caller.
 pub struct Parent {
@@ -60,15 +62,46 @@ pub struct Parent {
 /// What the new process starts with, besides its image.
 pub struct Launch<'a> {
     pub priority: usize,
+    /// The highest priority the process may give its own threads.
+    pub max_priority: usize,
+    /// log2 of the number of slots in the process's CNode.
+    pub cnode_radix: usize,
+    /// Size of the main thread's stack, in pages.
+    pub stack_pages: usize,
     /// log2 of the size of the untyped memory the process gets as its
     /// budget, made from the caller's; none if `None`.
     pub budget_bits: Option<usize>,
-    /// The caller's capabilities to copy into the process's import slots,
-    /// in order, each with the rights to give it.
-    pub imports: &'a [(usize, usize)],
+    /// The caller's endpoint capability to copy into the process's
+    /// launcher slot (normally badged, so the caller knows who calls).
+    pub launcher: Option<usize>,
+    /// The caller's capabilities to give as the process's imports, in
+    /// order.
+    pub imports: &'a [(usize, Give)],
     /// The bootstrap message, at most `MAX_BOOTSTRAP` bytes.
     pub bootstrap: &'a [u8],
 }
+
+/// How a capability is given to the new process.
+#[derive(Clone, Copy)]
+pub enum Give {
+    /// A copy with these rights; the caller keeps its own.
+    Copy(usize),
+    /// The capability itself; the caller's slot ends empty.
+    Move,
+}
+
+/// The defaults: no budget, no launcher, no imports, a 64-slot CNode, a
+/// 16 KiB stack and no right to raise priorities.
+pub const LAUNCH: Launch<'static> = Launch {
+    priority: 0,
+    max_priority: 0,
+    cnode_radix: DEFAULT_CNODE_RADIX,
+    stack_pages: DEFAULT_STACK_PAGES,
+    budget_bits: None,
+    launcher: None,
+    imports: &[],
+    bootstrap: &[],
+};
 
 /// Free slots of the caller's root CNode, handed out in order.
 pub struct Slots {
@@ -89,6 +122,7 @@ impl Slots {
 pub struct Process {
     pub tcb: usize,
     pub cnode: usize,
+    pub cnode_radix: usize,
     pub vspace: usize,
 }
 
@@ -96,8 +130,18 @@ impl Process {
     /// Copy the caller's capability `cap` into slot `index` of the
     /// process's CNode, with `rights`.
     pub fn give(&self, parent: &Parent, index: usize, cap: usize, rights: usize) {
-        let dest = SlotRef { root: self.cnode, index, depth: CNODE_RADIX };
-        dest.copy_from(SlotRef::new(parent.cnode, cap), rights).expect("loader: give a capability");
+        self.slot(index).copy_from(SlotRef::new(parent.cnode, cap), rights).expect("loader: give a capability");
+    }
+
+    /// Move the caller's capability `cap` into slot `index` of the
+    /// process's CNode.
+    pub fn give_away(&self, parent: &Parent, index: usize, cap: usize) {
+        self.slot(index).move_from(SlotRef::new(parent.cnode, cap)).expect("loader: move a capability");
+    }
+
+    /// Slot `index` of the process's CNode, named through the caller's.
+    pub fn slot(&self, index: usize) -> SlotRef {
+        SlotRef { root: self.cnode, index, depth: self.cnode_radix }
     }
 
     /// Add page tables to the process's address space until `va` has every
@@ -157,8 +201,11 @@ fn filled_frame(parent: &Parent, slots: &mut Slots, fill: impl FnOnce(&mut [u8; 
 /// Load `image` into a new process.
 pub fn load(image: &[u8], parent: &Parent, slots: &mut Slots, launch: &Launch) -> Process {
     let first_free = process_slot::FIRST_IMPORT + launch.imports.len();
-    assert!(first_free <= 1 << CNODE_RADIX, "loader: too many imports");
+    assert!(first_free <= 1 << launch.cnode_radix, "loader: too many imports");
     assert!(launch.bootstrap.len() <= MAX_BOOTSTRAP, "loader: bootstrap message too long");
+    let stack_bottom = STACK_TOP - launch.stack_pages * PAGE;
+    let ipc_buffer = stack_bottom - 2 * PAGE;
+    let startup_page = ipc_buffer - 2 * PAGE;
     let elf = ElfBytes::<LittleEndian>::minimal_parse(image).expect("loader: not an ELF file");
     assert!(
         elf.ehdr.e_machine == arch::MACHINE && elf.ehdr.e_type == ET_DYN,
@@ -176,7 +223,7 @@ pub fn load(image: &[u8], parent: &Parent, slots: &mut Slots, launch: &Launch) -
 
     let space = retype(parent, slots, object::PAGE_TABLE, 0);
     vspace::assign_asid(parent.asid_pool, space).expect("loader: assign an ASID");
-    let cnode = retype(parent, slots, object::CNODE, CNODE_RADIX);
+    let cnode = retype(parent, slots, object::CNODE, launch.cnode_radix);
     let thread = retype(parent, slots, object::TCB, 0);
     ensure_tables(parent, slots, parent.vspace, parent.scratch);
 
@@ -216,62 +263,69 @@ pub fn load(image: &[u8], parent: &Parent, slots: &mut Slots, launch: &Launch) -
     }
 
     let rw = rights::READ | rights::WRITE;
-    for i in 0..STACK_PAGES {
+    for i in 0..launch.stack_pages {
         let frame = retype(parent, slots, object::FRAME_4K, 0);
         let va = STACK_TOP - (i + 1) * PAGE;
         ensure_tables(parent, slots, space, va);
         vspace::map_frame(frame, space, va, rw, attr::EXECUTE_NEVER).expect("loader: map stack");
     }
     let buffer = retype(parent, slots, object::FRAME_4K, 0);
-    ensure_tables(parent, slots, space, IPC_BUFFER);
-    vspace::map_frame(buffer, space, IPC_BUFFER, rw, attr::EXECUTE_NEVER).expect("loader: map IPC buffer");
+    ensure_tables(parent, slots, space, ipc_buffer);
+    vspace::map_frame(buffer, space, ipc_buffer, rw, attr::EXECUTE_NEVER).expect("loader: map IPC buffer");
 
     let startup = filled_frame(parent, slots, |bytes| {
         bytes.fill(0);
         let record = Startup {
             timer_hz: parent.timer_hz,
-            ipc_buffer: IPC_BUFFER,
-            stack: AddressRange { start: STACK_TOP - STACK_PAGES * PAGE, end: STACK_TOP },
+            ipc_buffer,
+            stack: AddressRange { start: stack_bottom, end: STACK_TOP },
             heap: HEAP,
-            cnode_radix: CNODE_RADIX,
+            cnode_radix: launch.cnode_radix,
             imports: SlotRange { start: process_slot::FIRST_IMPORT, end: first_free },
-            free: SlotRange { start: first_free, end: 1 << CNODE_RADIX },
+            free: SlotRange { start: first_free, end: 1 << launch.cnode_radix },
             bootstrap_len: launch.bootstrap.len(),
         };
         // SAFETY: the page is aligned for the record and large enough.
         unsafe { bytes.as_mut_ptr().cast::<Startup>().write(record) };
         bytes[BOOTSTRAP_OFFSET..BOOTSTRAP_OFFSET + launch.bootstrap.len()].copy_from_slice(launch.bootstrap);
     });
-    ensure_tables(parent, slots, space, STARTUP);
-    vspace::map_frame(startup, space, STARTUP, rights::READ, attr::EXECUTE_NEVER).expect("loader: map startup record");
+    ensure_tables(parent, slots, space, startup_page);
+    vspace::map_frame(startup, space, startup_page, rights::READ, attr::EXECUTE_NEVER).expect("loader: map startup record");
 
     // The thread's capability space is the new CNode, with a guard so that
     // full-width addresses name its slots directly.
     let guarded = slots.take();
-    let guard = WORD - CNODE_RADIX; // guard size in bits, guard value 0
+    let guard = WORD - launch.cnode_radix; // guard size in bits, guard value 0
     SlotRef::new(parent.cnode, guarded)
         .mint_from(SlotRef::new(parent.cnode, cnode), rights::ALL, guard)
         .expect("loader: guarded CNode");
-    tcb::configure(thread, guarded, space, Some((buffer, IPC_BUFFER))).expect("loader: configure");
+    tcb::configure(thread, guarded, space, Some((buffer, ipc_buffer))).expect("loader: configure");
     tcb::set_priority(thread, parent.authority, launch.priority).expect("loader: priority");
+    tcb::set_mc_priority(thread, parent.authority, launch.max_priority).expect("loader: maximum priority");
     let mut regs = [0; reg::COUNT];
     regs[reg::PC] = LOAD_BASE + elf.ehdr.e_entry as usize;
     regs[reg::SP] = STACK_TOP;
-    regs[reg::TP] = IPC_BUFFER;
-    regs[reg::A0] = STARTUP;
+    regs[reg::TP] = ipc_buffer;
+    regs[reg::A0] = startup_page;
     tcb::write_registers(thread, false, &regs).expect("loader: registers");
 
-    let process = Process { tcb: thread, cnode, vspace: space };
+    let process = Process { tcb: thread, cnode, cnode_radix: launch.cnode_radix, vspace: space };
     process.give(parent, process_slot::TCB, thread, rights::ALL);
     process.give(parent, process_slot::CNODE, guarded, rights::ALL);
     process.give(parent, process_slot::VSPACE, space, rights::ALL);
+    process.give_away(parent, process_slot::IPC_BUFFER, buffer);
     if let Some(bits) = launch.budget_bits {
         let budget = retype(parent, slots, object::UNTYPED, bits);
-        let dest = SlotRef { root: cnode, index: process_slot::UNTYPED, depth: CNODE_RADIX };
-        dest.move_from(SlotRef::new(parent.cnode, budget)).expect("loader: give the budget");
+        process.give_away(parent, process_slot::UNTYPED, budget);
     }
-    for (i, &(cap, rights)) in launch.imports.iter().enumerate() {
-        process.give(parent, process_slot::FIRST_IMPORT + i, cap, rights);
+    if let Some(launcher) = launch.launcher {
+        process.give(parent, process_slot::LAUNCHER, launcher, rights::ALL);
+    }
+    for (i, &(cap, give)) in launch.imports.iter().enumerate() {
+        match give {
+            Give::Copy(rights) => process.give(parent, process_slot::FIRST_IMPORT + i, cap, rights),
+            Give::Move => process.give_away(parent, process_slot::FIRST_IMPORT + i, cap),
+        }
     }
     process
 }
