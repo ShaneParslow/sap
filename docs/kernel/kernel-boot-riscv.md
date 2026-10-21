@@ -3,7 +3,7 @@ status: implemented
 summary: How the kernel boots on QEMU virt riscv64 today - OpenSBI enters _start in S-mode, the entry code turns on a boot page table and jumps to the kernel's upper-half address, riscv_start turns the device tree into architecture-neutral boot information and sets up traps, paging and the timer, and kmain runs boot checks and starts the root task. Also the console, log and shutdown.
 updated: 2026-10-19
 code: [rust-toolchain.toml, Cargo.toml, .cargo/config.toml, kernel/Cargo.toml, kernel/build.rs, kernel/arch/riscv/linker.ld, kernel/arch/riscv/entry.rs, kernel/arch/riscv/mod.rs, kernel/arch/riscv/sbi.rs, kernel/arch/riscv/test_device.rs, kernel/arch/mod.rs, kernel/boot.rs, kernel/devicetree.rs, kernel/console.rs, kernel/log.rs, kernel/main.rs]
-verified: 810d575
+verified: 852c5a9
 sources: ["[[2026-10-08-22c3947b-wiki-setup]]"]
 ---
 

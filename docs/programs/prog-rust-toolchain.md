@@ -3,8 +3,8 @@ status: implemented
 summary: How sap's Rust code is built - one pinned nightly for everything, the kernel on the built-in bare-metal target, and user programs on sap's own target (static position-independent executables, core, alloc and compiler_builtins built from source) so no read-only page carries a relocation; why the precompiled core forced text relocations before.
 updated: 2026-10-19
 sources: ["[[2026-10-08-22c3947b#m30|§m30]]", "[[2026-10-16-2c1ac53c#m4|§m4]]"]
-code: [rust-toolchain.toml, Cargo.toml, .cargo/config.toml, user/.cargo/config.toml, user/riscv64gc-unknown-sap.json, user/build_program.rs, kernel/build.rs, user/init/build.rs]
-verified: 2b98cbc
+code: [rust-toolchain.toml, Cargo.toml, .cargo/config.toml, user/.cargo/config.toml, user/riscv64gc-unknown-sap.json, user/build_program.rs, kernel/build.rs, user/init/build.rs, user/check/build.rs]
+verified: 852c5a9
 ---
 
 # Rust toolchain
@@ -38,7 +38,7 @@ Until 2026-10-19 the workaround was `-z notext`, which allowed them. Built from 
 
 ## Building a program from a build script
 
-The kernel embeds the root task, and the root task embeds the programs it loads, each with `include_bytes!`. Both build scripts call one helper, `build_user_program` (`user/build_program.rs:15`), shared through `include!` because a build-dependency crate inside the workspace would also be checked for the bare-metal target. It runs Cargo in release mode from the program's directory, so `user/.cargo/config.toml` applies; drops the outer build's flags and target, which would override that config; gives the program a target directory of its own inside the caller's build output, since sharing the caller's would deadlock on its lock; and makes the caller's build script rerun whenever anything under `user/`, `abi/` or `interfaces/` changes.
+The kernel embeds the root task, and a program embeds the programs it loads (`init` its boot pack, `check` the peer), each with `include_bytes!`. Both build scripts call one helper, `build_user_program` (`user/build_program.rs:15`), shared through `include!` because a build-dependency crate inside the workspace would also be checked for the bare-metal target. It runs Cargo in release mode from the program's directory, so `user/.cargo/config.toml` applies; drops the outer build's flags and target, which would override that config; gives the program a target directory of its own inside the caller's build output, since sharing the caller's would deadlock on its lock; and makes the caller's build script rerun whenever anything under `user/`, `abi/` or `interfaces/` changes.
 
 Building a user crate any other way, such as rust-analyzer's `cargo check --workspace` from the top, uses the kernel's target. That is fine for checking: the two targets differ only in relocation model and linking.
 
