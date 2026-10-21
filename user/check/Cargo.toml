@@ -1,0 +1,17 @@
+[package]
+name = "check"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "check"
+path = "main.rs"
+test = false
+bench = false
+
+[dependencies]
+capnp = { version = "0.27.2", default-features = false }
+sap-interfaces = { path = "../interfaces" }
+sap-rt = { path = "../rt" }
+sap-loader = { path = "../loader" }
+sap-ring = { path = "../ring" }

@@ -1,8 +1,8 @@
 ---
 status: proposed
 summary: How code becomes a running process - a userspace process manager (decided) reads a code object by hash and builds the process from kernel objects; native code is static ELF, other formats are handled by loader components; a small per-architecture process ABI; components that don't assume they own an address space, so per-process versus shared address spaces is a deployment choice; and a boot image that breaks the loader/store circularity.
-updated: 2026-10-11
-sources: ["[[2026-10-08-22c3947b#m18|§m18]]", "[[2026-10-08-22c3947b#m20|§m20]]"]
+updated: 2026-10-20
+sources: ["[[2026-10-20-685b0203#m12|§m12]]", "[[2026-10-08-22c3947b#m18|§m18]]", "[[2026-10-08-22c3947b#m20|§m20]]"]
 ---
 
 # Program loading
@@ -15,7 +15,7 @@ The **process manager**, a userspace component, as in seL4, where the kernel kno
 
 **Decided (2026-10-11):** the *process factory* is an RPC interface hosted by the process manager, not a kernel object. The kernel only needs threads, address spaces and capability tables, as seL4 shows. The human's reason: it makes multiple executable formats and interpreters easy, since each is just another loader behind the same interface ([[2026-10-08-22c3947b#m20|§m20]]).
 
-The kernel itself loads exactly one program, the root task, as seL4 does; it is built today as a static position-independent ELF embedded in the kernel ([[kernel-root-task]]). The process manager will be that root task. The first piece of its loader exists in `sap-rt`, and the root task already uses it to start a second program in its own process ([[prog-runtime#The loader]]).
+The kernel itself loads exactly one program, the root task, as seL4 does; it is built today as a static position-independent ELF embedded in the kernel ([[kernel-root-task]]). The process manager is that root task: `init` becomes it, and the boot checks it runs today move into a program it spawns, the factory's first client (decided 2026-10-20, [[2026-10-20-685b0203#m12|§m12]]). The first piece of its loader exists in `sap-rt`, and the root task already uses it to start a second program in its own process ([[prog-runtime#The loader]]).
 
 ## Code objects and formats
 
@@ -33,11 +33,11 @@ struct Code {
 
 The process manager loads one format itself, and every other format is a **loader component**, so the human's "driver per executable format" is right, with the trusted path kept to one format:
 
-- **Native: static ELF, position-independent.** The process manager reads the `PT_LOAD` segments and maps them; no dynamic linker, no `PT_INTERP`. A language that wants dynamic linking ships its own loader inside the program ([[iface-bindings-and-languages]]). The ELF parser is small and its input is untrusted, so it must be bounds-checked like any message.
+- **Native: static ELF, position-independent.** The process manager reads the `PT_LOAD` segments and maps them; no dynamic linker, no `PT_INTERP`. A language that wants dynamic linking ships its own loader inside the program ([[iface-bindings-and-languages]]). The ELF parser is small and its input is untrusted, so it must be bounds-checked like any message; `sap-loader` checks segments and relocations against the image and returns errors instead of panicking ([[prog-runtime#The loader]]).
 - **Wasm:** a Wasm runtime is an ordinary native program whose world includes the module to run. Loading a Wasm component means spawning the runtime with the module as an import ([[prog-representation]]).
 - **Linux binaries:** handled by the compatibility layer, a POSIX personality component or a Linux VM ([[system-legacy-compat]]).
 
-Because code is immutable and identified by hash, read-only segments (text, read-only data) can be mapped straight from the store's frames into every process running that code, deduplicated by hash. Writable segments are copied. The `exports` list lets the activator start a program when its interface is first needed ([[kernel-process-model#Starting on demand]]) and lets a registry index implementations by interface ([[system-package-registry]]).
+Code is named by the BLAKE3 hash of its image (decided 2026-10-20, [[2026-10-20-685b0203#m12|§m12]]). Because code is immutable and identified by hash, read-only segments (text, read-only data) can be mapped straight from the store's frames into every process running that code, deduplicated by hash. Writable segments are copied. The `exports` list lets the activator start a program when its interface is first needed ([[kernel-process-model#Starting on demand]]) and lets a registry index implementations by interface ([[system-package-registry]]).
 
 **All code is position-independent**, kernel-loaded or not (decided 2026-10-11, [[2026-10-08-22c3947b#m22|§m22]]). Mappings are never both writable and executable.
 
@@ -48,6 +48,8 @@ This is the only part of loading that is per-architecture, and it is small: a sh
 - stack alignment and initial stack contents (none beyond alignment: no argv, no environment);
 - the thread-pointer register for thread-local storage (`tp` on RISC-V, `fs` on x86-64) and who sets it up (the runtime, from `PT_TLS`);
 - the syscall instruction and register convention, shared with the kernel ([[kernel-objects-and-syscalls]]).
+
+The startup record, the fixed slots and the bootstrap message are built ([[prog-runtime#The process ABI]]); thread-local storage is not.
 
 Rust programs start on the bare `riscv64gc-unknown-none-elf` target with a `sap-rt` runtime crate. A proper target triple and a port of Rust's standard library come later.
 
@@ -70,7 +72,7 @@ Rust programs start on the bare `riscv64gc-unknown-none-elf` target with a `sap-
 
 ## Boot: before the store exists
 
-Code is loaded by hash from the store, but the store is itself a process loaded from code. The circle is broken by a **boot image**: the kernel, the process manager, and a pack of content-addressed code objects (store, device manager, first drivers, shell) in the same format the store uses on disk ([[store-on-disk-format]]). The process manager starts from the boot image, starts the store, which imports the pack, and from then on loads everything from the store. This plays the role of seL4's root task image and Linux's initramfs.
+Code is loaded by hash from the store, but the store is itself a process loaded from code. The circle is broken by a **boot image**: the kernel, the process manager, and a pack of content-addressed code objects (store, device manager, first drivers, shell) in the same format the store uses on disk ([[store-on-disk-format]]). The process manager starts from the boot image, starts the store, which imports the pack, and from then on loads everything from the store. This plays the role of seL4's root task image and Linux's initramfs. Today the pack is a table built into the process manager, `init`, named by BLAKE3 hash, with no store behind it ([[prog-runtime#The second program]]).
 
 > [!question] Open
 > Where the process manager draws address-space boundaries on CHERI hardware, and whether the kernel needs to know about compartments within an address space. Also: whether code objects carry a signature or only a hash (who vouches for a hash: [[vision-attestation-and-verification]]); how the process manager learns that a child exited or faulted ([[kernel-process-model]]); and when to attempt a Rust standard-library port.

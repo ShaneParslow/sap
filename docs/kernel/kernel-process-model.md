@@ -1,8 +1,8 @@
 ---
 status: proposed
 summary: A process starts with an initial capability table and one typed bootstrap capability matching its declared imports; arguments are typed values and configuration lives in the object store. No environment, argv strings, ambient user id, fork or exec - a launcher calls spawn on a process factory with code identified by hash.
-updated: 2026-10-11
-sources: ["[[2026-09-27-future-of-computing#m21|§m21]]", "[[2026-09-27-future-of-computing#m24|§m24]]", "[[2026-09-27-future-of-computing#m25|§m25]]", "[[2026-09-27-future-of-computing#m28|§m28]]", "[[2026-09-27-future-of-computing#m29|§m29]]"]
+updated: 2026-10-20
+sources: ["[[2026-10-20-685b0203#m12|§m12]]", "[[2026-09-27-future-of-computing#m21|§m21]]", "[[2026-09-27-future-of-computing#m24|§m24]]", "[[2026-09-27-future-of-computing#m25|§m25]]", "[[2026-09-27-future-of-computing#m28|§m28]]", "[[2026-09-27-future-of-computing#m29|§m29]]"]
 ---
 
 # Process model
@@ -17,9 +17,12 @@ The human's starting point: a process may not need an environment or arguments a
 
 The **bootstrap capability** is a typed interface matching the program's declared imports. This is the WebAssembly component model's "world" idea, the one part of WIT the design keeps ([[iface-capnp]]). Arguments arrive as a typed value in the bootstrap message, not as strings. Configuration and data are object-store references.
 
+> [!todo] Not built
+> Until Cap'n Proto RPC brings capability tables (M6), a capability in the bootstrap message is the index of a transferred capability, in an integer field (decided 2026-10-20, [[2026-10-20-685b0203#m12|§m12]]).
+
 ## Spawning
 
-No fork, no exec. A launcher holding a **process-factory** capability calls `spawn(code, initial_caps)`. The code is identified by its content hash in the store, so what runs can be verified ([[2026-09-27-future-of-computing#m25|§m25]]).
+No fork, no exec. A launcher holding a **process-factory** capability calls `spawn(code, initial_caps)`. The code is identified by its content hash in the store, so what runs can be verified ([[2026-09-27-future-of-computing#m25|§m25]]). A first version is built: `init` serves `SPAWN`, `WAIT` and `KILL` for programs in its boot pack, with memory the client provides ([[prog-process-factory]]).
 
 Example: a `resize` program declares its imports ([[2026-09-27-future-of-computing#m29|§m29]]):
 

@@ -395,3 +395,118 @@ pub struct BootInfo {
 }
 
 const _: () = assert!(core::mem::size_of::<BootInfo>() <= 4096);
+
+/// Slots of every process's CNode that its launcher fills, other than the
+/// root task's (`init_slot`). The process's imports follow, in
+/// `Startup::imports`.
+pub mod process_slot {
+    pub const NULL: usize = 0;
+    /// The process's main thread.
+    pub const TCB: usize = 1;
+    /// The process's CNode, guarded so that slot numbers are capability
+    /// addresses.
+    pub const CNODE: usize = 2;
+    pub const VSPACE: usize = 3;
+    /// Untyped memory: the process's memory budget. Empty if it has none.
+    pub const UNTYPED: usize = 4;
+    /// An endpoint to whoever launched the process, which it calls to
+    /// report its exit (`launcher`). Empty if nobody listens.
+    pub const LAUNCHER: usize = 5;
+    /// The frame of the main thread's IPC buffer, as the root task has it.
+    pub const IPC_BUFFER: usize = 6;
+    /// The first slot of the process's imports.
+    pub const FIRST_IMPORT: usize = 8;
+}
+
+/// Labels of the calls a process makes on its `process_slot::LAUNCHER`
+/// endpoint. A launcher is normally also the process's fault handler, on
+/// the same endpoint, so fault labels (`fault`) arrive there too; these
+/// don't collide with them.
+pub mod launcher {
+    /// The process is done: word 0 is its exit code, 0 for success. No
+    /// reply comes.
+    pub const EXIT: usize = 0x100;
+}
+
+/// The process factory: the calls a process manager answers on its
+/// factory and process-handle capabilities. Plain words for now.
+// TODO: a Cap'n Proto interface once RPC exists (M6).
+pub mod factory {
+    /// On the factory: start a program. Words: the BLAKE3 hash of its image
+    /// (`HASH_WORDS` words, little-endian), the bootstrap message's length
+    /// in bytes, then the message packed into words, little-endian.
+    /// Capabilities: the untyped memory to build the process from, moved,
+    /// then the process's imports in order. The reply's label is `OK` or an
+    /// error below; on `OK` it carries the process handle, and on an error
+    /// the untyped memory comes back. Imports are dropped on an error.
+    pub const SPAWN: usize = 1;
+    /// On a process handle: wait for the process to end. The reply's words
+    /// are how it ended (`EXITED`, `FAULTED`, `KILLED`) and its code (the
+    /// exit code, or the fault label); it carries the untyped memory the
+    /// process was built from, and the handle stops working.
+    pub const WAIT: usize = 2;
+    /// On a process handle: destroy the process. Reply `OK`; whoever waits
+    /// hears `KILLED`.
+    pub const KILL: usize = 3;
+
+    pub const HASH_WORDS: usize = 4;
+    /// The longest bootstrap message a `SPAWN` carries, in bytes.
+    pub const MAX_BOOTSTRAP: usize = (super::MAX_MESSAGE_LENGTH - HASH_WORDS - 1) * 8;
+
+    /// Reply labels.
+    pub const OK: usize = 0;
+    /// No program with that hash.
+    pub const NO_SUCH_PROGRAM: usize = 1;
+    /// A malformed request, a capability of the wrong type, or a call on a
+    /// handle that doesn't allow it (a second `WAIT`).
+    pub const BAD_REQUEST: usize = 2;
+    /// Loading failed, usually for lack of untyped memory.
+    pub const LOAD_FAILED: usize = 3;
+    /// The process manager has no room for another process.
+    pub const FULL: usize = 4;
+
+    /// How a process ended, in a `WAIT` reply.
+    pub const EXITED: usize = 0;
+    pub const FAULTED: usize = 1;
+    pub const KILLED: usize = 2;
+}
+
+/// A range of virtual addresses, `start..end`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct AddressRange {
+    pub start: usize,
+    pub end: usize,
+}
+
+/// What a process's launcher tells it at startup, in a read-only page whose
+/// address arrives in its first argument register. The bootstrap message
+/// follows the record in the same page.
+#[repr(C)]
+pub struct Startup {
+    /// Ticks per second of the time counter.
+    pub timer_hz: u64,
+    pub ipc_buffer: usize,
+    pub stack: AddressRange,
+    /// Addresses nothing is mapped at, for the runtime's heap.
+    pub heap: AddressRange,
+    /// log2 of the number of slots in the process's CNode.
+    pub cnode_radix: usize,
+    /// The capabilities the bootstrap message refers to, in order.
+    pub imports: SlotRange,
+    /// Empty slots the process may use.
+    pub free: SlotRange,
+    /// Length in bytes of the bootstrap message: a Cap'n Proto message in
+    /// the flat (single-segment) encoding, starting at `BOOTSTRAP_OFFSET`.
+    /// Its root struct is the program's imports.
+    pub bootstrap_len: usize,
+}
+
+/// Where the bootstrap message starts in the startup page.
+pub const BOOTSTRAP_OFFSET: usize = 128;
+/// The longest bootstrap message.
+// TODO: larger bootstraps, in frames of their own (M7, if a program needs
+// more than a page).
+pub const MAX_BOOTSTRAP: usize = 4096 - BOOTSTRAP_OFFSET;
+
+const _: () = assert!(core::mem::size_of::<Startup>() <= BOOTSTRAP_OFFSET);

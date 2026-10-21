@@ -25,8 +25,9 @@ fn build_user_program(user: &std::path::Path, name: &str) -> std::path::PathBuf 
         .unwrap_or_else(|e| panic!("failed to run cargo for {name}: {e}"));
     assert!(status.success(), "building {name} failed");
     // Everything under user/ (the program, its libraries, the target and
-    // its config) and the shared ABI.
+    // its config), the shared ABI and the interface schemas.
     println!("cargo:rerun-if-changed={}", user.display());
     println!("cargo:rerun-if-changed={}", user.join("../abi").display());
+    println!("cargo:rerun-if-changed={}", user.join("../interfaces").display());
     target_dir.join("riscv64gc-unknown-sap/release").join(name)
 }

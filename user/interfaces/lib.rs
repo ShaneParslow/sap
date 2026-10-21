@@ -30,6 +30,16 @@ pub mod echo {
 }
 
 #[allow(clippy::all)]
+pub mod check_capnp {
+    include!(concat!(env!("OUT_DIR"), "/check_capnp.rs"));
+}
+
+#[allow(clippy::all)]
 pub mod echo_capnp {
     include!(concat!(env!("OUT_DIR"), "/echo_capnp.rs"));
+}
+
+#[allow(clippy::all)]
+pub mod peer_capnp {
+    include!(concat!(env!("OUT_DIR"), "/peer_capnp.rs"));
 }
