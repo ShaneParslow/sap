@@ -1,6 +1,6 @@
 //! The kernel's debug console and halt call.
 //!
-//! TODO: these use debug syscalls; replace with a log service (M7).
+//! TODO: these use debug syscalls; replace with a log service (I6).
 
 use core::fmt::{self, Write};
 

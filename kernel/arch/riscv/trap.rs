@@ -310,8 +310,9 @@ return_to_user:
     # In capability mode, with a capability to the context made from DDC
     # (the kernel's is the root): from now until the next trap, a trap
     # comes from this thread.
-    # TODO: bounded capabilities for the context and for user code and data,
-    # rather than the root (needed once processes are compartments).
+    # TODO: a context capability bounded to the context rather than made
+    # from the kernel's root, and a user root per compartment rather than
+    # one `USER_ROOT` for every thread (M10, once processes are compartments).
     lla     t3, USER_ROOT
     YMODESWY
     csrr    t1, CSR_DDC

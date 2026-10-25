@@ -65,6 +65,7 @@ These can happen at any time and feed the milestones above.
 
 - **I2. A `std` platform layer** for sap: thread-local storage, then `std` once a log service exists ([[prog-rust-std]]). The heap, slot allocator and mutexes it builds on exist ([[prog-runtime#Slots, locks and the heap]]).
 - **I3. seL4-style zombie capabilities:** iterative, preemptible deletion, before untrusted programs run ([[kernel-capabilities#Delete, finalise, revoke]]).
+- **I6. A userspace log service:** programs log through it instead of the kernel's debug calls, the kernel's own printing becomes debug-build only as in seL4, and release kernels send their messages to it ([[kernel-root-task]]). A prerequisite of I2. No design yet; four `TODO`s in the kernel and `sap-rt` wait on it.
 
 ## Done
 

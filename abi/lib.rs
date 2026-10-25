@@ -62,7 +62,7 @@ pub mod syscall {
     pub const POLL: usize = 10;
 
     /// TODO: debug-only calls, like seL4's; compile them out of release
-    /// kernels once a userspace log service exists (M7).
+    /// kernels once a userspace log service exists (I6).
     /// Print one byte on the kernel console.
     pub const DEBUG_PUTCHAR: usize = 0x100;
     /// Stop the machine; a nonzero argument reports failure.

@@ -31,9 +31,9 @@ pub struct Resources {
 /// Start the slot allocator and, with the `heap` feature, the heap. Call
 /// once, before using either.
 ///
-/// TODO: a program started by another receives its resources in a typed
-/// bootstrap message, and the entry code starts the runtime before
-/// `sap_main` (M7); today only the root task calls this.
+/// TODO: start the runtime in the entry code, from the startup record,
+/// before `sap_main` (M7). Today each program calls this itself: the root
+/// task from its boot information, `check` from its startup record.
 pub fn start(resources: Resources) {
     let (cnode, free, untyped) = (resources.cnode, resources.slots, resources.untyped);
     // A notification for each lock, from the first two free slots.

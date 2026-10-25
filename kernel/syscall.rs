@@ -7,7 +7,7 @@
 //! WAIT and POLL act on notifications (`notification.rs`).
 //!
 //! TODO: make the debug calls debug-build only once a userspace log service
-//! exists (M7).
+//! exists (I6).
 
 use sap_abi::syscall::{CALL, DEBUG_HALT, DEBUG_PUTCHAR, NB_RECV, NB_SEND, POLL, RECV, REPLY, REPLY_RECV, SEND, SIGNAL, WAIT, YIELD};
 use sap_abi::{error, rights};

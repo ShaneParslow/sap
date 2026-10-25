@@ -1,7 +1,7 @@
 ---
 status: proposed
 summary: A process starts with an initial capability table and one typed bootstrap capability matching its declared imports; arguments are typed values and configuration lives in the object store. No environment, argv strings, ambient user id, fork or exec - a launcher calls spawn on a process factory with code identified by hash.
-updated: 2026-10-20
+updated: 2026-10-24
 sources: ["[[2026-10-20-685b0203#m12|§m12]]", "[[2026-09-27-future-of-computing#m21|§m21]]", "[[2026-09-27-future-of-computing#m24|§m24]]", "[[2026-09-27-future-of-computing#m25|§m25]]", "[[2026-09-27-future-of-computing#m28|§m28]]", "[[2026-09-27-future-of-computing#m29|§m29]]"]
 ---
 
@@ -58,6 +58,13 @@ Two cases, proposed:
 
 The reverse also follows: a server idle for long enough can exit. Its endpoint stays with the activator, so clients' capabilities stay valid and the next call starts it again. That is transparent for stateless servers; stateful ones keep their state in the store and come back through sturdy refs. To know which code serves an interface, the activator reads the code object's declared exports ([[prog-loading#Code objects and formats]]). This section is the mechanism. When to start, which instance to bind, and what to do with failed or hung servers is policy, covered in [[prog-composition]].
 
+## Ending
+
+A process ends by calling its launcher with an exit code, by faulting, since its launcher is also its fault handler, or by being killed through its handle. The process manager destroys it by revoking the memory it was built from, and a client learns how it ended by calling `WAIT` on the handle. This is built ([[prog-process-factory#How it works]]).
+
+> [!question] Open
+> How a crashed component is restarted: likely through the on-demand path above, since the endpoint survives the crash. Whether the kernel adds the waiting-sender notification.
+
 ## Root authority
 
 At login, the user's shell receives a capability to the user's root ref in the object store. Every other capability the user's programs hold derives from that root or is granted through the powerbox ([[2026-09-27-future-of-computing#m21|§m21]]; [[store-granting-access]]).
@@ -69,6 +76,3 @@ How a language links its own libraries (statically, or at load time by its loade
 ## Prior art
 
 CloudABI (the capability-based POSIX subset WASI grew from): programs started with only the descriptors they were given, and arguments came as a typed tree ("argdata"). Fuchsia's process arguments plus component namespaces are the production version ([[2026-09-27-future-of-computing#m25|§m25]]). See [[cloudabi]], [[fuchsia]].
-
-> [!question] Open
-> Process exit and teardown, how a parent learns a child died (a notification on the factory?), and how a crashed component is restarted; restart likely reuses the on-demand path above, since the endpoint survives the crash. Whether the kernel adds the waiting-sender notification.

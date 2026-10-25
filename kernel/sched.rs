@@ -153,8 +153,10 @@ pub fn run() -> ! {
             if crate::arch::activate_vspace(tcb.slots[VSPACE_SLOT].cap) {
                 crate::arch::return_to_user(&mut tcb.context);
             }
-            // TODO: a thread without a valid address space should fault to
-            // its handler (M4); until then it is suspended.
+            // TODO: deliver a fault to the thread's handler instead, as
+            // `fault.rs` does for exceptions (needs a fault kind for it),
+            // before untrusted programs run: a silent suspension hides a
+            // launcher's mistake.
             crate::warn!("sched: thread {next:p} has no valid address space; suspending it");
             // SAFETY: next is live.
             unsafe { make_inactive(next) };

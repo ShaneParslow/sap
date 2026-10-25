@@ -1,7 +1,7 @@
 ---
 status: proposed
 summary: What authority a process holds and how it gets more - kernel capabilities, RPC capabilities and stored capabilities seen from inside one process; the runtime's implicit capabilities versus the program's declared imports; and the single rule that every object arrives in a message, starting with the bootstrap.
-updated: 2026-10-11
+updated: 2026-10-24
 sources: ["[[2026-10-08-22c3947b#m18|§m18]]"]
 ---
 
@@ -58,7 +58,10 @@ So yes: the bootstrap is the root of everything the process can reach, and the p
 
 ## Lifetime
 
-When a process exits or dies, the kernel deletes its capability table, which drops every kernel capability and therefore every connection; hosts of RPC objects see the connection break and drop that client's imports ([[cap-revocation]]). Stored capabilities survive because they belong to the store, not to the process. That is the reason to keep anything meant to outlive a run (open documents, preferences) as a stored capability in the program's state ref.
+When a process exits or dies, its process manager revokes the memory the process was built from, which deletes its capability table ([[prog-process-factory#Who pays]]). That drops every kernel capability and therefore every connection; hosts of RPC objects see the connection break and drop that client's imports ([[cap-revocation]]). Stored capabilities survive because they belong to the store, not to the process. That is the reason to keep anything meant to outlive a run (open documents, preferences) as a stored capability in the program's state ref.
+
+> [!note] Built
+> The runtime slot layout above exists: every process gets its thread, CNode, address space, untyped budget, launcher endpoint and IPC buffer frame in fixed slots, then its imports ([[prog-runtime#The process ABI]]). Capabilities in the bootstrap message are still slot indices in integer fields, not typed capability fields, until M6.
 
 > [!question] Open
-> The exact runtime slot layout; whether a process holds its own thread and address space capabilities by default (convenient for runtimes that create threads, but more authority than a simple program needs); and how a launcher shows a program's requested authority to the user.
+> Whether every process should hold its own thread and address space capabilities, as it does now (convenient for runtimes that create threads, but more authority than a simple program needs); and how a launcher shows a program's requested authority to the user.

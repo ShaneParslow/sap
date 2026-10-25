@@ -1,13 +1,13 @@
 ---
 status: proposed
 summary: How code becomes a running process - a userspace process manager (decided) reads a code object by hash and builds the process from kernel objects; native code is static ELF, other formats are handled by loader components; a small per-architecture process ABI; components that don't assume they own an address space, so per-process versus shared address spaces is a deployment choice; and a boot image that breaks the loader/store circularity.
-updated: 2026-10-20
+updated: 2026-10-24
 sources: ["[[2026-10-20-685b0203#m12|§m12]]", "[[2026-10-08-22c3947b#m18|§m18]]", "[[2026-10-08-22c3947b#m20|§m20]]"]
 ---
 
 # Program loading
 
-Loading turns a code object in the store into a running process: an address space with the program's segments mapped, a stack, an IPC buffer, initial registers, an initial capability table, and the bootstrap message ([[kernel-process-model]], [[cap-process-authority]]). The human expected this to be where sap has to touch architecture and binary formats again, and asked whether to have a driver per executable format and whether a flat address space is the way to go ([[2026-10-08-22c3947b#m18|§m18]]). Proposed; nothing is built.
+Loading turns a code object in the store into a running process: an address space with the program's segments mapped, a stack, an IPC buffer, initial registers, an initial capability table, and the bootstrap message ([[kernel-process-model]], [[cap-process-authority]]). The human expected this to be where sap has to touch architecture and binary formats again, and asked whether to have a driver per executable format and whether a flat address space is the way to go ([[2026-10-08-22c3947b#m18|§m18]]). The page is the design, mostly proposed. What is built of it is described where the code is: the ELF loader and the process ABI in [[prog-runtime]], and the process manager's interface in [[prog-process-factory]].
 
 ## Who loads
 
@@ -75,4 +75,4 @@ Rust programs start on the bare `riscv64gc-unknown-none-elf` target with a `sap-
 Code is loaded by hash from the store, but the store is itself a process loaded from code. The circle is broken by a **boot image**: the kernel, the process manager, and a pack of content-addressed code objects (store, device manager, first drivers, shell) in the same format the store uses on disk ([[store-on-disk-format]]). The process manager starts from the boot image, starts the store, which imports the pack, and from then on loads everything from the store. This plays the role of seL4's root task image and Linux's initramfs. Today the pack is a table built into the process manager, `init`, named by BLAKE3 hash, with no store behind it ([[prog-runtime#The second program]]).
 
 > [!question] Open
-> Where the process manager draws address-space boundaries on CHERI hardware, and whether the kernel needs to know about compartments within an address space. Also: whether code objects carry a signature or only a hash (who vouches for a hash: [[vision-attestation-and-verification]]); how the process manager learns that a child exited or faulted ([[kernel-process-model]]); and when to attempt a Rust standard-library port.
+> Where the process manager draws address-space boundaries on CHERI hardware, and whether the kernel needs to know about compartments within an address space. Also: whether code objects carry a signature or only a hash (who vouches for a hash: [[vision-attestation-and-verification]]); and when to attempt a Rust standard-library port.

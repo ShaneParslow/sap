@@ -4,7 +4,7 @@
 //! and input are userspace components (see the open question on the user
 //! interface stack in the wiki).
 //!
-//! TODO: once a userspace log service exists (M7), make kernel printing
+//! TODO: once a userspace log service exists (I6), make kernel printing
 //! debug-build only, as seL4 does, and send release-build kernel messages
 //! to that service.
 

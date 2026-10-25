@@ -43,7 +43,7 @@ Reading and writing registers is refused on the calling thread itself (`ILLEGAL_
 
 ## Scheduler
 
-`kernel/sched.rs` keeps 256 ready queues, one per priority, and a bitmap of the non-empty ones (lines 13–32). **Every runnable thread is in its queue, including the running one.** The thread that runs is the head of the highest non-empty queue (`highest`, line 168). That keeps the rules short:
+`kernel/sched.rs` keeps 256 ready queues, one per priority, and a bitmap of the non-empty ones (lines 13–32). **Every runnable thread is in its queue, including the running one.** The thread that runs is the head of the highest non-empty queue (`highest`, line 170). That keeps the rules short:
 - `make_runnable` (line 49) marks a thread `Running` and appends it to its queue; `make_inactive` (line 77) removes it; `set_priority` (line 95) moves a runnable thread to its new priority's queue;
 - `tick` (line 114), on every timer interrupt, counts down the current thread's time slice, five ticks or 50 ms (line 15), and when it runs out moves the thread to the tail of its queue;
 - `yield_current` (line 126), the `YIELD` syscall, moves it to the tail at once.

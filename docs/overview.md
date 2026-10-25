@@ -1,14 +1,14 @@
 ---
 status: hub
 summary: What sap is, how its layers fit together, what is decided versus open, and where to start reading.
-updated: 2026-10-08
+updated: 2026-10-24
 ---
 
 # sap
 
-**sap is for sapabilities.** It is a capability-based operating system in which every piece of authority is an unforgeable reference, components talk through formally specified Cap'n Proto interfaces carried over shared-memory rings, and a content-addressed object store replaces the file system. The first target is 64-bit RISC-V on QEMU, with CHERI support planned through CHERI-QEMU.
+**sap is for sapabilities.** It is a capability-based operating system in which every piece of authority is an unforgeable reference, components talk through formally specified Cap'n Proto interfaces carried over shared-memory rings, and a content-addressed object store replaces the file system. It runs on 64-bit RISC-V, on QEMU and on one real board, and on CHERI-RISC-V under emulation.
 
-Nothing is implemented yet. The design comes from one long chat ([[2026-09-27-future-of-computing]], summarized in [[2026-09-27-0ce860ab-future-of-computing]]); its status is tracked page by page.
+The design began in one long chat ([[2026-09-27-future-of-computing]], summarized in [[2026-09-27-0ce860ab-future-of-computing]]) and is refined as it is built; its status is tracked page by page.
 
 ## Why
 
@@ -47,13 +47,19 @@ If AI makes software nearly free, control of computing moves to whoever holds ke
 
 **Hardware** ([[hardware]]) is deliberately boring: a plain RISC core. CHERI makes the same design faster (byte-granular sharing, call-cost compartment switches, sealed handles) but is never required for correctness.
 
+## What is built
+
+The kernel and the first userspace, as of October 2026 ([[roadmap#Done]]). The kernel boots on QEMU's `virt` machine and, unchanged, on an Allwinner D1 board ([[hw-d1-board]]). It has capability tables, untyped memory, address spaces, threads, notifications, and endpoints with capability transfer and fault delivery ([[kernel]]). `init`, the root task, is the process manager: it serves a process factory that starts programs from a boot pack by hash, built from memory the client provides ([[prog-process-factory]]). Processes exchange Cap'n Proto messages over shared-memory rings, with page transfer for large ones ([[ipc-rings]], [[ipc-page-transfer]]). Built with its `cheri` feature, the kernel runs on emulated CHERI-RISC-V and keeps user capabilities whole ([[hw-cheri]]).
+
+Still design: capabilities inside Cap'n Proto messages and their ownership, interface specs beyond schemas, the object store, and everything above them.
+
 ## What is decided
 
-Capabilities everywhere; Cap'n Proto as schema, wire format and RPC (WIT dropped); shared-memory IPC with transport-agnostic bindings; an object store instead of a file system; interface specs universal, behavior specs on the language side; linking and calling conventions left to languages; RISC-V first with CHERI support; bare metal rather than a Linux prototype; sap's own kernel rather than seL4. Dates and reasons are in [[decisions]].
+Capabilities everywhere; Cap'n Proto as schema, wire format and RPC (WIT dropped); shared-memory IPC with transport-agnostic bindings; an object store instead of a file system; interface specs universal, behavior specs on the language side; linking and calling conventions left to languages; RISC-V first with CHERI support; bare metal rather than a Linux prototype; sap's own kernel rather than seL4; a userspace process manager whose process factory is its interface, with code named by its BLAKE3 hash; CHERI on the RVY draft of the RISC-V standard. Dates and reasons are in [[decisions]].
 
 ## What is open
 
-The nearest are how capabilities move in messages (`$own`/`$borrow`) and the ring details, both settled by building M4–M6. Everything unresolved is in [[open-questions]]; the planned work, in order, is in [[roadmap]].
+The nearest are capabilities inside Cap'n Proto messages, with `$own`/`$borrow` (M6), and how to move large messages cheaply, since page transfer as built loses to copying at every size ([[ipc-page-transfer]]). Everything unresolved is in [[open-questions]]; the planned work, in order, is in [[roadmap]].
 
 ## Reading order
 
