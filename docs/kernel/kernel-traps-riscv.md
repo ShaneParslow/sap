@@ -1,6 +1,6 @@
 ---
 status: implemented
-summary: How the kernel takes traps on RISC-V today - one direct-mode vector that saves user registers straight into the current thread's TCB (found through sscratch) and kernel-mode traps on the stack, separate Rust handlers for each, a return path that resumes any thread, and periodic timer interrupts through the SBI TIME extension; on the cheri branch, user registers saved as whole CHERI capabilities, with per-thread DDC and user capabilities bounded to user addresses.
+summary: How the kernel takes traps on RISC-V today - one direct-mode vector that saves user registers straight into the current thread's TCB (found through sscratch) and kernel-mode traps on the stack, separate Rust handlers for each, a return path that resumes any thread, and periodic timer interrupts through the SBI TIME extension; built with the `cheri` feature, user registers saved as whole CHERI capabilities, with per-thread DDC and user capabilities bounded to user addresses.
 updated: 2026-10-20
 code: [kernel/arch/riscv/trap.rs, kernel/arch/riscv/paging.rs, kernel/Cargo.toml, kernel/arch/riscv/timer.rs, kernel/arch/riscv/sbi.rs, kernel/arch/riscv/mod.rs, kernel/main.rs, kernel/syscall.rs, kernel/sched.rs]
 sources: ["[[2026-10-20-685b0203-ipc-cost-and-cheri]]", "[[2026-10-08-22c3947b-wiki-setup]]"]
@@ -28,8 +28,8 @@ On trap entry the hardware clears `sstatus.SIE`, so kernel code always runs with
 
 ## With CHERI
 
-> [!note] Branch
-> This section describes the `cheri` branch: a kernel built with the `cheri` feature for CHERI-RISC-V (the RVY draft, [[hw-cheri]]). Without the feature, the kernel is the one described above.
+> [!note] Feature
+> This section describes a kernel built with the `cheri` feature for CHERI-RISC-V (the RVY draft, [[hw-cheri]]). Without the feature, the kernel is the one described above.
 
 Built with the `cheri` feature, the kernel saves user registers as whole capabilities, so a capability a user thread holds in a register survives traps and context switches; it gives every thread capabilities bounded to user addresses; and each thread has its own DDC, the capability its integer-mode loads and stores go through. The kernel itself stays integer code: its Rust code never handles capabilities.
 

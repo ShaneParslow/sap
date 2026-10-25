@@ -18,7 +18,7 @@ Dependencies, all `no_std`: `fdt` (pinned to 0.1.5) for the device tree, `riscv`
 
 A successful run prints the OpenSBI banner, the kernel log, the root task's greeting, and exits with status 0. A panic or a fault in the root task exits with status 1.
 
-On the `cheri` branch, the kernel's `cheri` feature (`kernel/Cargo.toml`) builds it for CHERI-RISC-V ([[kernel-traps-riscv#With CHERI]]); `toolchain/run.sh` builds it so and boots it on the RVY emulator with the CHERI OpenSBI and 1 GiB of RAM ([[hw-cheri#Platform support]]).
+The kernel's `cheri` feature (`kernel/Cargo.toml`) builds it for CHERI-RISC-V ([[kernel-traps-riscv#With CHERI]]); `toolchain/run.sh` builds it so and boots it on the RVY emulator with the CHERI OpenSBI and 1 GiB of RAM ([[hw-cheri#Platform support]]).
 
 ## Boot sequence
 

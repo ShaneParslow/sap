@@ -1,7 +1,7 @@
 ---
 status: hub
 summary: Ordered work items - the kernel decision, the bring-up milestones on RISC-V, and design exercises that can run in parallel.
-updated: 2026-10-20
+updated: 2026-10-24
 sources: ["[[2026-09-27-future-of-computing#m9|§m9]]", "[[2026-09-27-future-of-computing#m11|§m11]]", "[[2026-09-27-future-of-computing#m28|§m28]]", "[[2026-09-27-future-of-computing#m29|§m29]]"]
 ---
 
@@ -24,7 +24,7 @@ The order agreed on 2026-10-19 ([[2026-10-16-2c1ac53c#m10|§m10]]), from the ite
 4. **M7**, the process manager: `init` becomes it, and its boot checks move into a program it spawns; programs start their runtime from a startup record and the bootstrap message; code in a boot pack is named by its BLAKE3 hash; the loader moves onto the runtime's slot allocator ([[2026-10-20-685b0203#m12|§m12]]). Built: the startup record and bootstrap message, the boot pack, the checks as a program `init` starts, and the process factory with exit, fault and kill ([[prog-process-factory]]). Still open for M7: programs starting their runtime from the bootstrap automatically, and the loader on the runtime's slot allocator.
 5. **I2**, `std`, once thread-local storage, a log service and the process ABI exist.
 
-In parallel, on the `cheri` branch ([[2026-10-20-685b0203#m4|§m4]]): **a CHERI spike** on the RVY draft standard. First the toolchain (in-tree submodules), then a CHERI-aware OpenSBI, then the kernel saving capability registers and giving user threads their capabilities, then one compartment transport to compare with the rings ([[ipc-paging-vs-cheri#Moving ownership]]). Done so far: the toolchain, the firmware, and saving user registers whole ([[kernel-traps-riscv#With CHERI]]); next, bounded capabilities per thread. Purecap Rust user programs still wait for a compiler ([[hw-cheri#Platform support]]); M10 is where CHERI becomes a supported configuration.
+In parallel ([[2026-10-20-685b0203#m4|§m4]]): **a CHERI spike** on the RVY draft standard. First the toolchain (in-tree submodules), then a CHERI-aware OpenSBI, then the kernel saving capability registers and giving user threads their capabilities, then one compartment transport to compare with the rings ([[ipc-paging-vs-cheri#Moving ownership]]). Done so far: the toolchain, the firmware, user registers saved whole, user capabilities bounded to user addresses with a DDC per thread, and user pages that may hold capabilities ([[kernel-traps-riscv#With CHERI]]); it started on a `cheri` branch and was merged into `master` on 2026-10-24, behind the kernel's `cheri` feature. Next, the compartment transport. Purecap Rust user programs still wait for a compiler ([[hw-cheri#Platform support]]); M10 is where CHERI becomes a supported configuration.
 
 ## Bring-up milestones
 
