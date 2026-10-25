@@ -8,7 +8,7 @@
 //! space, with relocations applied, then mapped into the new address space
 //! with its segment's permissions. The new thread follows the process ABI:
 //! `sp` at the top of its stack, `tp` at its IPC buffer, and `a0` at its
-//! startup record (`sap_abi::Startup`), a read-only page that also holds
+//! startup record (`sap_process::Startup`), a read-only page that also holds
 //! the bootstrap message. Its CNode holds its runtime capabilities in the
 //! `process_slot` slots, then its imports.
 
@@ -22,7 +22,8 @@ mod arch;
 use elf::abi::{ET_DYN, PF_W, PF_X, PT_LOAD};
 use elf::endian::LittleEndian;
 use elf::ElfBytes;
-use sap_abi::{attr, error, object, process_slot, reg, rights, AddressRange, SlotRange, Startup, BOOTSTRAP_OFFSET, MAX_BOOTSTRAP};
+use sap_abi::{attr, error, object, reg, rights, SlotRange};
+use sap_process::{process_slot, AddressRange, Startup, BOOTSTRAP_OFFSET, MAX_BOOTSTRAP};
 
 use sap_sys::cnode::{SlotRef, WORD};
 use sap_sys::sys::Error;

@@ -42,7 +42,7 @@ Built with the `cheri` feature, the kernel saves user registers as whole capabil
 
 RVY instructions are written as raw encodings (`.insn`) through assembler macros (`trap.rs:175`), since Rust's assembler doesn't know them; the encodings were checked against the RVY LLVM fork's assembler.
 
-`check_cheri` in `check` (`user/programs/check/main.rs:1672`) checks that:
+`check_cheri` in `check` (`user/programs/check/main.rs:1674`) checks that:
 - DDC held in `s2` through a system call and in `s3` through timer interrupts keeps its tag, while the system call's `a0` result comes back untagged;
 - DDC and the program counter capability, read with `auipc` in capability mode, have base 0, length `USER_END` and no `ASR`;
 - a DDC narrowed to one page stays narrowed through a system call, which the kernel serves through its own DDC;

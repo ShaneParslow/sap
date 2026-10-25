@@ -1,7 +1,7 @@
 //! What a process started by a launcher receives: its startup record and
-//! bootstrap message (the process ABI, `sap_abi::Startup`).
+//! bootstrap message (the process ABI, `sap_process`).
 
-use sap_sys::abi::{launcher, process_slot, Startup, BOOTSTRAP_OFFSET, MAX_BOOTSTRAP};
+use sap_process::{launcher, process_slot, Startup, BOOTSTRAP_OFFSET, MAX_BOOTSTRAP};
 use sap_sys::address::mapped;
 
 /// The startup record whose address the launcher passed in `a0`.

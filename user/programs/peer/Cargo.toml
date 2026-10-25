@@ -12,6 +12,7 @@ bench = false
 [dependencies]
 # No heap: the peer doesn't allocate.
 sap-rt = { path = "../../lib/rt", default-features = false }
+sap-process = { path = "../../lib/process" }
 capnp = { version = "0.27.2", default-features = false }
 sap-interfaces = { path = "../../lib/interfaces" }
 sap-ring = { path = "../../lib/ring" }

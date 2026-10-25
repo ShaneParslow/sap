@@ -1,4 +1,4 @@
-//! The process factory (`sap_abi::factory`): starting programs from the
+//! The process factory (`sap_interfaces::factory`): starting programs from the
 //! boot pack on a client's behalf, with memory the client provides, and
 //! reporting how they end.
 //!
@@ -13,7 +13,9 @@
 use alloc::vec::Vec;
 
 use sap_loader::{self as loader, Give, Launch, Parent, Slots, LAUNCH};
-use sap_rt::abi::{factory, fault, init_slot, launcher, object, rights, MAX_EXTRA_CAPS};
+use sap_interfaces::factory;
+use sap_process::launcher;
+use sap_rt::abi::{fault, init_slot, object, rights, MAX_EXTRA_CAPS};
 use sap_rt::cnode::SlotRef;
 use sap_rt::ipc::{self, Give as Send};
 use sap_rt::{slots, tcb, untyped};

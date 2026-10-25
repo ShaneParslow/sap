@@ -68,6 +68,7 @@ dependencies = [
  "capnp",
  "sap-interfaces",
  "sap-loader",
+ "sap-process",
  "sap-ring",
  "sap-rt",
 ]
@@ -131,6 +132,7 @@ dependencies = [
  "capnp",
  "sap-interfaces",
  "sap-loader",
+ "sap-process",
  "sap-ring",
  "sap-rt",
 ]
@@ -159,6 +161,7 @@ version = "0.1.0"
 dependencies = [
  "capnp",
  "sap-interfaces",
+ "sap-process",
  "sap-ring",
  "sap-rt",
 ]
@@ -191,6 +194,7 @@ version = "0.1.0"
 dependencies = [
  "capnp",
  "capnpc",
+ "sap-abi",
 ]
 
 [[package]]
@@ -211,7 +215,15 @@ version = "0.1.0"
 dependencies = [
  "elf",
  "sap-abi",
+ "sap-process",
  "sap-sys",
+]
+
+[[package]]
+name = "sap-process"
+version = "0.1.0"
+dependencies = [
+ "sap-abi",
 ]
 
 [[package]]
@@ -226,6 +238,7 @@ name = "sap-rt"
 version = "0.1.0"
 dependencies = [
  "linked_list_allocator",
+ "sap-process",
  "sap-sys",
 ]
 

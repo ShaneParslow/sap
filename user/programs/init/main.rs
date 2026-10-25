@@ -23,7 +23,8 @@ use sap_interfaces::check_capnp::check_imports;
 use factory::{Answer, Factory};
 use sap_loader::{self as loader, Give, Launch, Parent, Slots, LAUNCH};
 use sap_ring::as_bytes_mut;
-use sap_rt::abi::{fault, init_slot, launcher, object, rights, BootInfo, UntypedDesc, MAX_EXTRA_CAPS, MAX_MESSAGE_LENGTH};
+use sap_process::launcher;
+use sap_rt::abi::{fault, init_slot, object, rights, BootInfo, UntypedDesc, MAX_EXTRA_CAPS, MAX_MESSAGE_LENGTH};
 use sap_rt::address::mapped;
 use sap_rt::cnode::SlotRef;
 use sap_rt::runtime::{self, Resources};
@@ -85,7 +86,7 @@ fn sap_main(boot_info: usize, _: usize, _: usize) -> ! {
                 Some(Answer::Nothing) => {}
                 None => {
                     println!("init: ignored a message with badge {badge:#x}, label {label}");
-                    let _ = ipc::reply(reply, sap_rt::abi::factory::BAD_REQUEST, &[], &[]);
+                    let _ = ipc::reply(reply, sap_interfaces::factory::BAD_REQUEST, &[], &[]);
                 }
             }
             factory.clear_window();

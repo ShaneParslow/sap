@@ -28,7 +28,7 @@ use sap_interfaces::echo_capnp::{reply, request};
 use sap_interfaces::peer_capnp::{peer_imports, Mode};
 use sap_ring::transfer::{Frames, Receiver, TransferError};
 use sap_ring::{as_bytes, as_bytes_mut, Consumer, Layout, Producer, RingError, PAGE};
-use sap_rt::abi::{process_slot, Startup};
+use sap_process::{process_slot, Startup};
 use sap_rt::address::mapped;
 use sap_rt::{ipc, notification, println, process, tcb};
 

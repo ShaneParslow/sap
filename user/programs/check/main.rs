@@ -19,7 +19,9 @@ use alloc::vec::Vec;
 use core::alloc::Layout;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use sap_rt::abi::{attr, error, factory, fault, identify, object, process_slot, recv_source, reg, rights, SlotRange, Startup, UntypedDesc, MAX_BOOT_UNTYPED};
+use sap_interfaces::factory;
+use sap_process::{process_slot, Startup};
+use sap_rt::abi::{attr, error, fault, identify, object, recv_source, reg, rights, SlotRange, UntypedDesc, MAX_BOOT_UNTYPED};
 use sap_rt::address::mapped;
 use sap_rt::cnode::SlotRef;
 use sap_rt::sys::Error;

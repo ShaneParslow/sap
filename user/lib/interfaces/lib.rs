@@ -1,10 +1,13 @@
 //! Rust bindings for sap's Cap'n Proto interfaces, generated at build time
-//! from the schemas in interfaces/ at the top of the repository.
+//! from the schemas in interfaces/ at the top of the repository, and the
+//! interfaces that are still plain words (`factory`).
 
 #![no_std]
 #![feature(strict_provenance_lints)]
 // Pointers come from `sap_sys::address::mapped`, never from integer casts.
 #![deny(implicit_provenance_casts, integer_to_ptr_transmutes)]
+
+pub mod factory;
 
 /// Record kinds on an echo channel (`sap-ring`); the record id matches a
 /// reply to its request.

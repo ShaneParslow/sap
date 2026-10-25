@@ -2,14 +2,14 @@
 status: implemented
 summary: The process factory init serves - SPAWN a program from the boot pack by its BLAKE3 hash with a bootstrap message, imports and untyped memory the client provides; WAIT for it to end and get the memory back; KILL it - with badged capabilities on one endpoint telling clients, processes and handles apart, and every process destroyed by revoking the client's memory.
 updated: 2026-10-20
-code: [abi/lib.rs, user/programs/init/factory.rs, user/programs/init/main.rs, user/programs/check/main.rs, user/programs/peer/main.rs, interfaces/peer.capnp, interfaces/check.capnp]
+code: [user/lib/interfaces/factory.rs, user/programs/init/factory.rs, user/programs/init/main.rs, user/programs/check/main.rs, user/programs/peer/main.rs, interfaces/peer.capnp, interfaces/check.capnp]
 verified: deed361
 sources: ["[[2026-10-20-685b0203#m12|§m12]]"]
 ---
 
 # The process factory
 
-The process factory is the interface through which a program asks the process manager to start another program, as [[kernel-process-model#Spawning]] describes: no fork, no exec, code named by its hash. `init` serves it (`user/programs/init/factory.rs`), starting programs from its boot pack ([[prog-runtime#The second program]]). It is plain IPC words for now, with the labels and layout in `sap_abi::factory` (`abi/lib.rs:442`); a `TODO` makes it a Cap'n Proto interface once RPC exists (M6).
+The process factory is the interface through which a program asks the process manager to start another program, as [[kernel-process-model#Spawning]] describes: no fork, no exec, code named by its hash. `init` serves it (`user/programs/init/factory.rs`), starting programs from its boot pack ([[prog-runtime#The second program]]). It is plain IPC words for now, with the labels and layout in `sap_interfaces::factory` (`user/lib/interfaces/factory.rs`), beside the generated Cap'n Proto bindings; a `TODO` makes it a Cap'n Proto interface once RPC exists (M6).
 
 ## The calls
 
@@ -21,7 +21,7 @@ There are three calls, on two kinds of capability. A **factory capability** take
 | `WAIT` | nothing | how the process ended (`EXITED`, `FAULTED`, `KILLED`) and its code, the exit code or the fault label; carries the memory back |
 | `KILL` | nothing | `OK`; a waiting client hears `KILLED` |
 
-`SPAWN` refuses with `BAD_REQUEST` when there is no memory capability, the first capability isn't untyped memory, or the length word claims more bytes than the request carries; with `NO_SUCH_PROGRAM` when the boot pack has no program of that hash; with `FULL` when 16 processes are running (`MAX_PROCESSES`, `user/programs/init/factory.rs:30`); and with `LOAD_FAILED` when the loader returns an error, usually for lack of memory ([[prog-runtime#The loader]]). Every refusal after the memory arrives gives it back; imports are dropped. The bootstrap message is at most 912 bytes, what fits in one message beside the hash.
+`SPAWN` refuses with `BAD_REQUEST` when there is no memory capability, the first capability isn't untyped memory, or the length word claims more bytes than the request carries; with `NO_SUCH_PROGRAM` when the boot pack has no program of that hash; with `FULL` when 16 processes are running (`MAX_PROCESSES`, `user/programs/init/factory.rs:32`); and with `LOAD_FAILED` when the loader returns an error, usually for lack of memory ([[prog-runtime#The loader]]). Every refusal after the memory arrives gives it back; imports are dropped. The bootstrap message is at most 912 bytes, what fits in one message beside the hash.
 
 ## Who pays
 
@@ -34,17 +34,17 @@ There are three calls, on two kinds of capability. A **factory capability** take
 
 ## How it works
 
-Everything arrives on `init`'s one endpoint, told apart by badge (`user/programs/init/factory.rs:24`): `FACTORY_BADGE` on factory capabilities, `LAUNCHER_BADGE` plus the process's index on the capability each process holds as its launcher and fault handler ([[prog-runtime#The process ABI]]), and `HANDLE_BADGE` plus the index on its handle. `init`'s loop (`user/programs/init/main.rs:80`) passes every message that isn't `check`'s to `Factory::handle` (`user/programs/init/factory.rs:111`), which returns what to do: reply, answer later, or nothing.
+Everything arrives on `init`'s one endpoint, told apart by badge (`user/programs/init/factory.rs:26`): `FACTORY_BADGE` on factory capabilities, `LAUNCHER_BADGE` plus the process's index on the capability each process holds as its launcher and fault handler ([[prog-runtime#The process ABI]]), and `HANDLE_BADGE` plus the index on its handle. `init`'s loop (`user/programs/init/main.rs:81`) passes every message that isn't `check`'s to `Factory::handle` (`user/programs/init/factory.rs:113`), which returns what to do: reply, answer later, or nothing.
 
-**Spawning** (`spawn`, line 143) checks the request, moves the memory out of the receive window, mints the process's launcher and handle capabilities, loads the image with the imports moved from the window into the new CNode, makes the launcher capability the thread's fault handler and starts it. Each process gets 128 of `init`'s slots for the loader's capabilities (`OBJECT_SLOTS`, line 32). On a load error, revoking the memory removes whatever was built.
+**Spawning** (`spawn`, line 145) checks the request, moves the memory out of the receive window, mints the process's launcher and handle capabilities, loads the image with the imports moved from the window into the new CNode, makes the launcher capability the thread's fault handler and starts it. Each process gets 128 of `init`'s slots for the loader's capabilities (`OBJECT_SLOTS`, line 34). On a load error, revoking the memory removes whatever was built.
 
-**Ending** (`end`, line 210) happens when the process reports `launcher::EXIT`, when it faults (the fault message arrives on the same badged capability), or on `KILL`. It revokes the memory, which destroys the process, revokes and deletes the launcher capability, frees the object slots, and records how it ended. The handle and the memory stay until a client waits.
+**Ending** (`end`, line 212) happens when the process reports `launcher::EXIT`, when it faults (the fault message arrives on the same badged capability), or on `KILL`. It revokes the memory, which destroys the process, revokes and deletes the launcher capability, frees the object slots, and records how it ended. The handle and the memory stay until a client waits.
 
-**Waiting** (`wait`, line 229) answers at once if the process has ended. Otherwise `init` keeps the reply object the call arrived on and receives with a fresh one (`fresh_reply`, line 94); seL4's MCS kernel works the same way, since a reply object is what links a caller to its answer. When the process ends, `answer_waiter` (line 246) replies through the kept object with the memory, then revokes `init`'s original of the handle, which deletes every copy, so the handle stops working. A second `WAIT` on the same process is refused.
+**Waiting** (`wait`, line 231) answers at once if the process has ended. Otherwise `init` keeps the reply object the call arrived on and receives with a fresh one (`fresh_reply`, line 96); seL4's MCS kernel works the same way, since a reply object is what links a caller to its answer. When the process ends, `answer_waiter` (line 248) replies through the kept object with the memory, then revokes `init`'s original of the handle, which deletes every copy, so the handle stops working. A second `WAIT` on the same process is refused.
 
 ## What is checked
 
-`check_factory` (`user/programs/check/main.rs:1607`) starts `peer` through the factory, using the peer's hash that `init` passes in `check`'s bootstrap message:
+`check_factory` (`user/programs/check/main.rs:1609`) starts `peer` through the factory, using the peer's hash that `init` passes in `check`'s bootstrap message:
 - a peer that exits with code 7: `WAIT` reports `EXITED` and 7 and returns untyped memory, after which the handle slot is empty, and the returned memory starts the peer again;
 - a peer that reads an unmapped address: `FAULTED`, with the label `fault::VM`;
 - a peer blocked calling an endpoint nobody answers: `KILL`, then `WAIT` reports `KILLED`;

@@ -9,6 +9,7 @@ test = false
 bench = false
 
 [dependencies]
+sap-abi = { path = "../../../abi" }
 capnp = { version = "0.27.2", default-features = false }
 
 [build-dependencies]

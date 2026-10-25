@@ -52,7 +52,7 @@ The sender checks returned capabilities the same way, because the receiver could
 
 ## What it costs
 
-`measure_transfer` (`user/programs/check/main.rs:1323`) times 64 round trips per size. Each moves `n` bytes to a peer, which reads every byte once and answers with a checksum:
+`measure_transfer` (`user/programs/check/main.rs:1325`) times 64 round trips per size. Each moves `n` bytes to a peer, which reads every byte once and answers with a checksum:
 - **ring copy:** check copies the bytes into a ring of 32 data pages, the peer copies them out and sums them;
 - **page transfer:** check copies the bytes into its frames, and the peer sums them in place.
 

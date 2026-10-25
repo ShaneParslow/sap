@@ -13,5 +13,6 @@ bench = false
 capnp = { version = "0.27.2", default-features = false }
 sap-interfaces = { path = "../../lib/interfaces" }
 sap-rt = { path = "../../lib/rt" }
+sap-process = { path = "../../lib/process" }
 sap-loader = { path = "../../lib/loader" }
 sap-ring = { path = "../../lib/ring" }
