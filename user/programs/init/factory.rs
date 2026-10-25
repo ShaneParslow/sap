@@ -1,6 +1,8 @@
-//! The process factory (`sap_interfaces::factory`): starting programs from the
-//! boot pack on a client's behalf, with memory the client provides, and
-//! reporting how they end.
+//! The process factory (`ProcessFactory` and `Process` in
+//! `interfaces/process.capnp`): starting programs from the boot pack on a
+//! client's behalf, with memory the client provides, and reporting how they
+//! end. Calls arrive as the schema's comment describes: the method's ordinal
+//! as the label, its params as the words, capabilities beside them.
 //!
 //! Each process the factory starts has three capabilities to init's
 //! endpoint, told apart by badge: the factory capability its client called
@@ -12,9 +14,15 @@
 
 use alloc::vec::Vec;
 
+use capnp::message::{Builder, SingleSegmentAllocator};
+use sap_interfaces::methods::{process, process_factory};
+use sap_interfaces::process_capnp::process::wait_results;
+use sap_interfaces::process_capnp::process_factory::spawn_params;
+use sap_interfaces::process_capnp::Status;
+use sap_interfaces::words;
 use sap_loader::{self as loader, Give, Launch, Parent, Slots, LAUNCH};
-use sap_interfaces::factory;
 use sap_process::launcher;
+use sap_ring::as_bytes_mut;
 use sap_rt::abi::{fault, init_slot, object, rights, MAX_EXTRA_CAPS};
 use sap_rt::cnode::SlotRef;
 use sap_rt::ipc::{self, Give as Send};
@@ -44,7 +52,20 @@ fn new_slot() -> usize {
 #[derive(Clone, Copy)]
 enum State {
     Running,
-    Ended { how: usize, code: usize },
+    Ended(End),
+}
+
+/// How a process ended: the schema's `End`.
+#[derive(Clone, Copy)]
+enum End {
+    Exited(u64),
+    Faulted(u64),
+    Killed,
+}
+
+/// The reply label for `status`.
+fn label(status: Status) -> usize {
+    status as usize
 }
 
 /// A process the factory started. Its slots are in init's CNode.
@@ -110,27 +131,29 @@ impl Factory {
     }
 
     /// Handle a message whose badge is one of the factory's, if it is.
-    pub fn handle(&mut self, badge: usize, label: usize, words: &[usize], caps: usize, reply: usize) -> Option<Answer> {
+    /// `method` is the message's label: a method ordinal, or on a launcher
+    /// capability `launcher::EXIT` or a fault label.
+    pub fn handle(&mut self, badge: usize, method: usize, words: &[usize], caps: usize, reply: usize) -> Option<Answer> {
         let index = badge & 0xff;
         Some(match badge & !0xff {
-            0 if badge == FACTORY_BADGE => match label {
-                factory::SPAWN => self.spawn(words, caps),
-                _ => Answer::Reply(factory::BAD_REQUEST, Vec::new(), Vec::new()),
+            0 if badge == FACTORY_BADGE => match method {
+                process_factory::SPAWN => self.spawn(words, caps),
+                _ => Answer::Reply(label(Status::BadRequest), Vec::new(), Vec::new()),
             },
-            LAUNCHER_BADGE if self.running(index) => match label {
-                launcher::EXIT => self.end(index, factory::EXITED, words.first().copied().unwrap_or(0)),
-                fault::VM | fault::USER_EXCEPTION => self.end(index, factory::FAULTED, label),
-                _ => Answer::Reply(factory::BAD_REQUEST, Vec::new(), Vec::new()),
+            LAUNCHER_BADGE if self.running(index) => match method {
+                launcher::EXIT => self.end(index, End::Exited(words.first().copied().unwrap_or(0) as u64)),
+                fault::VM | fault::USER_EXCEPTION => self.end(index, End::Faulted(method as u64)),
+                _ => Answer::Reply(label(Status::BadRequest), Vec::new(), Vec::new()),
             },
-            HANDLE_BADGE if index < MAX_PROCESSES && self.processes[index].is_some() => match label {
-                factory::WAIT => self.wait(index, reply),
-                factory::KILL => {
+            HANDLE_BADGE if index < MAX_PROCESSES && self.processes[index].is_some() => match method {
+                process::WAIT => self.wait(index, reply),
+                process::KILL => {
                     if self.running(index) {
-                        self.end(index, factory::KILLED, 0);
+                        self.end(index, End::Killed);
                     }
-                    Answer::Reply(factory::OK, Vec::new(), Vec::new())
+                    Answer::Reply(label(Status::Ok), Vec::new(), Vec::new())
                 }
-                _ => Answer::Reply(factory::BAD_REQUEST, Vec::new(), Vec::new()),
+                _ => Answer::Reply(label(Status::BadRequest), Vec::new(), Vec::new()),
             },
             _ => return None,
         })
@@ -140,31 +163,27 @@ impl Factory {
         index < MAX_PROCESSES && matches!(self.processes[index], Some(Process { state: State::Running, .. }))
     }
 
-    /// `SPAWN`: check the request, load the program from the client's
+    /// `spawn`: check the request, load the program from the client's
     /// memory and start it.
     fn spawn(&mut self, words: &[usize], caps: usize) -> Answer {
-        let refuse = |label| Answer::Reply(label, Vec::new(), Vec::new());
+        let refuse = |status| Answer::Reply(label(status), Vec::new(), Vec::new());
         if caps == 0 {
-            return refuse(factory::BAD_REQUEST);
+            return refuse(Status::BadRequest);
         }
         // From here on, every refusal gives the memory back.
         let memory = self.window;
-        let give_back = |label| Answer::Reply(label, Vec::new(), alloc::vec![Send::moved(memory)]);
+        let give_back = |status| Answer::Reply(label(status), Vec::new(), alloc::vec![Send::moved(memory)]);
         if slot(memory).identify().map(|id| id.object_type) != Ok(object::UNTYPED) {
-            return give_back(factory::BAD_REQUEST);
+            return give_back(Status::BadRequest);
         }
-        let Some(bootstrap) = bootstrap(words) else {
-            return give_back(factory::BAD_REQUEST);
+        let Some((hash, bootstrap)) = spawn_request(words) else {
+            return give_back(Status::BadRequest);
         };
-        let mut hash = [0u8; 32];
-        for (i, w) in words[..factory::HASH_WORDS].iter().enumerate() {
-            hash[i * 8..i * 8 + 8].copy_from_slice(&(*w as u64).to_le_bytes());
-        }
         let Some(image) = pack::find(&pack::Hash(hash)) else {
-            return give_back(factory::NO_SUCH_PROGRAM);
+            return give_back(Status::NoSuchProgram);
         };
         let Some(index) = self.processes.iter().position(Option::is_none) else {
-            return give_back(factory::FULL);
+            return give_back(Status::Full);
         };
 
         // The memory and the imports move out of the window: the memory
@@ -190,7 +209,7 @@ impl Factory {
             Ok(()) => {
                 self.processes[index] =
                     Some(Process { memory: kept, objects, launcher: launcher_cap, handle, state: State::Running, waiter: None });
-                Answer::Reply(factory::OK, Vec::new(), alloc::vec![Send::copy(handle)])
+                Answer::Reply(label(Status::Ok), Vec::new(), alloc::vec![Send::copy(handle)])
             }
             Err(_) => {
                 // Remove what was built, and give the memory back.
@@ -203,13 +222,13 @@ impl Factory {
                 slots::free_range(objects, OBJECT_SLOTS);
                 slot(memory).move_from(slot(kept)).expect("init: return the memory");
                 slots::free(kept);
-                give_back(factory::LOAD_FAILED)
+                give_back(Status::LoadFailed)
             }
         }
     }
 
     /// The process at `index` ended: destroy it, and answer a waiter.
-    fn end(&mut self, index: usize, how: usize, code: usize) -> Answer {
+    fn end(&mut self, index: usize, end: End) -> Answer {
         let process = self.processes[index].as_mut().expect("init: no such process");
         // Revoking the memory destroys every object made from it: the
         // thread, its address space and pages, and its CNode with the
@@ -218,7 +237,7 @@ impl Factory {
         let _ = slot(process.launcher).revoke();
         let _ = slot(process.launcher).delete();
         slots::free_range(process.objects, OBJECT_SLOTS);
-        process.state = State::Ended { how, code };
+        process.state = State::Ended(end);
         if let Some(waiter) = process.waiter.take() {
             self.answer_waiter(index, waiter);
             self.spare_replies.push(waiter);
@@ -226,17 +245,17 @@ impl Factory {
         Answer::Nothing
     }
 
-    /// `WAIT`: answer now if the process has ended, else keep the reply
+    /// `wait`: answer now if the process has ended, else keep the reply
     /// object until it does.
     fn wait(&mut self, index: usize, reply: usize) -> Answer {
         let process = self.processes[index].as_mut().expect("init: no such process");
         match process.state {
-            _ if process.waiter.is_some() => Answer::Reply(factory::BAD_REQUEST, Vec::new(), Vec::new()),
+            _ if process.waiter.is_some() => Answer::Reply(label(Status::BadRequest), Vec::new(), Vec::new()),
             State::Running => {
                 process.waiter = Some(reply);
                 Answer::Later
             }
-            State::Ended { .. } => {
+            State::Ended(_) => {
                 self.answer_waiter(index, reply);
                 Answer::Nothing
             }
@@ -247,8 +266,10 @@ impl Factory {
     /// memory, and forget the process.
     fn answer_waiter(&mut self, index: usize, reply: usize) {
         let process = self.processes[index].take().expect("init: no such process");
-        let State::Ended { how, code } = process.state else { unreachable!("init: answering for a running process") };
-        let _ = ipc::reply(reply, factory::OK, &[how, code], &[Send::moved(process.memory)]);
+        let State::Ended(end) = process.state else { unreachable!("init: answering for a running process") };
+        let mut out = [0usize; 8];
+        let n = wait_reply(end, &mut out);
+        let _ = ipc::reply(reply, label(Status::Ok), &out[..n], &[Send::moved(process.memory)]);
         // The handle stops working: revoking init's original deletes the
         // client's copies.
         let _ = slot(process.handle).revoke();
@@ -262,12 +283,27 @@ impl Factory {
     }
 }
 
-/// The bootstrap message of a `SPAWN` request, unpacked from its words.
-fn bootstrap(words: &[usize]) -> Option<Vec<u8>> {
-    let len = *words.get(factory::HASH_WORDS)?;
-    let packed = &words[factory::HASH_WORDS + 1..];
-    if len > factory::MAX_BOOTSTRAP || len > packed.len() * 8 {
-        return None;
+/// The program's hash and the bootstrap message of a `spawn` request,
+/// read from its params struct.
+fn spawn_request(words: &[usize]) -> Option<([u8; 32], Vec<u8>)> {
+    let segment = [words::bytes(words)];
+    let message = words::reader(&segment);
+    let params = message.get_root::<spawn_params::Reader>().ok()?;
+    let hash = params.get_program().ok()?.try_into().ok()?;
+    Some((hash, params.get_bootstrap().ok()?.to_vec()))
+}
+
+/// The results of `wait` for a process that ended as `end`, packed into
+/// `out`; returns the number of words.
+fn wait_reply(end: End, out: &mut [usize]) -> usize {
+    let mut scratch = [0u64; 8];
+    let mut allocator = SingleSegmentAllocator::new(as_bytes_mut(&mut scratch));
+    let mut message = Builder::new(&mut allocator);
+    let mut root = message.init_root::<wait_results::Builder>().init_end();
+    match end {
+        End::Exited(code) => root.set_exited(code),
+        End::Faulted(fault) => root.set_faulted(fault),
+        End::Killed => root.set_killed(()),
     }
-    Some(packed.iter().flat_map(|w| (*w as u64).to_le_bytes()).take(len).collect())
+    words::pack(&message, out).expect("init: a wait reply fits")
 }

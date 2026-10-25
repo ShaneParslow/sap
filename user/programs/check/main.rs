@@ -141,9 +141,12 @@ fn sap_main(a0: usize, _: usize, _: usize) -> ! {
     check_ipc(info);
     check_cap_transfer(info);
     check_faults(info);
-    check_process(info);
     // Before anything else allocates: it checks that the heap starts empty.
+    // Building a Cap'n Proto message allocates, since capnp's `alloc`
+    // feature (for the process factory's interfaces) keeps a builder's
+    // segments in a `Vec`.
     check_heap(info);
+    check_process(info);
     check_ring(info);
     check_echo_service(info);
     measure_transfer(info);

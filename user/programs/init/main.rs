@@ -86,7 +86,7 @@ fn sap_main(boot_info: usize, _: usize, _: usize) -> ! {
                 Some(Answer::Nothing) => {}
                 None => {
                     println!("init: ignored a message with badge {badge:#x}, label {label}");
-                    let _ = ipc::reply(reply, sap_interfaces::factory::BAD_REQUEST, &[], &[]);
+                    let _ = ipc::reply(reply, sap_interfaces::process_capnp::Status::BadRequest as usize, &[], &[]);
                 }
             }
             factory.clear_window();
