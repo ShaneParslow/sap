@@ -2,7 +2,7 @@
 status: implemented
 summary: Kernel IPC as implemented today - notifications (Signal, Wait, Poll), badges and their place in the derivation tree, endpoints with seL4 MCS-style reply objects (Send, Recv, Call, Reply, ReplyRecv and non-blocking variants), notifications bound to threads, capability transfer (up to 16 per message, moved or copied into a receive window), fault delivery to fault-handler endpoints, and blocking, cancellation and restarted system calls.
 updated: 2026-10-19
-code: [kernel/notification.rs, kernel/endpoint.rs, kernel/fault.rs, kernel/syscall.rs, kernel/invocation.rs, kernel/thread.rs, kernel/sched.rs, kernel/cap.rs, kernel/cspace.rs, kernel/untyped.rs, kernel/arch/riscv/trap.rs, abi/lib.rs, user/lib/sys/notification.rs, user/lib/sys/ipc.rs, user/lib/sys/sys.rs, user/programs/check/main.rs]
+code: [kernel/notification.rs, kernel/endpoint.rs, kernel/fault.rs, kernel/syscall.rs, kernel/invocation.rs, kernel/thread.rs, kernel/sched.rs, kernel/cap.rs, kernel/cspace.rs, kernel/untyped.rs, kernel/arch/riscv/trap.rs, abi/lib.rs, user/lib/sys/notification.rs, user/lib/sys/ipc.rs, user/lib/sys/sys.rs, user/programs/check/threads.rs]
 verified: 8642317
 sources: ["[[2026-10-08-22c3947b#m33|§m33]]", "[[2026-10-08-22c3947b#m34|§m34]]"]
 ---
@@ -105,7 +105,7 @@ Several threads of one program each need their own IPC buffer. Every thread star
 
 `user/programs/check` (`check_notifications`) checks: minting two badges and refusing a re-badge; two signals with nobody waiting accumulating, so one poll returns both bits and the next finds nothing pending; a signal through the unbadged original being pending with no bits, and a `WAIT` after an unbadged and a badged signal returning at once with the badged bits; a send-only capability being refused a `WAIT`; a second thread blocked in `WAIT` waking once per signal with the right badge; a signal sent while that thread is suspended being taken by its restarted `WAIT` after `RESUME`; revoking one badge deleting its copies while the badge itself keeps working; and deleting the notification with the thread waiting, after which its restarted `WAIT` reports `FAILED_LOOKUP`.
 
-`check_ipc` uses a `spawn` helper (`spawn_with`) (`user/programs/check/main.rs:545`) to start threads with their own stack and IPC buffer, and checks:
+`check_ipc` uses a `spawn` helper (`spawn_with`) (`user/programs/check/threads.rs:104`) to start threads with their own stack and IPC buffer, and checks:
 - a server thread answering with `REPLY_RECV`: a six-word `CALL` through a badged capability comes back with the badge as the label and every word incremented, so two words crossed the IPC buffers each way, and the reply carries no badge;
 - a plain `SEND` completing without an answer, counted by the server;
 - `RECV` on a send-only capability and `CALL` on a receive-only one refused;

@@ -2,7 +2,7 @@
 status: implemented
 summary: Messages too large for a ring travel as whole frames whose capabilities the kernel moves to the receiver - the call protocol, why an unmapped frame with no other capability can be read in place, identifying a capability before invoking it, and what QEMU and the D1 board measured (copying wins at every size up to 60 KiB; each page costs six system calls, and on the D1 the two TLB flushes dominate).
 updated: 2026-10-20
-code: [kernel/arch/riscv/paging.rs, user/lib/ring/transfer.rs, user/programs/peer/main.rs, user/programs/check/main.rs, user/lib/sys/cnode.rs, user/lib/loader/lib.rs, kernel/invocation.rs, kernel/cspace.rs, kernel/arch/riscv/caps.rs, abi/lib.rs]
+code: [kernel/arch/riscv/paging.rs, user/lib/ring/transfer.rs, user/programs/peer/main.rs, user/programs/check/channels.rs, user/lib/sys/cnode.rs, user/lib/loader/lib.rs, kernel/invocation.rs, kernel/cspace.rs, kernel/arch/riscv/caps.rs, abi/lib.rs]
 verified: 8b9862c
 sources: ["[[2026-09-27-future-of-computing#m15|§m15]]", "[[2026-10-16-2c1ac53c#m16|§m16]]", "[[2026-10-16-2c1ac53c#m22|§m22]]"]
 ---
@@ -52,7 +52,7 @@ The sender checks returned capabilities the same way, because the receiver could
 
 ## What it costs
 
-`measure_transfer` (`user/programs/check/main.rs:1325`) times 64 round trips per size. Each moves `n` bytes to a peer, which reads every byte once and answers with a checksum:
+`measure_transfer` (`user/programs/check/channels.rs:327`) times 64 round trips per size. Each moves `n` bytes to a peer, which reads every byte once and answers with a checksum:
 - **ring copy:** check copies the bytes into a ring of 32 data pages, the peer copies them out and sums them;
 - **page transfer:** check copies the bytes into its frames, and the peer sums them in place.
 

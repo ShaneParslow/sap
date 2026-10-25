@@ -2,7 +2,7 @@
 status: implemented
 summary: The process factory init serves - SPAWN a program from the boot pack by its BLAKE3 hash with a bootstrap message, imports and untyped memory the client provides; WAIT for it to end and get the memory back; KILL it - with badged capabilities on one endpoint telling clients, processes and handles apart, and every process destroyed by revoking the client's memory.
 updated: 2026-10-20
-code: [user/lib/interfaces/factory.rs, user/programs/init/factory.rs, user/programs/init/main.rs, user/programs/check/main.rs, user/programs/peer/main.rs, interfaces/peer.capnp, interfaces/check.capnp]
+code: [user/lib/interfaces/factory.rs, user/programs/init/factory.rs, user/programs/init/main.rs, user/programs/check/processes.rs, user/programs/peer/main.rs, interfaces/peer.capnp, interfaces/check.capnp]
 verified: deed361
 sources: ["[[2026-10-20-685b0203#m12|§m12]]"]
 ---
@@ -44,7 +44,7 @@ Everything arrives on `init`'s one endpoint, told apart by badge (`user/programs
 
 ## What is checked
 
-`check_factory` (`user/programs/check/main.rs:1609`) starts `peer` through the factory, using the peer's hash that `init` passes in `check`'s bootstrap message:
+`check_factory` (`user/programs/check/processes.rs:185`) starts `peer` through the factory, using the peer's hash that `init` passes in `check`'s bootstrap message:
 - a peer that exits with code 7: `WAIT` reports `EXITED` and 7 and returns untyped memory, after which the handle slot is empty, and the returned memory starts the peer again;
 - a peer that reads an unmapped address: `FAULTED`, with the label `fault::VM`;
 - a peer blocked calling an endpoint nobody answers: `KILL`, then `WAIT` reports `KILLED`;
