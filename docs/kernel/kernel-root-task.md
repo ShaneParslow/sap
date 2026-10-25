@@ -3,7 +3,7 @@ status: implemented
 summary: The one program the kernel starts by itself, as in seL4 - user/programs/init, built on the sap-rt runtime as a static position-independent ELF and embedded in the kernel; how the kernel loads it (contiguous frames, relative relocations, W^X segments, a stack, IPC buffer and boot-info page) and starts it as a thread; the debug syscalls it still uses; and what it does at boot: start the kernel checks as a program of their own and wait for their exit.
 updated: 2026-10-20
 code: [kernel/build.rs, user/build_program.rs, user/riscv64gc-unknown-sap.json, kernel/root_task.rs, kernel/syscall.rs, abi/lib.rs, user/programs/init/main.rs, user/programs/init/build.rs, interfaces/check.capnp, user/.cargo/config.toml, user/lib/rt/lib.rs, user/lib/rt/debug.rs]
-verified: 41820fb
+verified: 495022a
 sources: ["[[2026-10-08-22c3947b-wiki-setup]]"]
 ---
 
