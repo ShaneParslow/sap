@@ -13,3 +13,7 @@
 	url = https://github.com/Capabilities-Limited/cheri-alliance-llvm-project.git
 	branch = rvy-0910-wip
 	shallow = true
+[submodule "toolchain/xfel"]
+	path = toolchain/xfel
+	url = https://github.com/xboot/xfel.git
+	shallow = true

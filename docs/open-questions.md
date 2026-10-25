@@ -37,7 +37,7 @@ Grouped by urgency, then ordered by how much of the design each one affects. Det
 22. A case needing real cross-language in-process FFI. → [[iface-bindings-and-languages]]
 23. A "finishing a publish" scheduling hint. → [[kernel-scheduling]]
 24. Device manager: complete device-tree parse, and how device capabilities reach drivers. → [[hw-device-discovery]]
-25. Page transfer's cost per page: invocations over a range of slots, 2 MiB frames, moving a capability and its mapping together, or no flush after map. On the D1 board each page costs about 69 µs against 25 µs to copy it, and the two map–unmap pairs, through their TLB flushes, are half of it. → [[ipc-page-transfer]], [[hw-isa#Real hardware]]
+25. Page transfer's cost per page: invocations over a range of slots, 2 MiB frames, moving a capability and its mapping together, or no flush after map. On the D1 board each page costs about 69 µs against 25 µs to copy it, and the two map–unmap pairs, through their TLB flushes, are half of it. → [[ipc-page-transfer]], [[hw-d1-board]]
 
 ## Long-range
 

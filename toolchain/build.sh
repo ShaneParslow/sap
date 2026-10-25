@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# Build the CHERI-RISC-V (RVY draft) toolchain from the submodules here:
+# Build the tools in the submodules here:
 #   llvm     clang and lld from the RVY LLVM fork
 #   qemu     qemu-system-riscv64y from the RVY QEMU fork
 #   opensbi  a purecap OpenSBI for RVY, built with that clang (needs llvm)
+#   xfel     the Allwinner FEL loader, for the D1 board (tools/board/d1)
 # Everything goes to toolchain/out/, which git ignores. With no arguments,
-# builds all three in that order.
+# builds the CHERI toolchain: llvm, qemu and opensbi, in that order.
 #
-# Needs cmake, ninja, clang, lld, python and dtc from the host.
+# Needs cmake, ninja, clang, lld, python and dtc from the host; xfel needs
+# a C compiler, pkg-config and libusb.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -69,11 +71,22 @@ build_opensbi() {
     all install
 }
 
+build_xfel() {
+  # xfel's Makefile builds in its source directory; build a copy, so the
+  # submodule stays clean.
+  rm -rf "$out/xfel-build"
+  mkdir -p "$out/xfel-build" "$out/xfel/bin"
+  cp -r "$here/xfel/." "$out/xfel-build"
+  rm -rf "$out/xfel-build/.git"
+  make -C "$out/xfel-build" -j"$jobs"
+  cp "$out/xfel-build/xfel" "$out/xfel/bin/xfel"
+}
+
 targets=("$@")
 [ ${#targets[@]} -gt 0 ] || targets=(llvm qemu opensbi)
 for t in "${targets[@]}"; do
   case "$t" in
-    llvm | qemu | opensbi) "build_$t" ;;
-    *) echo "build.sh: unknown target '$t' (llvm, qemu, opensbi)" >&2; exit 1 ;;
+    llvm | qemu | opensbi | xfel) "build_$t" ;;
+    *) echo "build.sh: unknown target '$t' (llvm, qemu, opensbi, xfel)" >&2; exit 1 ;;
   esac
 done

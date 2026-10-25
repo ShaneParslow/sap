@@ -1,7 +1,7 @@
 ---
 status: decided
 summary: sap targets RISC-V first (QEMU virt, with CHERI-QEMU available). The case for a plain RISC core over language-specific or VLIW designs, how RISC-V, Arm and x86 compare for a microkernel, and how to use optional extensions without per-target builds.
-updated: 2026-10-20
+updated: 2026-10-24
 sources: ["[[2026-09-27-future-of-computing#m5|§m5]]", "[[2026-09-27-future-of-computing#m7|§m7]]", "[[2026-09-27-future-of-computing#m9|§m9]]", "[[2026-09-27-future-of-computing#m29|§m29]]"]
 ---
 
@@ -52,16 +52,7 @@ Constraints for sap: patch before kernel text is mapped read-only and execute-on
 
 ## Real hardware
 
-QEMU is fine for correctness but distorts costs. A system call there takes microseconds, while memory copies run at close to host speed, so measurements such as the copy/transfer crossover ([[ipc-page-transfer#What it costs]]) need a real core. The human has one RISC-V board, a MangoPi MQ-Pro with an Allwinner D1 and 1 GiB of memory ([[2026-10-16-2c1ac53c#m22|§m22]]). The unmodified kernel boots on it and every check passes; the board needs only firmware and a device tree. Facts about it, checked on the board on 2026-10-20 ([[2026-10-20-685b0203-ipc-cost-and-cheri]]):
-- **Core:** one T-Head C906 at 1 GHz, RV64GC with an MMU (Sv39) and 16 ASID bits. It also has a vector unit that predates the ratified vector extension (version 0.7.1), which standard toolchains don't target.
-- **Memory attributes:** the C906's own page-table bits (63–59) only apply when `mxstatus.MAEE` is set, which Allwinner's firmware and U-Boot do and Linux then handles as a vendor erratum. Booted as below, `mxstatus` reads 0, so standard Sv39 entries work and attributes come from the chip's fixed address map (the C906's "sysmap", set when the chip was made; see [openc906's `sysmap.h`](https://github.com/XUANTIE-RV/openc906/blob/main/C906_RTL_FACTORY/gen_rtl/mmu/rtl/sysmap.h) for the format).
-- **Caches:** off after the boot ROM (`mhcr` reads 0), and nothing in OpenSBI turns them on. Uncached, a system call takes about 10 µs and copying runs at a few MB/s. An M-mode stub run before OpenSBI turns them on with U-Boot's values (`mcor` 0x70013 to invalidate, `mhcr` 0x11ff, `mhint` 0x16e30c); with them on every check still passes and a system call takes 0.7 µs.
-- **Boot:** over USB in the boot ROM's FEL mode with [xfel](https://github.com/xboot/xfel): initialise DRAM, write OpenSBI's `fw_payload` (generic platform, the kernel as payload at 0x40200000, the device tree built in) to 0x40000000, and jump to it. The device tree is Linux's `sun20i-d1-mangopi-mq-pro` plus a `memory` node (0x40000000, 1 GiB) and a CLINT node (`thead,c900-clint` at 0x14000000); without the CLINT node the timer never fires. The console is OpenSBI's (SBI debug console over the 16550-style UART), so the kernel needs no driver.
-- **Recovery:** the D1 has no power-off, so a run ends with the core stopped in OpenSBI. Arming the SoC watchdog from FEL before the jump (base 0x020500a0, 16 s, whole-system reset) brings the board back to FEL after every run, with no SD card inserted; that bounds a run to 16 s.
-- **One hart,** so it measures single-core costs only, not the multi-CPU polling the rings are designed for ([[ipc-rings#What runs show]]).
-
-> [!todo] Not built
-> The board scripts (device-tree additions, firmware build, cache stub, watchdog, FEL load) exist only outside the repository. They are firmware-side; sap's code needed no change.
+QEMU is fine for correctness but distorts costs. A system call there takes microseconds, while memory copies run at close to host speed, so measurements such as the copy/transfer crossover ([[ipc-page-transfer#What it costs]]) need a real core. sap's is the human's MangoPi MQ-Pro, an Allwinner D1 with one T-Head C906 at 1 GHz and 1 GiB of memory ([[2026-10-16-2c1ac53c#m22|§m22]]). The unmodified kernel boots on it and every check passes; the board needs only firmware, a device tree and its caches turned on, all in `tools/board/d1/`. How it boots, and what the board is like, is in [[hw-d1-board]].
 
 > [!note] Arm and CHERI
 > CHERI-QEMU also emulates Arm's Morello. Whether to add an Arm port later is open; the human wasn't sure of the Arm boot path ([[2026-09-27-future-of-computing#m28|§m28]]).

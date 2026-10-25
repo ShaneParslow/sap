@@ -1,0 +1,23 @@
+// The device tree sap boots with on the MangoPi MQ-Pro: Linux's, plus the
+// two nodes the kernel needs that Linux gets elsewhere. OpenSBI builds it
+// into its firmware (build.sh) and passes it on to the kernel.
+
+/include/ "sun20i-d1-mangopi-mq-pro.dts"
+
+// Linux learns the memory size from U-Boot, which isn't in this boot path.
+/ {
+	memory@40000000 {
+		device_type = "memory";
+		reg = <0x40000000 0x40000000>;	// 1 GiB
+	};
+};
+
+// The C906's CLINT. OpenSBI's timer driver finds it here; without it, the
+// SBI timer never fires and the kernel's timer check hangs.
+/ {
+	clint: timer@14000000 {
+		compatible = "allwinner,sun20i-d1-clint", "thead,c900-clint";
+		reg = <0x14000000 0xc000>;
+		interrupts-extended = <&cpu0_intc 3>, <&cpu0_intc 7>;
+	};
+};

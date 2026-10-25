@@ -5,8 +5,13 @@ sap ("sap is for sapabilities") is a capability-based operating system built aro
 ## Layout
 
 - `kernel/` — kernel source (`kernel/arch/riscv/` first).
+- `abi/` — the kernel's binary interface, shared by the kernel and user code.
+- `user/` — userspace: runtime libraries in `user/lib/`, programs in `user/programs/`.
+- `interfaces/` — Cap'n Proto schemas.
 - `docs/` — the project wiki, an Obsidian vault maintained by the agent. Start at `docs/overview.md` and `docs/index.md`.
 - `tools/wiki/` — wiki helpers: `chat2md.py` (export transcripts), `pending.py` (find un-ingested sessions), `lint.py` (check the wiki).
+- `tools/board/` — building and booting on real boards (`d1/`: the MangoPi MQ-Pro over USB).
+- `toolchain/` — the CHERI toolchain and xfel as submodules, built by `toolchain/build.sh` into `toolchain/out/`.
 
 ## Working rules
 
@@ -14,7 +19,7 @@ sap ("sap is for sapabilities") is a capability-based operating system built aro
 - Keep a running session summary in `docs/sessions/` from the first substantive point of every session, so a cut-off session still leaves a record. Close out sessions by diffusing them into the wiki.
 - Code is the source of truth for current behavior; chats are the source of truth for decisions. Update `implemented` wiki pages in the same commit as the code they describe.
 - Run `python3 -I tools/wiki/lint.py` after changing the wiki.
-- Mark unfinished or temporary work in code with a `TODO:` comment saying what is missing and when it is needed (for example `// TODO: switch to a kernel stack via sscratch for user-mode traps (M2)`), so `grep -rn TODO kernel/` finds it. Don't leave it implicit in prose like "not yet" or "for now".
+- Mark unfinished or temporary work in code with a `TODO:` comment saying what is missing and when it is needed (for example `// TODO: switch to a kernel stack via sscratch for user-mode traps (M2)`), so `grep -rn TODO kernel/ user/` finds it. Don't leave it implicit in prose like "not yet" or "for now".
 - Commits are feature-sized: one feature per commit, each one building and booting. Split mixed work before committing.
 
 The full rules follow.

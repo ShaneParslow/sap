@@ -1,7 +1,7 @@
 ---
 status: hub
 summary: What sap assumes about hardware - a boring RISC-V core, CHERI as an optional accelerator, memory topology exposed as capabilities, and devices behind queue-based class interfaces.
-updated: 2026-10-08
+updated: 2026-10-24
 ---
 
 # Hardware
@@ -11,6 +11,7 @@ The chat concluded that the instruction set is the least consequential choice in
 | Page | Status | Summary |
 |---|---|---|
 | [[hw-isa]] | decided | RISC-V first. Why a plain RISC core rather than a language-specific or VLIW design, and how RISC-V, Arm and x86 compare for a microkernel. |
+| [[hw-d1-board]] | implemented | The one real board: a MangoPi MQ-Pro (Allwinner D1), booted over USB with `tools/board/d1`; what it needs and what it measured. |
 | [[hw-cheri]] | decided | CHERI support is wanted from the start, as an accelerator never required for correctness. What it is, its status, what it fixes and what it doesn't. |
 | [[hw-memory-topology]] | exploring | Memory tiers (HBM, unified, CXL), and memory as a capability with placement attributes. |
 | [[hw-device-discovery]] | proposed | How hardware is described (device tree, ACPI); a minimal DTB parser in the kernel, the complete one in a userspace device manager. |

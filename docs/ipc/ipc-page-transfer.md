@@ -56,7 +56,7 @@ The sender checks returned capabilities the same way, because the receiver could
 - **ring copy:** check copies the bytes into a ring of 32 data pages, the peer copies them out and sums them;
 - **page transfer:** check copies the bytes into its frames, and the peer sums them in place.
 
-On QEMU 11.1 (one CPU, release build, ranges over four boots) and on the Allwinner D1 board ([[hw-isa#Real hardware]]: one C906 at 1 GHz, caches on, release build, two boots, which agreed to within 1%):
+On QEMU 11.1 (one CPU, release build, ranges over four boots) and on the Allwinner D1 board ([[hw-d1-board]]: one C906 at 1 GHz, caches on, release build, two boots, which agreed to within 1%):
 
 | Bytes | QEMU copy | QEMU transfer | D1 copy | D1 transfer |
 |---|---|---|---|---|
