@@ -1,10 +1,10 @@
 // Building a user program from a build script, so the program that runs it
 // can embed the result with `include_bytes!`. Shared by kernel/build.rs (the
-// root task) and user/init/build.rs (the programs init loads) through
+// root task) and user/programs/init/build.rs (the programs init loads) through
 // `include!`, since a build-dependency crate in the workspace would be
 // checked for the bare-metal target too.
 
-/// Build the program in `user/<name>` in release mode and return its ELF's
+/// Build the program in `user/programs/<name>` in release mode and return its ELF's
 /// path. `user` is the path of the `user/` directory.
 ///
 /// Cargo runs from the program's directory, so user/.cargo/config.toml (the
@@ -15,7 +15,7 @@
 fn build_user_program(user: &std::path::Path, name: &str) -> std::path::PathBuf {
     let target_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap()).join(name);
     let status = std::process::Command::new(std::env::var("CARGO").unwrap())
-        .current_dir(user.join(name))
+        .current_dir(user.join("programs").join(name))
         .args(["build", "--release", "--target-dir"])
         .arg(&target_dir)
         .env_remove("CARGO_ENCODED_RUSTFLAGS")

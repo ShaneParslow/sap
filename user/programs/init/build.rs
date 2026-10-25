@@ -5,9 +5,9 @@
 use std::fmt::Write;
 use std::path::PathBuf;
 
-include!("../build_program.rs");
+include!("../../build_program.rs");
 
-/// The programs in the boot pack, by crate name under user/.
+/// The programs in the boot pack, by crate name under user/programs/.
 const PROGRAMS: &[&str] = &["check", "peer"];
 
 fn main() {
@@ -15,7 +15,7 @@ fn main() {
     let mut pack = String::new();
     let mut table = String::from("pub static PROGRAMS: &[Program] = &[\n");
     for &name in PROGRAMS {
-        let elf = build_user_program(&dir.join(".."), name);
+        let elf = build_user_program(&dir.join("../.."), name);
         let image = std::fs::read(&elf).unwrap_or_else(|e| panic!("reading {}: {e}", elf.display()));
         let hash = blake3::hash(&image);
         let constant = name.to_uppercase();

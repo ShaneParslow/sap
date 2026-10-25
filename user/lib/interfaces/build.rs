@@ -2,7 +2,7 @@
 //! `capnp` schema compiler on the PATH.
 
 fn main() {
-    let schemas = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../interfaces");
+    let schemas = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../interfaces");
     let mut command = capnpc::CompilerCommand::new();
     command.src_prefix(&schemas);
     for schema in ["check.capnp", "echo.capnp", "peer.capnp"] {

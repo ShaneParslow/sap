@@ -10,4 +10,4 @@ test = false
 bench = false
 
 [dependencies]
-sap-abi = { path = "../../abi" }
+sap-abi = { path = "../../../abi" }

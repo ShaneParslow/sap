@@ -1,7 +1,7 @@
 //! Loading the root task: the one program the kernel starts by itself, as
 //! seL4 does. Every other program is loaded by the root task, which will
 //! become the process manager (M7), so this is the only ELF loader in the
-//! kernel and it handles only what `user/init` produces: a static,
+//! kernel and it handles only what `user/programs/init` produces: a static,
 //! position-independent RISC-V executable whose only relocations are
 //! relative ones.
 //!

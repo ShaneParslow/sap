@@ -11,7 +11,7 @@ bench = false
 
 [dependencies]
 capnp = { version = "0.27.2", default-features = false }
-sap-interfaces = { path = "../interfaces" }
-sap-rt = { path = "../rt" }
-sap-loader = { path = "../loader" }
-sap-ring = { path = "../ring" }
+sap-interfaces = { path = "../../lib/interfaces" }
+sap-rt = { path = "../../lib/rt" }
+sap-loader = { path = "../../lib/loader" }
+sap-ring = { path = "../../lib/ring" }
