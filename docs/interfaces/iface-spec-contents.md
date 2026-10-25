@@ -1,7 +1,7 @@
 ---
 status: decided
 summary: An interface spec is the language-neutral contract between components - types (with capabilities as owned or borrowed), operations, protocol via ownership, failure modes, intent, hash identity and a conformance suite. Behavioral contracts and proofs are optional attachments consumed by languages that support them.
-updated: 2026-10-08
+updated: 2026-10-24
 sources: ["[[2026-09-27-future-of-computing#m8|§m8]]", "[[2026-09-27-future-of-computing#m9|§m9]]", "[[2026-09-27-future-of-computing#m10|§m10]]", "[[2026-09-27-future-of-computing#m11|§m11]]", "[[2026-09-27-future-of-computing#m17|§m17]]", "[[2026-09-27-future-of-computing#m19|§m19]]"]
 ---
 
@@ -34,6 +34,10 @@ Ownership and protocol are the small amount of behavior that has to be in the un
 Contracts (pre/postconditions, invariants, refinement types like "returns sorted"), cost bounds, and proofs are **attachments keyed to the interface hash**. Languages that can use them (Dafny, Verus, Bend, F\*) consume them; Bend, for example, could compile an interface's contracts into laws its compiler requires proofs for. Every other language ignores them ([[2026-09-27-future-of-computing#m11|§m11]]).
 
 When claims are attached, each is labeled with how it is enforced: *proved*, *tested*, *monitored at runtime*, or *stated only*. Runtime monitoring is cheap here because every cross-component call already passes a typed boundary ([[2026-09-27-future-of-computing#m9|§m9]]).
+
+**Between tests and proofs** (proposed by the agent, 2026-10-24, [[2026-10-22-e547b584#m2|§m2]]): an *executable model* of an interface, a small state machine its author writes once in any language, serves three purposes. It generates conformance tests (model-based testing); it checks a live implementation through a monitor interposed on its capability, which needs no cooperation from either side since the client can simply be given the monitor's capability; and it is the specification a later proof targets. That moves a claim from *stated* to *monitored* or *tested* without anyone writing a proof. For the process factory, the model is the handle's states (running, ended, waited) and which calls each allows.
+
+**Authority bounds are the behavior the system does guarantee.** A schema and its contracts are promises about what an implementation will do; the capabilities it holds fix what it *can* do, whatever it promises. A `resize` program given no network capability can't send the image anywhere, proved or not ([[cap-model]]). So functional correctness is optional and attached, while confinement holds for every program.
 
 ## High-level spec and low-level ABI
 

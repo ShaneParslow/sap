@@ -47,7 +47,7 @@ The human's proposed order (console, log, isolation, mapping, IPC, processes, st
 
 These can happen at any time and feed the milestones above.
 
-- **D1. Specify one small interface completely** (a clipboard or a key-value store): schema, ownership, failure modes and idempotency, intent, conformance tests. Shows what the spec format is missing ([[2026-09-27-future-of-computing#m11|§m11]]; [[iface-spec-contents]]).
+- **D1. Specify one small interface completely:** the process factory, which exists and already has a conformance suite in `check_factory` (chosen 2026-10-24 over the chat's clipboard or key-value store). Schema, ownership, failure modes and idempotency, intent, conformance tests, and an executable model of the handle's states. Shows what the spec format is missing ([[2026-09-27-future-of-computing#m11|§m11]]; [[iface-spec-contents]], [[iface-capnp#Coverage]], [[prog-process-factory]]).
 - **D2. Use-case walkthroughs for the object store**, before committing to its design ([[2026-09-27-future-of-computing#m9|§m9]]). Each stresses naming, revocation or performance differently:
   1. sharing a live structured object instead of a screenshot;
   2. an agent reorganizing a photo library under a time and capability budget;

@@ -3,7 +3,7 @@ status: implemented
 summary: The user-side crates every sap program links today - sap-sys (stateless system-call and invocation wrappers), sap-process (the process ABI - startup record, fixed slots, bootstrap message and launcher calls), sap-rt (the thread start convention, reading the startup record and bootstrap message, entry point, debug console, panic handler, and a runtime with a slot allocator, notification-backed mutexes and an optional heap for alloc), sap-ring, and sap-loader, the ELF loader the root task uses to start other programs in their own processes.
 updated: 2026-10-24
 code: [abi/lib.rs, user/lib/process/lib.rs, user/lib/interfaces/factory.rs, user/lib/rt/process.rs, interfaces/peer.capnp, user/lib/sys/arch/riscv.rs, user/lib/rt/arch/riscv.rs, user/lib/loader/arch/riscv.rs, user/lib/sys/address.rs, clippy.toml, user/lib/rt/lib.rs, user/lib/rt/runtime.rs, user/lib/rt/Cargo.toml, user/lib/sys/lib.rs, user/lib/rt/slots.rs, user/lib/rt/sync.rs, user/lib/rt/heap.rs, user/lib/sys/vspace.rs, user/lib/sys/sys.rs, user/lib/sys/ipc.rs, user/lib/loader/lib.rs, user/lib/ring/lib.rs, user/lib/rt/debug.rs, user/programs/peer/main.rs, user/programs/init/main.rs, user/programs/init/build.rs, user/programs/init/pack.rs, user/programs/check/rt.rs, user/programs/check/processes.rs, user/programs/check/build.rs, interfaces/check.capnp, user/programs/init/factory.rs, kernel/root_task.rs]
-verified: deed361
+verified: 41820fb
 sources: ["[[2026-10-08-22c3947b-wiki-setup]]"]
 ---
 

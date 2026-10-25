@@ -1,7 +1,7 @@
 ---
 status: decided
 summary: Cap'n Proto is sap's schema language, wire format and RPC - zero-copy layout, append-only evolution, safe reads of untrusted data, capability RPC with promise pipelining - extended with $own/$borrow annotations rather than forked. Replaced WIT.
-updated: 2026-10-19
+updated: 2026-10-24
 sources: ["[[2026-09-27-future-of-computing#m5|§m5]]", "[[2026-09-27-future-of-computing#m13|§m13]]", "[[2026-09-27-future-of-computing#m15|§m15]]", "[[2026-09-27-future-of-computing#m22|§m22]]", "[[2026-09-27-future-of-computing#m23|§m23]]", "[[2026-09-27-future-of-computing#m25|§m25]]", "[[2026-09-27-future-of-computing#m28|§m28]]"]
 ---
 
@@ -29,6 +29,25 @@ sources: ["[[2026-09-27-future-of-computing#m5|§m5]]", "[[2026-09-27-future-of-
 - **Builder APIs are clunky** in most languages.
 - **No own/borrow distinction:** capabilities are reference-counted references. Added below.
 - **Implementation quality varies** outside C++ (the reference implementation) and Rust. Check which RPC features capnproto-rust covers before committing ([[2026-09-27-future-of-computing#m23|§m23]]).
+
+## Coverage
+
+Cap'n Proto describes the shape of every declared interface in sap, but plays a different part at each layer. The human asked whether it suits all of them, given that shared-memory IPC is only one ([[2026-10-22-e547b584#m2|§m2]]); the table is the agent's answer, not yet discussed.
+
+| Use | What Cap'n Proto provides | What is missing |
+|---|---|---|
+| Messages between processes | schema and wire format, read in place | nothing known; built (M5, [[ipc-rings]]) |
+| Kernel invocations | schema only, as an interface definition language: the generated binding makes system calls with arguments in registers, as seL4 generates its stubs from XML ([[kernel-sel4-differences]]) | the schema itself (D5) |
+| RPC between processes and machines | schema, wire format and protocol, including capabilities passed in messages and promise pipelining | capability tables in sap's messages (M6); capnproto-rust's coverage (D3) |
+| Stored values | schema and encoding; capability fields become sturdy refs ([[store-sturdy-refs]]) | a value's hash needs one encoding per value; Cap'n Proto defines a canonical form (one segment, no padding) for hashing and signing, which the store would have to use |
+| Behavior | annotations only | everything else, as attachments ([[iface-spec-contents#The optional part]]) |
+
+So it is the shape layer as far as anything known goes, and it is not a behavior language and shouldn't become one. Three things could still push against it, and specifying the process factory completely (roadmap D1) is where they would show first:
+- **Protocol rules it can't state.** A call that consumes the capability it is made on, such as `WAIT` on a process handle, which stops working afterwards ([[prog-process-factory]]), needs `$own` on the receiver, not only on fields.
+- **Refinements,** such as bounds on an integer, which become annotations with generated checks ([[iface-spec-contents#The universal part]]).
+- **Implementation quality** outside C++ and Rust.
+
+Prior art worth borrowing from rather than switching to: Fuchsia's FIDL puts handle types and their rights in the type system ([[fuchsia]]), and AWS Smithy has a vocabulary of behavioral traits (`@idempotent`, `@readonly`, `@paginated`) for the annotations below.
 
 ## Ownership annotations (proposed)
 

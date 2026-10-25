@@ -1,7 +1,7 @@
 ---
 status: hub
 summary: The graph is sap's universal data model - immutable content-addressed values, mutable refs and live objects, transient, persistent or remote - and the store is its persistent part; both live in userspace hosts.
-updated: 2026-10-08
+updated: 2026-10-24
 ---
 
 # Graph and store
@@ -18,6 +18,7 @@ Pages go from what the store is (the object graph), to the data model, to how ca
 | [[store-granting-access]] | proposed | The powerbox, root authority at login, snapshots versus live shares, and budgets for agents. |
 | [[store-distribution]] | exploring | One store over several machines: free replication of values, one home node per ref, offline merges, device keys, guest sessions. |
 | [[store-on-disk-format]] | exploring | An append-only log of content-addressed blobs plus an index; Git's formats as prior art. |
+| [[store-restorable-state]] | exploring | All user state as declared values in the store, so a whole session comes back after shutdown without a memory image; ownership of state versus least authority; crash-only components. |
 | [[store-use-cases]] | exploring | Walkthroughs (roaming preferences with live reload, granting a website data, a system agent, device roles, Linux) and the requirements they produce. |
 
 The store is also the human's user-held personal data store from [[vision-owner-control]], and where program code lives by hash ([[kernel-process-model]], [[prog-representation]]).
