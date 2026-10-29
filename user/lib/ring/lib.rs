@@ -1,6 +1,6 @@
 //! Single-producer, single-consumer rings of variable-length records in
 //! shared memory, with notifications as doorbells: sap's channel design
-//! (ipc-channels in the wiki).
+//! (design/ipc.md in sap-docs).
 //!
 //! One direction of a channel is a run of pages (`Layout`):
 //! - a **producer page**, written by the producer: its index and its
@@ -22,7 +22,7 @@
 //! references is undefined behavior in Rust. So `Consumer::recv` reads the
 //! header once, checks it against the ring, and copies the body out with
 //! volatile reads; the caller works on its own copy (the single-fetch rule
-//! of ipc-validation in the wiki). `Consumer::recv_in_place` lends the body
+//! of design/ipc.md in sap-docs). `Consumer::recv_in_place` lends the body
 //! in place instead, for a producer trusted not to write what it published.
 //!
 //! **Waiting.** Neither side makes a system call while the other keeps up: a
@@ -316,7 +316,7 @@ impl Consumer {
     /// # Safety
     /// The producer must not write a record after publishing it: reading
     /// memory another process writes is undefined behavior in Rust. Only
-    /// for a producer in the same trust domain (ipc-transports in the wiki).
+    /// for a producer in the same trust domain (design/ipc.md in sap-docs).
     pub unsafe fn recv_in_place<R>(&mut self, f: impl FnOnce(Record, &[u8]) -> R) -> Result<R, RingError> {
         let (record, at, end) = self.next()?;
         // SAFETY: inside the ring (checked by `next`), not written while lent

@@ -5,8 +5,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 -I \"$CLAUDE_PROJECT_DIR/tools/wiki/pending.py\" --hook 2>/dev/null || true",
-            "statusMessage": "Checking for un-ingested sessions"
+            "command": "python3 -I \"$HOME/src/sap-docs/tools/sync.py\" --hook 2>/dev/null || true",
+            "statusMessage": "Syncing transcripts to sap-docs"
           }
         ]
       }

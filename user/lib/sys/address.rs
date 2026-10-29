@@ -5,7 +5,7 @@
 //! address. Every such pointer comes from `mapped`, and the user crates deny
 //! casting integers to pointers (`implicit_provenance_casts`), so porting to
 //! CHERI, where a pointer can't be made from an integer, changes this
-//! function and nothing else (hw-cheri in the wiki).
+//! function and nothing else (design/cheri.md in sap-docs).
 
 /// A pointer to memory mapped at `address` in this address space.
 ///

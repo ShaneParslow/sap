@@ -5,7 +5,7 @@
 //! thread to the tail of its queue.
 //!
 //! TODO: scheduling contexts (CPU time as a capability, donation on Call),
-//! following seL4's MCS configuration (kernel-scheduling in the wiki).
+//! following seL4's MCS configuration (design/kernel.md in sap-docs).
 
 use crate::global::Global;
 use crate::thread::{Tcb, ThreadState, VSPACE_SLOT};

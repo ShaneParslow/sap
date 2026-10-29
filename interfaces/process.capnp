@@ -1,6 +1,6 @@
 @0xb2a2482a958ff829;
 # The process factory: how a program asks the process manager to start
-# another, and the handle it gets back (prog-process-factory in the wiki).
+# another, and the handle it gets back (design/processes.md in sap-docs).
 # `init` serves both interfaces.
 #
 # Until Cap'n Proto RPC runs over sap's IPC (M6), a call is one IPC

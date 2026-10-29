@@ -22,7 +22,8 @@ pub fn init(timebase_hz: u64) {
     TIMEBASE_HZ.store(timebase_hz, Ordering::Relaxed);
     // User mode may read `time` (`rdtime`), as on Linux, for measuring.
     // TODO: a configuration with time protection would hide it, as part of
-    // closing timing channels between partitions (sel4 in the wiki).
+    // closing timing channels between partitions (design/prior-art.md in
+    // sap-docs).
     // SAFETY: only grants U-mode read access to the time counter.
     unsafe { riscv::register::scounteren::set_tm() };
 }

@@ -1,6 +1,6 @@
 //! Page transfer: messages too large for a ring travel as whole frames,
 //! whose capabilities the kernel moves from sender to receiver (page
-//! transfer in ipc-channels in the wiki).
+//! transfer in design/ipc.md in sap-docs).
 //!
 //! The sender writes the message into frames it owns, unmaps them, and
 //! calls the receiver's endpoint, moving the frame capabilities with the
@@ -25,7 +25,7 @@
 //! TODO: one call carries at most `MAX_PAGES` 4 KiB frames (64 KiB). Larger
 //! messages need 2 MiB frames or several calls, and mapping a batch of
 //! frames in one invocation would cut the system calls per page (M5
-//! measurement, in ipc-page-transfer in the wiki).
+//! measurement, in design/ipc.md in sap-docs).
 
 use sap_sys::abi::{attr, object, rights, MAX_EXTRA_CAPS};
 use sap_sys::address::mapped;

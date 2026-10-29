@@ -46,7 +46,7 @@ pub fn shutdown(failure: bool) {
 ///
 /// TODO: each call traps into firmware (hundreds of cycles). Hardware with
 /// the Sstc extension lets the kernel write `stimecmp` directly; use it when
-/// present (pick the path at boot, see hw-isa in the wiki).
+/// present (pick the path at boot, see design/hardware.md in sap-docs).
 pub fn set_timer(deadline: u64) {
     sbi_rt::set_timer(deadline);
 }
