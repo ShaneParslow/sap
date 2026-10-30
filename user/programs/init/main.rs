@@ -86,10 +86,8 @@ fn sap_main(boot_info: usize, _: usize, _: usize) -> ! {
     let (ep, mut reply) = (new_object(own, object::ENDPOINT), new_object(own, object::REPLY));
     let mut supervisor = Supervisor::new(ep, pool, parent);
     supervisor.hold("asidPool", init_slot::ASID_POOL);
-    for (i, (cptr, _)) in spare_untyped(info, own, pool).enumerate() {
-        supervisor.hold(alloc::format!("untyped.{i}"), cptr);
-    }
-    boot(info, own, pool, &mut supervisor);
+    supervisor.hold_group("ram", spare_untyped(info, own, pool).map(|(cptr, _)| cptr).collect());
+    boot(info, &mut supervisor);
 
     let mut words = [0usize; MAX_MESSAGE_LENGTH];
     loop {
@@ -184,26 +182,19 @@ fn bootstrap<T: capnp::traits::Owned>(build: impl FnOnce(T::Builder<'_>)) -> Vec
 }
 
 /// Enact the boot composition: the memory manager, with copies of every
-/// spare untyped region as its RAM, serving accounts; the log service,
+/// spare untyped region as its RAM (the `ram` group), serving accounts; the log service,
 /// serving its export; a test service restarted when it fails; then
 /// `check`, with a copy of the ASID pool, the instance API, the log and the
 /// test service as its imports. All but the memory manager
 /// get accounts. Any of them but the test service ends the boot when it
 /// ends.
-fn boot(info: &BootInfo, own: usize, pool: usize, supervisor: &mut Supervisor) {
-    let count = spare_untyped(info, own, pool).count();
+fn boot(info: &BootInfo, supervisor: &mut Supervisor) {
 
     // The memory manager's bootstrap message. Imports: its export, then
-    // the untyped regions in boot order.
+    // the `ram` group.
     let memory = bootstrap::<memory_imports::Owned>(|mut root| {
         root.set_endpoint(0);
-        let mut list = root.init_ram(count as u32);
-        for (i, (_, &UntypedDesc { paddr, size_bits, .. })) in spare_untyped(info, own, pool).enumerate() {
-            let mut region = list.reborrow().get(i as u32);
-            region.set_import(1 + i as u32);
-            region.set_size_bits(size_bits);
-            region.set_paddr(paddr as u64);
-        }
+        root.set_ram(1);
     });
     let log = bootstrap::<log_imports::Owned>(|mut root| root.set_endpoint(0));
     let restartable = bootstrap::<peer_imports::Owned>(|mut root| {
@@ -245,12 +236,10 @@ fn boot(info: &BootInfo, own: usize, pool: usize, supervisor: &mut Supervisor) {
     limits.set_priority(255);
     limits.set_cnode_bits(12);
     limits.set_stack_pages(4);
-    let mut imports = component.init_imports(1 + count as u32);
+    let mut imports = component.init_imports(2);
     imports.reborrow().get(0).set_serve("account");
     // Copied, never moved: the supervisor keeps the right to revoke them.
-    for i in 0..count {
-        imports.reborrow().get(1 + i as u32).init_held().set_name(alloc::format!("untyped.{i}").as_str());
-    }
+    imports.get(1).init_held().set_name("ram");
 
     let mut component = components.reborrow().get(1);
     component.set_name("log");

@@ -16,6 +16,10 @@ pub struct Identity {
     pub object_type: usize,
     /// `sap_abi::identify` flags.
     pub flags: usize,
+    /// For untyped memory: log2 of its size, and its physical address; 0
+    /// for anything else.
+    pub size_bits: usize,
+    pub paddr: usize,
 }
 
 impl Identity {
@@ -70,6 +74,11 @@ impl SlotRef {
     /// before invoking a capability someone else sent: invoking one of
     /// unexpected type does what that type does (on an endpoint, it calls).
     pub fn identify(self) -> Result<Identity, Error> {
-        invoke(self.root, label::CNODE_IDENTIFY, &[self.index, self.depth], &[]).map(|r| Identity { object_type: r[0], flags: r[1] })
+        invoke(self.root, label::CNODE_IDENTIFY, &[self.index, self.depth], &[]).map(|r| Identity {
+            object_type: r[identify::OBJECT_TYPE],
+            flags: r[identify::FLAGS],
+            size_bits: r[identify::SIZE_BITS],
+            paddr: r[identify::PADDR],
+        })
     }
 }

@@ -162,9 +162,20 @@ fn cnode(cnode: Cap, m: &mut Message) -> Result {
             if matches!(cap, Cap::Arch(a) if a.is_mapped()) {
                 flags |= identify::MAPPED;
             }
-            m.set_result(0, object_type)?;
-            m.set_result(1, flags)?;
-            Ok(2)
+            let (size_bits, paddr) = match cap {
+                Cap::Untyped { size_bits, device, base, .. } => {
+                    if device {
+                        flags |= identify::DEVICE;
+                    }
+                    (size_bits as usize, base)
+                }
+                _ => (0, 0),
+            };
+            m.set_result(identify::OBJECT_TYPE, object_type)?;
+            m.set_result(identify::FLAGS, flags)?;
+            m.set_result(identify::SIZE_BITS, size_bits)?;
+            m.set_result(identify::PADDR, paddr)?;
+            Ok(identify::LENGTH)
         }
         op @ (label::CNODE_COPY | label::CNODE_MINT | label::CNODE_MOVE) => {
             let dest = target(0, 1)?;

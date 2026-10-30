@@ -62,6 +62,10 @@ const OBJECT_SLOTS: usize = 256;
 /// How many times in a row an instance may fail within a second of
 /// starting before the supervisor stops restarting it.
 const MAX_RAPID: u32 = 3;
+/// The groups a supervisor may hold: names standing for a set of
+/// capabilities whose size depends on the machine. `ram`: the RAM untyped
+/// regions, for the memory manager.
+pub const GROUPS: &[&str] = &["ram"];
 /// The rights of a client's capability to an export: call, and pass
 /// capabilities both ways.
 const CLIENT_RIGHTS: usize = rights::WRITE | rights::GRANT | rights::GRANT_REPLY;
@@ -183,6 +187,8 @@ pub struct Supervisor {
     /// memory manager runs, and the controller's.
     account: Option<(usize, usize)>,
     held: Vec<(String, usize)>,
+    /// The groups it holds, each a name of `GROUPS`.
+    groups: Vec<(&'static str, Vec<usize>)>,
     exports: Vec<Export>,
     clients: Vec<Client>,
     /// The badge the next client gets: from `ROUTE_BADGES` up, so neither
@@ -204,6 +210,7 @@ impl Supervisor {
             pool,
             account: None,
             held: Vec::new(),
+            groups: Vec::new(),
             exports: Vec::new(),
             clients: Vec::new(),
             next_badge: launcher::ROUTE_BADGES,
@@ -219,6 +226,16 @@ impl Supervisor {
 
     fn held(&self, name: &str) -> Option<usize> {
         self.held.iter().find(|(n, _)| n == name).map(|&(_, cap)| cap)
+    }
+
+    /// Hold `caps` as group `name`, for routes to give together.
+    pub fn hold_group(&mut self, name: &'static str, caps: Vec<usize>) {
+        assert!(GROUPS.contains(&name), "init: no group {name}");
+        self.groups.push((name, caps));
+    }
+
+    fn group(&self, name: &str) -> Option<&[usize]> {
+        self.groups.iter().find(|(n, _)| *n == name).map(|(_, caps)| &caps[..])
     }
 
     fn export(&self, component: &str, name: &str) -> Option<usize> {
@@ -393,14 +410,21 @@ impl Supervisor {
             Held(usize, bool),
             Client(usize),
             Copy(usize),
+            /// A group, copied: it must be the last import.
+            Group(Vec<usize>),
         }
         let mut sources = Vec::new();
-        for route in component.get_imports().map_err(bad)? {
+        let routes = component.get_imports().map_err(bad)?;
+        for (i, route) in routes.iter().enumerate() {
             sources.push(match route.which().map_err(|_| StartError::BadComponent)? {
                 route::Held(held) => {
                     let held = held.map_err(bad)?;
-                    let cap = self.held(text(held.get_name())?).ok_or(StartError::BadComponent)?;
-                    Source::Held(cap, held.get_move())
+                    let name = text(held.get_name())?;
+                    match self.group(name) {
+                        Some(group) if i + 1 == routes.len() as usize && !held.get_move() => Source::Group(group.to_vec()),
+                        Some(_) => return Err(StartError::BadComponent),
+                        None => Source::Held(self.held(name).ok_or(StartError::BadComponent)?, held.get_move()),
+                    }
                 }
                 route::Export(to) => {
                     let to = to.map_err(bad)?;
@@ -430,6 +454,10 @@ impl Supervisor {
         let (mut imports, mut moved, mut clients) = (Vec::new(), Vec::new(), Vec::new());
         for source in sources {
             imports.push(match source {
+                Source::Group(caps) => {
+                    imports.extend(caps.iter().map(|&cap| (cap, Give::Copy(rights::ALL))));
+                    continue;
+                }
                 Source::Held(cap, true) => {
                     moved.push(cap);
                     (cap, Give::Move)

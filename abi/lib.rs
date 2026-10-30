@@ -112,6 +112,16 @@ pub mod identify {
     pub const EXCLUSIVE: usize = 1 << 0;
     /// A frame or page-table capability that is mapped somewhere.
     pub const MAPPED: usize = 1 << 1;
+    /// Untyped memory that is a device's, not RAM.
+    pub const DEVICE: usize = 1 << 2;
+
+    /// Result word indices. For untyped memory, `SIZE_BITS` and `PADDR`
+    /// say how large it is and where; for anything else they are 0.
+    pub const OBJECT_TYPE: usize = 0;
+    pub const FLAGS: usize = 1;
+    pub const SIZE_BITS: usize = 2;
+    pub const PADDR: usize = 3;
+    pub const LENGTH: usize = 4;
 }
 
 /// Invocation labels: the operation requested on the invoked capability.
@@ -135,8 +145,9 @@ pub mod label {
     /// MR0 = index, MR1 = depth. Describe the capability in the slot without
     /// invoking it: invoking a capability of unknown type can do anything
     /// its type does (on an endpoint, it is an IPC call). Returns MR0 = its
-    /// object type (`object`), MR1 = `identify` flags; FAILED_LOOKUP if the
-    /// slot is empty.
+    /// object type (`object`), MR1 = `identify` flags, and for untyped
+    /// memory MR2 = log2 of its size and MR3 = its physical address
+    /// (`identify::SIZE_BITS`, `PADDR`); FAILED_LOOKUP if the slot is empty.
     pub const CNODE_IDENTIFY: usize = 23;
 
     // Untyped memory.

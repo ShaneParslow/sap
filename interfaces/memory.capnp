@@ -84,12 +84,8 @@ struct MemoryImports {
   # The receive side of its export, with all rights: it mints the
   # accounts' capabilities from it.
   endpoint @0 :UInt32;
-  # The RAM it manages, as untyped regions, in consecutive imports.
-  ram @1 :List(Region);
-}
-
-struct Region {
-  import @0 :UInt32;
-  sizeBits @1 :UInt8;
-  paddr @2 :UInt64;
+  # The first of the untyped regions of RAM it manages: the `ram` group,
+  # which runs to the end of its imports. Each one's size and address come
+  # from identifying it.
+  ram @1 :UInt32;
 }

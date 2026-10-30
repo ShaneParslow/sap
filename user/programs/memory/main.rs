@@ -1,5 +1,5 @@
 //! The memory manager: holds the machine's RAM, as untyped regions from its
-//! supervisor, and serves memory accounts (`interfaces/memory.capnp`) from
+//! supervisor (the `ram` group), and serves memory accounts (`interfaces/memory.capnp`) from
 //! it, as one pool.
 //!
 //! RAM is handed out in power-of-two chunks, split from the regions as a
@@ -37,7 +37,7 @@ use sap_interfaces::memory_capnp::{memory_imports, Status, ROOT_CONTROLLER, ROOT
 const _: () = assert!(ROOT_HOLDER == 2 && ROOT_CONTROLLER == 3, "the root account is index 0");
 use sap_interfaces::{methods, words};
 use sap_process::process_slot;
-use sap_rt::abi::{object, rights, MAX_MESSAGE_LENGTH};
+use sap_rt::abi::{identify, object, rights, MAX_MESSAGE_LENGTH};
 use sap_rt::cnode::SlotRef;
 use sap_rt::ipc::{self, Give};
 use sap_rt::runtime::{self, Memory, Resources};
@@ -367,15 +367,18 @@ fn encode<T: capnp::traits::Owned>(out: &mut [usize], build: impl FnOnce(T::Buil
     words::pack(&message, out).expect("memory: a reply too large")
 }
 
-/// The manager's endpoint and RAM from its bootstrap message.
+/// The manager's endpoint from its bootstrap message, and its RAM: the
+/// imports from `ram` to the end, each described by identifying it.
 fn manager(startup: &'static sap_process::Startup) -> core::result::Result<Manager, capnp::Error> {
     let segments = [process::bootstrap(startup)];
     let reader = Reader::new(SegmentArray::new(&segments), ReaderOptions::new());
     let imports = reader.get_root::<memory_imports::Reader>()?;
     let import = |index: u32| process::import(startup, index).expect("memory: no such import");
     let mut blocks = Vec::new();
-    for region in imports.get_ram()? {
-        blocks.push(Block { slot: import(region.get_import()), bits: region.get_size_bits(), paddr: region.get_paddr(), parent: None, state: State::Free });
+    for cap in import(imports.get_ram())..startup.imports.end {
+        let region = slot(cap).identify().expect("memory: a RAM import");
+        assert!(region.object_type == object::UNTYPED && region.flags & identify::DEVICE == 0, "memory: RAM that isn't RAM");
+        blocks.push(Block { slot: cap, bits: region.size_bits as u8, paddr: region.paddr as u64, parent: None, state: State::Free });
     }
     let total = blocks.iter().map(|b| 1u64 << b.bits).sum();
     let root = Account { parent: None, reservation: total, limit: total, own: 0, used: 0, reserved_by_children: 0, holder: 0, controller: 0, alive: true };

@@ -3,7 +3,7 @@
 //! and ending an account.
 
 use sap_process::process_slot;
-use sap_rt::abi::{error, object};
+use sap_rt::abi::{error, identify, object};
 use sap_rt::account::{self, Error, Status, Usage};
 use sap_rt::cnode::SlotRef;
 use sap_rt::{println, untyped};
@@ -35,7 +35,8 @@ pub fn check_accounts(info: &Env) {
 
     // Chunks up to the limit, beyond the reservation from the pool.
     let a = account::allocate(holder, 20, cnode, base + 2).expect("a chunk within the limit");
-    assert_eq!(slot(base + 2).identify().map(|i| i.object_type), Ok(object::UNTYPED), "a chunk is untyped memory");
+    let chunk = slot(base + 2).identify().map(|i| (i.object_type, i.size_bits, i.paddr as u64, i.flags & identify::DEVICE));
+    assert_eq!(chunk, Ok((object::UNTYPED, 20, a.paddr, 0)), "a chunk is untyped RAM of its size, where allocate said");
     assert_eq!(untyped::retype(base + 2, object::FRAME_4K, 0, in_root, base + 3, 1), Ok(()));
     let b = account::allocate(holder, 20, cnode, base + 4).expect("a chunk beyond the reservation");
     assert_ne!(a.paddr, b.paddr);
