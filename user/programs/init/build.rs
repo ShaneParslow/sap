@@ -9,7 +9,7 @@ include!("../../build_program.rs");
 
 
 /// The programs in the boot pack, by crate name under user/programs/.
-const PROGRAMS: &[&str] = &["check", "log", "memory", "peer"];
+const PROGRAMS: &[&str] = &["check", "log", "memory", "peer", "resolver"];
 
 fn main() {
     let dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
@@ -31,6 +31,7 @@ fn main() {
     let manifests = sap_manifests::manifests(&request);
 
     let mut pack = String::new();
+    let mut available = Vec::new();
     let mut table = String::from("pub static PROGRAMS: &[Program] = &[\n");
     for &name in PROGRAMS {
         let elf = build_user_program(&dir.join("../.."), name);
@@ -40,9 +41,17 @@ fn main() {
         writeln!(pack, "/// `{name}`: BLAKE3 {}.", hash.to_hex()).unwrap();
         writeln!(pack, "pub const {constant}: Hash = Hash({:?});", hash.as_bytes()).unwrap();
         let manifest = manifests.get(name).unwrap_or_else(|| panic!("{name} declares no bootstrap struct ($Sap.program)"));
+        available.push((name.to_string(), *hash.as_bytes(), manifest.clone()));
         writeln!(pack, "static {constant}_MANIFEST: [u64; {}] = {manifest:?};", manifest.len()).unwrap();
         writeln!(table, "    Program {{ name: {name:?}, hash: {constant}, image: include_bytes!({:?}), manifest: &{constant}_MANIFEST }},", elf.display().to_string()).unwrap();
     }
     table.push_str("];\n");
+    // What to run: `SAP_BOOT`, a request in boot/ or a program's name.
+    let boot = std::env::var("SAP_BOOT").unwrap_or_else(|_| "check".into());
+    let requests = dir.join("../../../boot");
+    println!("cargo:rerun-if-changed={}", requests.display());
+    let resolver = sap_manifests::resolver_bootstrap(&boot, &requests, &interfaces, &available);
+    writeln!(pack, "/// The resolver's bootstrap message, for `SAP_BOOT={boot}`.").unwrap();
+    writeln!(pack, "pub static RESOLVER_BOOTSTRAP: [u64; {}] = {resolver:?};", resolver.len()).unwrap();
     std::fs::write(out.join("pack.rs"), pack + &table).unwrap();
 }

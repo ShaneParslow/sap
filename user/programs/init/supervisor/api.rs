@@ -211,7 +211,7 @@ impl Supervisor {
                 let endpoint = new_slot();
                 untyped::retype(chunk, object::ENDPOINT, 0, root, endpoint, 1).expect("init: an export's endpoint");
                 dynamic.endpoints.push(endpoint);
-                self.exports.push(Export { component: name.clone(), name: text(export.get_name())?.into(), endpoint });
+                self.exports.push(Export { component: name.clone(), name: text(export.get_name())?.into(), endpoint, interface: export.get_interface() });
             }
         }
         let memory = match Self::new_account(payer, component.get_limits().map_err(bad)?) {

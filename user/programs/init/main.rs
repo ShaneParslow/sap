@@ -1,9 +1,9 @@
-//! The root task, and the root supervisor (M7). It enacts the boot
-//! composition (`supervisor`): the memory manager, which gets the
-//! machine's RAM; the log service; a test service; and `check`, the
-//! checks, which gets the ASID pool, the one other authority only the root
-//! task holds at boot, and the instance API. Then it serves its instances
-//! and the instance API until `check` exits.
+//! The root task, and the root supervisor (M7). It enacts the base
+//! composition (`supervisor`): the memory manager, which gets the machine's
+//! RAM, and the resolver, which decides at runtime what else runs, from
+//! the boot request (`SAP_BOOT`, `boot/` at the top of the repository) and
+//! the programs' manifests, and adds it through `Compositions`. Then it
+//! serves its instances until one ends the boot.
 
 #![no_std]
 #![no_main]
@@ -20,12 +20,9 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use capnp::message::{Builder, SingleSegmentAllocator};
-use sap_interfaces::check_capnp::check_imports;
-use sap_interfaces::log_capnp::log_imports;
 use sap_interfaces::memory_capnp::memory_imports;
-use sap_interfaces::sap_capnp::manifest;
+use sap_interfaces::sap_capnp::{manifest, resolver_imports};
 use sap_interfaces::words;
-use sap_interfaces::peer_capnp::{peer_imports, Mode};
 use sap_interfaces::supervisor_capnp::{composition, OnEnd, Status};
 use sap_loader::Parent;
 use sap_process::startup_flags;
@@ -41,30 +38,6 @@ use supervisor::{Answer, Supervisor};
 const HEAP: core::ops::Range<usize> = 0x08_0000_0000..0x08_4000_0000;
 /// Where the loader fills pages for the processes init starts.
 const SCRATCH: usize = 0x38_0000_0000;
-/// log2 of `check`'s CNode size: as large as the root task's, since the
-/// checks were written for it.
-const CHECK_CNODE_BITS: u8 = 12;
-/// `check`'s stack: 64 KiB. Its checks ran on the root task's 16 KiB, but
-/// it also keeps its imports' description on the stack.
-const CHECK_STACK_PAGES: u16 = 16;
-/// The memory manager's region of the pool, and its budget, for its heap
-/// and reply object.
-const MEMORY_BITS: u8 = 22;
-const MEMORY_BUDGET_BITS: u8 = 20;
-/// The log service's account: built from 1 MiB, with a page to spare for
-/// its reply object.
-const LOG_PROCESS_BITS: u8 = 20;
-const LOG_ACCOUNT: u64 = 2 << 20;
-/// The restartable test service's account (`peer`, heapless): built from
-/// 1 MiB, with a page for its reply object.
-const RESTARTABLE_PROCESS_BITS: u8 = 20;
-const RESTARTABLE_ACCOUNT: u64 = 2 << 20;
-/// `check`'s account: built from 2 MiB (its 633 KiB image, CNode and
-/// stack); the rest for its heap and the untyped memory its checks use.
-const CHECK_PROCESS_BITS: u8 = 21;
-const CHECK_RESERVATION: u64 = 32 << 20;
-const CHECK_LIMIT: u64 = 48 << 20;
-
 #[unsafe(no_mangle)]
 fn sap_main(boot_info: usize, _: usize, _: usize) -> ! {
     // SAFETY: the kernel passes the address of the read-only boot-info page.
@@ -189,120 +162,70 @@ fn bootstrap<T: capnp::traits::Owned>(build: impl FnOnce(T::Builder<'_>)) -> Vec
     segments[0].to_vec()
 }
 
-/// Enact the boot composition: the memory manager, with copies of every
-/// spare untyped region as its RAM (the `ram` group), serving accounts; the log service,
-/// serving its export; a test service restarted when it fails; then
-/// `check`, with a copy of the ASID pool, the instance API, the log and the
-/// test service as its imports. All but the memory manager
-/// get accounts. Any of them but the test service ends the boot when it
-/// ends.
+/// Enact the base composition, which init knows itself: the memory
+/// manager, with copies of every spare untyped region as its RAM (the `ram`
+/// group), serving accounts; and the resolver, which adds whatever the boot
+/// request (`SAP_BOOT`) wants through `Compositions`, with the request's
+/// grants, which init gives the supervisor. Each one's limits and exports
+/// are its manifest's.
 fn boot(supervisor: &mut Supervisor) {
-
-    // The memory manager's bootstrap message. Imports: its export, then
-    // the `ram` group.
     let memory = bootstrap::<memory_imports::Owned>(|mut root| {
         root.set_endpoint(0);
         root.set_ram(1);
     });
-    let log = bootstrap::<log_imports::Owned>(|mut root| root.set_endpoint(0));
-    let restartable = bootstrap::<peer_imports::Owned>(|mut root| {
-        root.set_mode(Mode::Restartable);
-        root.set_endpoint(0);
-    });
-    // Imports: the ASID pool, the instance API, the log, the restartable
-    // service.
-    let check = bootstrap::<check_imports::Owned>(|mut root| {
-        root.set_asid_pool(0);
-        root.set_supervisor(1);
-        root.set_log(2);
-        root.set_restartable(3);
-        root.set_peer_hash(&pack::PEER.0);
-    });
+    let resolver = sap_ring::as_bytes(&pack::RESOLVER_BOOTSTRAP);
+    {
+        let segment = [resolver];
+        let message = capnp::message::Reader::new(capnp::message::SegmentArray::new(&segment), capnp::message::ReaderOptions::new());
+        let request = message.get_root::<resolver_imports::Reader>().and_then(|r| r.get_request()).expect("init: the boot request");
+        for grant in request.get_grants().expect("init: the boot request's grants") {
+            let (component, held) = (grant.get_component().ok().and_then(|t| t.to_str().ok()), grant.get_held().ok().and_then(|t| t.to_str().ok()));
+            supervisor.grant(component.expect("init: a grant"), held.expect("init: a grant"));
+        }
+    }
+    let compositions = supervisor.compositions();
+    supervisor.hold("compositions", compositions);
 
     // One segment, as every message is without capnp's `alloc` feature:
     // room for the whole composition, on the heap.
-    let mut space = vec![0u64; 2048];
+    let mut space = vec![0u64; 2048 + resolver.len() / 8];
     let mut allocator = SingleSegmentAllocator::new(as_bytes_mut(&mut space));
     let mut message = Builder::new(&mut allocator);
     let mut root = message.init_root::<composition::Builder>();
     let mut accounts = root.reborrow().init_accounts();
     accounts.set_component("memory");
     accounts.set_name("account");
-    let mut components = root.init_components(4);
-
-    let mut component = components.reborrow().get(0);
-    component.set_name("memory");
-    component.set_program(&pack::MEMORY.0);
-    component.set_bootstrap(&memory);
-    component.set_on_end(OnEnd::EndBoot);
-    component.reborrow().init_exports(1).get(0).set_name("account");
-    let mut limits = component.reborrow().init_limits();
-    let mut region = limits.reborrow().init_memory().init_region();
-    region.set_bits(MEMORY_BITS);
-    region.set_budget_bits(MEMORY_BUDGET_BITS);
-    limits.set_priority(255);
-    limits.set_cnode_bits(12);
-    limits.set_stack_pages(4);
-    let mut imports = component.init_imports(2);
-    imports.reborrow().get(0).set_serve("account");
-    // Copied, never moved: the supervisor keeps the right to revoke them.
-    imports.get(1).init_held().set_name("ram");
-
-    let mut component = components.reborrow().get(1);
-    component.set_name("log");
-    component.set_program(&pack::LOG.0);
-    component.set_bootstrap(&log);
-    component.set_on_end(OnEnd::EndBoot);
-    component.reborrow().init_exports(1).get(0).set_name("log");
-    let mut limits = component.reborrow().init_limits();
-    let mut terms = limits.reborrow().init_memory().init_account();
-    terms.set_reservation(LOG_ACCOUNT);
-    terms.set_limit(LOG_ACCOUNT);
-    terms.set_process_bits(LOG_PROCESS_BITS);
-    limits.set_priority(255);
-    limits.set_cnode_bits(6);
-    limits.set_stack_pages(4);
-    component.init_imports(1).get(0).set_serve("log");
-
-    let mut component = components.reborrow().get(2);
-    component.set_name("restartable");
-    component.set_program(&pack::PEER.0);
-    component.set_bootstrap(&restartable);
-    component.set_on_end(OnEnd::Restart);
-    component.reborrow().init_exports(1).get(0).set_name("service");
-    let mut limits = component.reborrow().init_limits();
-    let mut terms = limits.reborrow().init_memory().init_account();
-    terms.set_reservation(RESTARTABLE_ACCOUNT);
-    terms.set_limit(RESTARTABLE_ACCOUNT);
-    terms.set_process_bits(RESTARTABLE_PROCESS_BITS);
-    limits.set_priority(255);
-    limits.set_cnode_bits(6);
-    limits.set_stack_pages(4);
-    component.init_imports(1).get(0).set_serve("service");
-
-    let mut component = components.get(3);
-    component.set_name("check");
-    component.set_program(&pack::CHECK.0);
-    component.set_bootstrap(&check);
-    component.set_on_end(OnEnd::EndBoot);
-    let mut limits = component.reborrow().init_limits();
-    let mut terms = limits.reborrow().init_memory().init_account();
-    terms.set_reservation(CHECK_RESERVATION);
-    terms.set_limit(CHECK_LIMIT);
-    terms.set_process_bits(CHECK_PROCESS_BITS);
-    limits.set_priority(255);
-    limits.set_max_priority(255);
-    limits.set_cnode_bits(CHECK_CNODE_BITS);
-    limits.set_stack_pages(CHECK_STACK_PAGES);
-    let mut imports = component.init_imports(4);
-    imports.reborrow().get(0).init_held().set_name("asidPool");
-    imports.reborrow().get(1).set_supervisor(());
-    let mut log = imports.reborrow().get(2).init_export();
-    log.set_component("log");
-    log.set_name("log");
-    let mut restartable = imports.get(3).init_export();
-    restartable.set_component("restartable");
-    restartable.set_name("service");
-    let composition = message.get_root_as_reader::<composition::Reader>().expect("init: the boot composition");
-    supervisor.enact(composition).expect("init: enact the boot composition");
+    let mut components = root.init_components(2);
+    for (i, (name, program, bootstrap, on_end)) in
+        [("memory", &pack::MEMORY, &memory[..], OnEnd::EndBoot), ("resolver", &pack::RESOLVER, resolver, OnEnd::Forget)].into_iter().enumerate()
+    {
+        let entry = pack::PROGRAMS.iter().find(|p| p.hash == *program).expect("init: a base program");
+        let segment = [words::bytes(entry.manifest_words())];
+        let declared = words::reader(&segment);
+        let declared = declared.get_root::<manifest::Reader>().expect("init: a manifest");
+        let mut component = components.reborrow().get(i as u32);
+        component.set_name(name);
+        component.set_program(&program.0);
+        component.set_bootstrap(bootstrap);
+        component.set_on_end(on_end);
+        component.set_limits(declared.get_limits().expect("init: limits")).expect("init: limits");
+        let exports = declared.get_exports().expect("init: exports");
+        let mut list = component.reborrow().init_exports(exports.len());
+        for (j, e) in exports.iter().enumerate() {
+            let mut export = list.reborrow().get(j as u32);
+            export.set_name(e.get_name().expect("init: an export"));
+            export.set_interface(e.get_interface());
+        }
+        let mut imports = component.init_imports(if name == "memory" { 2 } else { 1 });
+        if name == "memory" {
+            imports.reborrow().get(0).set_serve("account");
+            // Copied, never moved: the supervisor keeps the right to revoke
+            // them.
+            imports.get(1).init_held().set_name("ram");
+        } else {
+            imports.get(0).init_held().set_name("compositions");
+        }
+    }
+    let composition = message.get_root_as_reader::<composition::Reader>().expect("init: the base composition");
+    supervisor.enact(composition).expect("init: enact the base composition");
 }

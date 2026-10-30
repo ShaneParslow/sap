@@ -196,6 +196,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "resolver"
+version = "0.1.0"
+dependencies = [
+ "capnp 0.27.2",
+ "sap-interfaces",
+ "sap-process",
+ "sap-rt",
+]
+
+[[package]]
 name = "riscv"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -6,7 +6,7 @@
 # user/.cargo/config.toml makes them position-independent.
 [workspace]
 resolver = "3"
-members = ["abi", "kernel", "user/lib/sys", "user/lib/rt", "user/lib/ring", "user/lib/loader", "user/lib/process", "user/lib/interfaces", "user/programs/init", "user/programs/check", "user/programs/peer", "user/programs/log", "user/programs/memory"]
+members = ["abi", "kernel", "user/lib/sys", "user/lib/rt", "user/lib/ring", "user/lib/loader", "user/lib/process", "user/lib/interfaces", "user/programs/init", "user/programs/check", "user/programs/peer", "user/programs/log", "user/programs/memory", "user/programs/resolver"]
 default-members = ["kernel"]
 # Host-only crates for build scripts: never built for the bare-metal target.
 exclude = ["tools/manifests"]

@@ -33,5 +33,8 @@ fn build_user_program(user: &std::path::Path, name: &str) -> std::path::PathBuf 
     // host crates build scripts use.
     println!("cargo:rerun-if-changed={}", user.join("../Cargo.toml").display());
     println!("cargo:rerun-if-changed={}", user.join("../tools/manifests").display());
+    // What to boot, and its requests.
+    println!("cargo:rerun-if-env-changed=SAP_BOOT");
+    println!("cargo:rerun-if-changed={}", user.join("../boot").display());
     target_dir.join("riscv64gc-unknown-sap/release").join(name)
 }

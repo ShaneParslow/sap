@@ -1,0 +1,16 @@
+[package]
+name = "resolver"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "resolver"
+path = "main.rs"
+test = false
+bench = false
+
+[dependencies]
+sap-rt = { path = "../../lib/rt" }
+sap-process = { path = "../../lib/process" }
+capnp = { version = "0.27.2", default-features = false }
+sap-interfaces = { path = "../../lib/interfaces" }

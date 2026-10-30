@@ -1,15 +1,17 @@
-//! Manifests: what each program in the boot pack declares, read from the
-//! annotations of `interfaces/sap.capnp` on its bootstrap struct, as a
-//! `Manifest` message that the resolver reads at runtime. Declarations are
-//! all this decides; which component serves which import is the
-//! resolver's, at runtime.
+//! For init's build: manifests, what each program in the boot pack
+//! declares, read from the annotations of `interfaces/sap.capnp` on its
+//! bootstrap struct; and the resolver's bootstrap message, every program's
+//! manifest with the boot request. Declarations and the request are all
+//! this reads; which component serves which import is the resolver's, at
+//! runtime.
 
 use std::collections::HashMap;
 use std::path::Path;
 
+use capnp::message::ReaderSegments;
 use capnp::schema_capnp::{code_generator_request, field, node, type_, value};
 
-use crate::schemas::sap_capnp::{export, manifest};
+use crate::schemas::sap_capnp::{export, manifest, request, resolver_imports};
 use crate::schemas::supervisor_capnp::limits;
 
 /// The schemas the manifests are written with.
@@ -132,4 +134,78 @@ pub fn manifests(request: &Path) -> HashMap<String, Vec<u64>> {
         assert!(manifests.insert(program.clone(), words).is_none(), "{program} declared twice");
     }
     manifests
+}
+
+/// The words of the flat message in `segments`, which must be one.
+fn flat(segments: &[&[u8]], what: &str) -> Vec<u64> {
+    assert_eq!(segments.len(), 1, "{what}: one segment");
+    segments[0].chunks(8).map(|c| u64::from_le_bytes(c.try_into().unwrap())).collect()
+}
+
+/// Evaluate `constant` in the schema file `file` with the schema compiler,
+/// as a single-segment message.
+fn evaluate(file: &Path, constant: &str, interfaces: &Path) -> Vec<u8> {
+    let output = std::process::Command::new("capnp")
+        .args(["eval", "-b", "-I"])
+        .arg(interfaces)
+        .arg(file)
+        .arg(constant)
+        .output()
+        .expect("running capnp eval");
+    assert!(output.status.success(), "capnp eval {} {constant}: {}", file.display(), String::from_utf8_lossy(&output.stderr));
+    let message = capnp::serialize::read_message(&mut &output.stdout[..], capnp::message::ReaderOptions::new()).unwrap();
+    let segments = message.into_segments();
+    let words = flat(&[segments.get_segment(0).unwrap()], constant);
+    assert_eq!(segments.len(), 1, "{constant}: one segment");
+    words.iter().flat_map(|w| w.to_le_bytes()).collect()
+}
+
+/// The resolver's bootstrap message: `programs` (name, hash, manifest) and
+/// the boot request `boot`: a request file in `requests` (`<boot>.capnp`,
+/// whose constant `request` it is), or else a program's name, which then
+/// runs alone and ends the boot.
+pub fn resolver_bootstrap(boot: &str, requests: &Path, interfaces: &Path, programs: &[(String, [u8; 32], Vec<u64>)]) -> Vec<u64> {
+    let mut builder = capnp::message::Builder::new(capnp::message::HeapAllocator::new().first_segment_words(1 << 16));
+    let mut root = builder.init_root::<resolver_imports::Builder>();
+    root.set_compositions(0);
+    let mut list = root.reborrow().init_programs(programs.len() as u32);
+    for (i, (_, hash, manifest)) in programs.iter().enumerate() {
+        let mut out = list.reborrow().get(i as u32);
+        out.set_hash(hash);
+        let bytes: Vec<u8> = manifest.iter().flat_map(|w| w.to_le_bytes()).collect();
+        let segments: [&[u8]; 1] = [&bytes];
+        let message = capnp::message::Reader::new(capnp::message::SegmentArray::new(&segments), capnp::message::ReaderOptions::new());
+        out.set_manifest(message.get_root::<manifest::Reader>().unwrap()).unwrap();
+    }
+    let file = requests.join(format!("{boot}.capnp"));
+    let mut out = root.init_request();
+    if file.exists() {
+        let bytes = evaluate(&file, "request", interfaces);
+        let segments: [&[u8]; 1] = [&bytes];
+        let message = capnp::message::Reader::new(capnp::message::SegmentArray::new(&segments), capnp::message::ReaderOptions::new());
+        let request = message.get_root::<request::Reader>().unwrap();
+        out.set_grants(request.get_grants().unwrap()).unwrap();
+        let wanted = request.get_components().unwrap();
+        let mut list = out.init_components(wanted.len());
+        for (i, w) in wanted.iter().enumerate() {
+            let mut component = list.reborrow().get(i as u32);
+            component.set_name(w.get_name().unwrap());
+            component.set_program(w.get_program().unwrap());
+            component.set_on_end(w.get_on_end().unwrap());
+            let constant = w.get_settings_constant().unwrap().to_str().unwrap();
+            if !constant.is_empty() {
+                component.set_settings(&evaluate(&file, constant, interfaces));
+            }
+        }
+    } else {
+        assert!(programs.iter().any(|(name, ..)| name == boot), "SAP_BOOT={boot}: no request {} and no such program", file.display());
+        let mut component = out.reborrow().init_components(1).get(0);
+        component.set_name(boot);
+        component.set_program(boot);
+        component.set_on_end(crate::schemas::supervisor_capnp::OnEnd::EndBoot);
+        let mut grant = out.init_grants(1).get(0);
+        grant.set_component(boot);
+        grant.set_held("endBoot");
+    }
+    flat(&builder.get_segments_for_output(), "the resolver's bootstrap")
 }

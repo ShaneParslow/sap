@@ -17,7 +17,9 @@
 //! clients' capabilities keep working: a call it died in gets no reply
 //! (`NO_REPLY`), and calls after wait for the new process.
 //!
-//! Components also start at runtime, through the instance API (`api`).
+//! Components also start at runtime, through the instance API (`api`), and
+//! join the supervisor's own composition through `Compositions` (`compose`),
+//! which the resolver uses.
 //!
 //! Every capability the supervisor gives an instance names init's endpoint,
 //! told apart by badge: its launcher and fault handler (`INSTANCE_BADGE`),
@@ -29,6 +31,7 @@
 //! TODO: lazy start (design/processes.md in sap-docs).
 
 mod api;
+mod compose;
 
 use alloc::string::String;
 use alloc::vec;
@@ -54,6 +57,8 @@ use crate::pack;
 const INSTANCE_BADGE: usize = 0x300;
 const API_BADGE: usize = 0x400;
 const HANDLE_BADGE: usize = 0x500;
+/// The badge on the capability to `Compositions`.
+const COMPOSITIONS_BADGE: usize = 0x600;
 /// How many instances the supervisor runs at once.
 const MAX_INSTANCES: usize = 16;
 /// Slots in init's CNode for each instance's objects, while the loader
@@ -164,6 +169,8 @@ struct Export {
     component: String,
     name: String,
     endpoint: usize,
+    /// The interface's type id; 0 for unchecked.
+    interface: u64,
 }
 
 /// A capability made for a route to an export.
@@ -196,6 +203,11 @@ pub struct Supervisor {
     next_badge: usize,
     /// `MAX_INSTANCES` entries, on the heap: init's stack is small.
     instances: Vec<Option<Instance>>,
+    /// Routes to what it holds that components added through
+    /// `Compositions` may have: (component, held name).
+    grants: Vec<(String, String)>,
+    /// Components added through `Compositions`, kept until `enact`.
+    pending: Vec<Vec<usize>>,
     /// Reply objects not in use, for when one is kept by a waiter.
     spare_replies: Vec<usize>,
 }
@@ -215,6 +227,8 @@ impl Supervisor {
             clients: Vec::new(),
             next_badge: launcher::ROUTE_BADGES,
             instances: (0..MAX_INSTANCES).map(|_| None).collect(),
+            grants: Vec::new(),
+            pending: Vec::new(),
             spare_replies: Vec::new(),
         }
     }
@@ -263,23 +277,41 @@ impl Supervisor {
         }
     }
 
+    /// Let component `component`, added through `Compositions`, have a route
+    /// to what the supervisor holds as `held` (or the instance API, as
+    /// "supervisor").
+    pub fn grant(&mut self, component: &str, held: &str) {
+        self.grants.push((component.into(), held.into()));
+    }
+
+    /// Make the endpoints of `component`'s exports, from the supervisor's
+    /// own memory, so they outlive its instances.
+    fn make_exports(&mut self, component: component::Reader) -> Result<(), StartError> {
+        let bad = |_| StartError::BadComponent;
+        let owner = text(component.get_name())?;
+        let exports = component.get_exports().map_err(bad)?;
+        for export in exports {
+            let name = text(export.get_name())?;
+            if self.export(owner, name).is_some() || exports.iter().filter(|e| text(e.get_name()) == Ok(name)).count() > 1 {
+                return Err(StartError::BadComponent);
+            }
+        }
+        for export in exports {
+            let endpoint = new_slot();
+            let root = SlotRef { root: init_slot::CNODE, index: 0, depth: 0 };
+            untyped::retype(self.parent.untyped, object::ENDPOINT, 0, root, endpoint, 1).expect("init: an export's endpoint");
+            self.exports.push(Export { component: owner.into(), name: text(export.get_name())?.into(), endpoint, interface: export.get_interface() });
+        }
+        Ok(())
+    }
+
     /// Make the endpoints of every export of `composition`, then start its
     /// components, in order.
     pub fn enact(&mut self, composition: composition::Reader) -> Result<(), StartError> {
         let bad = |_| StartError::BadComponent;
         let components = composition.get_components().map_err(bad)?;
         for component in components {
-            let owner = text(component.get_name())?;
-            for export in component.get_exports().map_err(bad)? {
-                let name = text(export.get_name())?;
-                if self.export(owner, name).is_some() {
-                    return Err(StartError::BadComponent);
-                }
-                let endpoint = new_slot();
-                let root = SlotRef { root: init_slot::CNODE, index: 0, depth: 0 };
-                untyped::retype(self.parent.untyped, object::ENDPOINT, 0, root, endpoint, 1).expect("init: an export's endpoint");
-                self.exports.push(Export { component: owner.into(), name: name.into(), endpoint });
-            }
+            self.make_exports(component)?;
         }
         // The root account, from the memory manager's export: the manager
         // knows its capabilities by these badges.
@@ -428,7 +460,13 @@ impl Supervisor {
                 }
                 route::Export(to) => {
                     let to = to.map_err(bad)?;
-                    Source::Client(self.export(text(to.get_component())?, text(to.get_name())?).ok_or(StartError::BadComponent)?)
+                    let export = self.export(text(to.get_component())?, text(to.get_name())?).ok_or(StartError::BadComponent)?;
+                    // The interface the importer expects must be the one served.
+                    let (expected, served) = (to.get_interface(), self.exports[export].interface);
+                    if expected != 0 && served != 0 && expected != served {
+                        return Err(StartError::BadComponent);
+                    }
+                    Source::Client(export)
                 }
                 route::Serve(export) => Source::Copy(self.exports[self.export(name, text(export)?).ok_or(StartError::BadComponent)?].endpoint),
                 route::Passed(i) => {
@@ -645,6 +683,7 @@ impl Supervisor {
             INSTANCE_BADGE if self.running(index) => {}
             API_BADGE if self.running(index) => return Some(self.serve_api(index, label, words, caps)),
             HANDLE_BADGE if self.instances[index].as_ref().is_some_and(|i| i.dynamic.is_some()) => return Some(self.serve_handle(index, label, reply)),
+            COMPOSITIONS_BADGE if badge == COMPOSITIONS_BADGE => return Some(self.serve_compositions(label, words)),
             _ => return None,
         }
         let (success, end) = match label {

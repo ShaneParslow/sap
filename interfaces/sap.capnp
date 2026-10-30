@@ -113,9 +113,11 @@ struct Available {
 
 # The bootstrap message of `resolver`: every program in the boot pack, and
 # the request.
-struct ResolverImports {
+struct ResolverImports $program("resolver") $limits((
+    memory = (account = (reservation = 4194304, limit = 4194304, processBits = 21)),
+    priority = 255, cnodeBits = 8, stackPages = 16)) {
   programs @0 :List(Available);
   request @1 :Request;
   # Its capability to add components to its supervisor.
-  compositions @2 :UInt32;
+  compositions @2 :UInt32 $held("compositions");
 }

@@ -51,7 +51,9 @@ struct Component {
 struct Export {
   # Unique within the component.
   name @0 :Text;
-  # TODO: the interface's hash, for checking routes against it (M6).
+  # The interface it serves, by type id (the stand-in for its hash); 0
+  # for unchecked.
+  interface @1 :UInt64;
 }
 
 # Where one import comes from.
@@ -86,6 +88,9 @@ struct Held {
 struct ExportRef {
   component @0 :Text;
   name @1 :Text;
+  # The interface the importer expects; 0 for unchecked. The supervisor
+  # refuses a route whose export serves another.
+  interface @2 :UInt64;
 }
 
 # The limits the supervisor enforces on an instance.
@@ -195,4 +200,24 @@ enum Status {
   overLimit @3;
   full @4;
   loadFailed @5;
+}
+
+# Adding components to a supervisor's own composition at runtime: the
+# resolver's capability. Components are added one call each (a call
+# carries at most 120 words), each one's exports made as it is added, and
+# started together by `enact`, so a client added before its server still
+# reaches it. They are the supervisor's own: paid from its account, named
+# as given. A route to something the supervisor holds (or `supervisor`)
+# needs a grant for that component, which the supervisor's own trusted
+# configuration gives, never the caller. Calls follow `README.md`; the
+# reply's label is a `Status`.
+# TODO: reconcile: stop and replace what a new composition drops or
+# changes (design/processes.md).
+interface Compositions {
+  # Status: `badRequest` (malformed, a name in use, an export declared
+  # twice, a route not granted).
+  add @0 (component :Component) -> ();
+  # Start everything added since the last `enact`, in the order added.
+  # Status: the first failure's; what started before it keeps running.
+  enact @1 () -> ();
 }
