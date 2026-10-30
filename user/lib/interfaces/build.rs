@@ -3,7 +3,7 @@
 //!
 //! Without capnp-rust's RPC code (`no_rpc`, from a fork of capnpc the root
 //! `Cargo.toml` patches in until upstream has it): sap's calls are its own
-//! (`process.capnp` describes them), and capnp-rust's RPC code needs
+//! (`interfaces/README.md` describes them), and capnp-rust's RPC code needs
 //! capnp's `alloc` feature, under which building any message allocates.
 
 use std::path::Path;
@@ -12,7 +12,7 @@ fn main() {
     let schemas = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../interfaces");
     let mut command = capnpc::CompilerCommand::new();
     command.src_prefix(&schemas).no_rpc();
-    for schema in ["check.capnp", "echo.capnp", "log.capnp", "memory.capnp", "peer.capnp", "process.capnp", "supervisor.capnp"] {
+    for schema in ["check.capnp", "echo.capnp", "log.capnp", "memory.capnp", "peer.capnp", "supervisor.capnp"] {
         let path = schemas.join(schema);
         println!("cargo:rerun-if-changed={}", path.display());
         command.file(path);

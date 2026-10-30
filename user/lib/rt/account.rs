@@ -1,5 +1,5 @@
 //! Calls on memory accounts (`interfaces/memory.capnp`), laid out as
-//! `process.capnp` describes. Messages are built on the stack: nothing here
+//! `interfaces/README.md` describes. Messages are built on the stack: nothing here
 //! allocates, since the heap grows through an account.
 
 use capnp::message::{Builder, SingleSegmentAllocator};

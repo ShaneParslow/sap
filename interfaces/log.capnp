@@ -5,7 +5,7 @@
 # capability was made for (`supervisor.capnp`), so a program can't write
 # as another.
 #
-# Calls follow the convention in `process.capnp`.
+# Calls follow the convention in `README.md`.
 # TODO: levels, a ring of recent lines, readers, keeping it in the store
 # (design/userspace.md).
 

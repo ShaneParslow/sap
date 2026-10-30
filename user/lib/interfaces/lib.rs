@@ -12,7 +12,7 @@
 pub mod words;
 
 /// The method ordinals of every interface in the schemas, generated: the
-/// labels of calls over sap's IPC (`process_capnp` describes the layout).
+/// labels of calls over sap's IPC (`interfaces/README.md` describes them).
 pub mod methods {
     include!(concat!(env!("OUT_DIR"), "/methods.rs"));
 }
@@ -70,7 +70,3 @@ pub mod log_capnp {
     include!(concat!(env!("OUT_DIR"), "/log_capnp.rs"));
 }
 
-#[allow(clippy::all)]
-pub mod process_capnp {
-    include!(concat!(env!("OUT_DIR"), "/process_capnp.rs"));
-}

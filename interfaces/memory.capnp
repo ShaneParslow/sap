@@ -14,7 +14,7 @@
 # the controller's, kept by whoever made it, to empty it, end it or set its
 # limit. Destroying what a program built is one `revoke` of its account.
 #
-# Calls follow the convention in `process.capnp`; the reply's label is a
+# Calls follow the convention in `README.md`; the reply's label is a
 # `Status`.
 # TODO: mappings (the manager mapping frames into an address space it
 # holds: lazy, pageable, swap, copy-on-write), pressure and trim

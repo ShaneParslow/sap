@@ -1,16 +1,17 @@
-//! Processes: a second program in its own address space, the process
-//! factory, and the supervisor's exports as the log shows them.
+//! Processes: a second program in its own address space, built by hand;
+//! the instance API; the supervisor's exports as the log shows them; and
+//! restart.
 
-use sap_interfaces::methods::{log, process, process_factory};
-use sap_interfaces::process_capnp::process::wait_results;
-use sap_interfaces::process_capnp::process_factory::spawn_params;
-use sap_interfaces::process_capnp::{end, Status};
+use sap_interfaces::methods::{instance, log, supervisor};
+use sap_interfaces::supervisor_capnp::instance::wait_results;
+use sap_interfaces::supervisor_capnp::supervisor::start_params;
+use sap_interfaces::supervisor_capnp::{end, OnEnd, Status};
 use sap_interfaces::words;
 use sap_process::{launcher, process_slot};
 use sap_rt::abi::{attr, error, fault, object, rights};
 use sap_rt::cnode::SlotRef;
 use sap_rt::sys::Error;
-use sap_rt::{ipc, println, slots, tcb, untyped, vspace};
+use sap_rt::{account, ipc, println, slots, tcb, untyped, vspace};
 use capnp::message::{Builder, SingleSegmentAllocator};
 use sap_interfaces::peer_capnp::{peer_imports, Mode};
 use sap_loader::{self as loader, Give, Launch, LoadError, Parent, Slots, LAUNCH};
@@ -129,140 +130,207 @@ pub fn check_process(info: &Env) {
     println!("a second process, calls between address spaces and isolation behave");
 }
 
-/// What a `spawn` returned: its status, and the slot the handle (on
-/// success) or the memory (on a refusal) came back in.
-struct Spawned {
-    status: usize,
-    back: usize,
+/// A route of a component started through the instance API.
+#[derive(Clone, Copy)]
+enum To<'a> {
+    Passed(u32),
+    Export(&'a str, &'a str),
+    Serve(&'a str),
+    Held(&'a str),
+    Supervisor,
 }
 
-/// The reply label for `status`.
-fn label(status: Status) -> usize {
-    status as usize
+/// A component to start through the instance API: `program` in a 2 MiB
+/// account, built from 1 MiB of it.
+struct Component<'a> {
+    name: &'a str,
+    program: &'a [u8],
+    bootstrap: &'a [u8],
+    routes: &'a [To<'a>],
+    exports: &'a [&'a str],
+    on_end: OnEnd,
+    reservation: u64,
+    /// A region of the pool instead of an account, which the API refuses.
+    region: bool,
 }
 
-/// Ask the factory to start the program named `hash` with `bootstrap`,
-/// built from the untyped memory in `memory` (moved), with `imports`
-/// (copied).
-fn factory_spawn(info: &Env, hash: &[u8], bootstrap: &[u8], memory: Option<usize>, imports: &[usize]) -> Spawned {
+impl<'a> Component<'a> {
+    fn new(name: &'a str, program: &'a [u8], bootstrap: &'a [u8]) -> Self {
+        Self { name, program, bootstrap, routes: &[], exports: &[], on_end: OnEnd::Forget, reservation: 2 << 20, region: false }
+    }
+}
+
+/// `Supervisor.start` with `component`, paid from check's account, with
+/// `passed` (copied); the handle's slot and the first of its exports'
+/// capabilities, or the reply's label.
+fn start(info: &Env, component: &Component, passed: &[usize]) -> Result<(usize, usize), usize> {
     let mut scratch = [0u64; 128];
     let mut allocator = SingleSegmentAllocator::new(as_bytes_mut(&mut scratch));
     let mut message = Builder::new(&mut allocator);
-    let mut params = message.init_root::<spawn_params::Builder>();
-    params.set_program(hash);
-    params.set_bootstrap(bootstrap);
+    let mut c = message.init_root::<start_params::Builder>().init_component();
+    c.set_name(component.name);
+    c.set_program(component.program);
+    c.set_bootstrap(component.bootstrap);
+    c.set_on_end(component.on_end);
+    let mut exports = c.reborrow().init_exports(component.exports.len() as u32);
+    for (i, name) in component.exports.iter().enumerate() {
+        exports.reborrow().get(i as u32).set_name(name);
+    }
+    let mut limits = c.reborrow().init_limits();
+    if component.region {
+        limits.reborrow().init_memory().init_region().set_bits(20);
+    } else {
+        let mut terms = limits.reborrow().init_memory().init_account();
+        terms.set_reservation(component.reservation);
+        terms.set_limit(component.reservation.max(2 << 20));
+        terms.set_process_bits(20);
+    }
+    limits.set_priority(255);
+    limits.set_cnode_bits(6);
+    limits.set_stack_pages(4);
+    let mut routes = c.init_imports(component.routes.len() as u32);
+    for (i, &to) in component.routes.iter().enumerate() {
+        let mut route = routes.reborrow().get(i as u32);
+        match to {
+            To::Passed(n) => route.set_passed(n),
+            To::Export(c, n) => {
+                let mut export = route.init_export();
+                export.set_component(c);
+                export.set_name(n);
+            }
+            To::Serve(n) => route.set_serve(n),
+            To::Held(n) => route.init_held().set_name(n),
+            To::Supervisor => route.set_supervisor(()),
+        }
+    }
     let mut words = [0usize; 120];
-    let len = words::pack(&message, &mut words).expect("spawn: the request fits a message");
-    let mut caps = [ipc::Give::copy(0); 16];
-    let mut n = 0;
-    if let Some(memory) = memory {
-        caps[0] = ipc::Give::moved(memory);
-        n = 1;
+    let len = words::pack(&message, &mut words).expect("start: the request fits a message");
+    let mut caps = [ipc::Give::copy(info.account); 16];
+    for (i, &cap) in passed.iter().enumerate() {
+        caps[1 + i] = ipc::Give::copy(cap);
     }
-    for &cap in imports {
-        caps[n] = ipc::Give::copy(cap);
-        n += 1;
+    let back = slots::alloc_range(1 + component.exports.len()).expect("slots");
+    ipc::set_receive_window(process_slot::CNODE, back, 1 + component.exports.len());
+    let reply = ipc::call(info.supervisor, supervisor::START, &words[..len], &caps[..1 + passed.len()], &mut []).expect("start: call");
+    match reply.info.label() {
+        0 => Ok((back, back + 1)),
+        label => Err(label),
     }
-    let back = slots::alloc().expect("slot");
-    ipc::set_receive_window(process_slot::CNODE, back, 1);
-    let reply = ipc::call(info.factory, process_factory::SPAWN, &words[..len], &caps[..n], &mut []).expect("spawn: call");
-    Spawned { status: reply.info.label(), back }
 }
 
-/// How a process ended, as `wait` reports it.
+/// How an instance ended, as `wait` reports it.
 #[derive(Debug, PartialEq)]
 enum Ended {
     Exited(u64),
     Faulted(u64),
-    Killed,
+    Stopped,
 }
 
-/// `wait` on `handle`: how the process ended, and the slot its memory came
-/// back in; or the reply's label if it isn't `ok`. The kernel answers a
-/// call through an empty slot with the label `FAILED_LOOKUP`.
-fn factory_wait(handle: usize) -> Result<(Ended, usize), usize> {
-    let back = slots::alloc().expect("slot");
-    ipc::set_receive_window(process_slot::CNODE, back, 1);
+/// `wait` on `handle`: how the instance ended, or the reply's label if it
+/// isn't `ok`. The kernel answers a call through an empty slot with the
+/// label `FAILED_LOOKUP`.
+fn wait(handle: usize) -> Result<Ended, usize> {
     let mut out = [0usize; 8];
-    let reply = ipc::call(handle, process::WAIT, &[], &[], &mut out).expect("wait: call");
-    if reply.info.label() != label(Status::Ok) {
+    let reply = ipc::call(handle, instance::WAIT, &[], &[], &mut out).expect("wait: call");
+    if reply.info.label() != Status::Ok as usize {
         return Err(reply.info.label());
     }
     let segment = [words::bytes(&out[..reply.info.length()])];
     let message = words::reader(&segment);
     let end = message.get_root::<wait_results::Reader>().and_then(|r| r.get_end()).expect("wait: the results");
-    let ended = match end.which().expect("wait: how it ended") {
+    Ok(match end.which().expect("wait: how it ended") {
         end::Exited(code) => Ended::Exited(code),
         end::Faulted(fault) => Ended::Faulted(fault),
-        end::Killed(()) => Ended::Killed,
-    };
-    Ok((ended, back))
+        end::Stopped(()) => Ended::Stopped,
+    })
 }
 
-/// The process factory: start the peer from init's boot pack with memory
-/// this process provides; hear how it ended (an exit code, a fault, a
-/// kill) and get the memory back; and the refusals.
-pub fn check_factory(info: &Env) {
-    let region = untyped_at_least(info, 22);
-    let in_root = SlotRef { root: process_slot::CNODE, index: 0, depth: 0 };
-    let memory = |bits| {
-        let at = slots::alloc().expect("slot");
-        expect("child memory", untyped::retype(region, object::UNTYPED, bits, in_root, at, 1), Ok(()));
-        at
-    };
-    let kind = |s: usize| slot(s).identify().map(|id| id.object_type).map_err(|e| e.0);
-    let peer = info.peer_hash;
+fn stop(handle: usize) {
+    let reply = ipc::call(handle, instance::STOP, &[], &[], &mut []).expect("stop: call");
+    assert_eq!(reply.info.label(), Status::Ok as usize, "stop");
+}
 
-    // An exit code, and the memory back, usable again.
+/// The instance API: start `peer` from init's boot pack, paid from check's
+/// account; hear how it ended (an exit code, a fault, a stop) and see the
+/// memory come back; each kind of route; restart behind an export of its
+/// own; and the refusals.
+pub fn check_instances(info: &Env) {
+    let peer = info.peer_hash;
+    let used = || account::usage(info.account).expect("check's account").used;
+    let before = used();
+
+    // An exit code; the memory comes back; the handle goes.
     let (bootstrap, len) = peer_bootstrap_with(Mode::Exit, 0, 7);
-    let spawned = factory_spawn(info, &peer, &bootstrap[..len], Some(memory(20)), &[]);
-    assert_eq!((spawned.status, kind(spawned.back)), (label(Status::Ok), Ok(object::ENDPOINT)), "spawn: a handle");
-    let (ended, back) = factory_wait(spawned.back).expect("wait");
-    assert_eq!((ended, kind(back)), (Ended::Exited(7), Ok(object::UNTYPED)), "an exit, and the memory back");
-    assert_eq!(factory_wait(spawned.back).err(), Some(error::FAILED_LOOKUP), "the handle is gone after the wait");
-    let again = factory_spawn(info, &peer, &bootstrap[..len], Some(back), &[]);
-    let (ended, back) = factory_wait(again.back).expect("wait");
-    assert_eq!((ended, kind(back)), (Ended::Exited(7), Ok(object::UNTYPED)), "the returned memory builds a process again");
+    let exits = Component::new("exits", &peer, &bootstrap[..len]);
+    let (handle, _) = start(info, &exits, &[]).expect("start");
+    assert_eq!(wait(handle), Ok(Ended::Exited(7)), "an exit");
+    assert_eq!(used(), before, "the caller's memory comes back");
+    assert_eq!(wait(handle), Err(error::FAILED_LOOKUP), "the handle is gone after the wait");
 
     // A fault.
     let (bootstrap, len) = peer_bootstrap(Mode::Crash, 0);
-    let crashed = factory_spawn(info, &peer, &bootstrap[..len], Some(back), &[]);
-    let (ended, back) = factory_wait(crashed.back).expect("wait");
-    assert_eq!(ended, Ended::Faulted(fault::VM as u64), "a fault");
+    let (handle, _) = start(info, &Component::new("crashes", &peer, &bootstrap[..len]), &[]).expect("start");
+    assert_eq!(wait(handle), Ok(Ended::Faulted(fault::VM as u64)), "a fault");
 
-    // A kill: the peer calls an endpoint nobody answers, and blocks.
+    // A passed capability: an endpoint of check's, which the peer serves;
+    // the caller pays while it runs; then a stop.
+    let region = untyped_at_least(info, 16);
+    let in_root = SlotRef { root: process_slot::CNODE, index: 0, depth: 0 };
     let ep = slots::alloc().expect("slot");
     expect("endpoint", untyped::retype(region, object::ENDPOINT, 0, in_root, ep, 1), Ok(()));
-    let (bootstrap, len) = peer_bootstrap(Mode::Call, 0);
-    let blocked = factory_spawn(info, &peer, &bootstrap[..len], Some(back), &[ep]);
-    assert_eq!(blocked.status, label(Status::Ok), "spawn with an import");
-    let killed = ipc::call(blocked.back, process::KILL, &[], &[], &mut []).expect("kill");
-    assert_eq!(killed.info.label(), label(Status::Ok), "kill");
-    let (ended, back) = factory_wait(blocked.back).expect("wait");
-    assert_eq!(ended, Ended::Killed, "a kill");
+    let (bootstrap, len) = peer_bootstrap(Mode::Restartable, 0);
+    let serves = Component { routes: &[To::Passed(0)], ..Component::new("serves", &peer, &bootstrap[..len]) };
+    let (handle, _) = start(info, &serves, &[ep]).expect("start with a passed capability");
+    let mut out = [0usize; 1];
+    let count = |cap: usize, out: &mut [usize; 1]| ipc::call(cap, 1, &[], &[], out).map(|_| out[0]).map_err(|e| e.0);
+    assert_eq!(count(ep, &mut out), Ok(1), "the peer serves the passed endpoint");
+    assert!(used() >= before + (1 << 20), "the caller pays for it");
+    assert_eq!(start(info, &serves, &[ep]).err(), Some(Status::BadRequest as usize), "a name already running");
+    stop(handle);
+    assert_eq!(wait(handle), Ok(Ended::Stopped), "a stop");
+    assert_eq!(used(), before);
 
-    // Refusals, each giving the memory back.
-    let unknown = factory_spawn(info, &[0; 32], &bootstrap[..len], Some(back), &[]);
-    assert_eq!((unknown.status, kind(unknown.back)), (label(Status::NoSuchProgram), Ok(object::UNTYPED)), "an unknown program");
-    let small = factory_spawn(info, &peer, &bootstrap[..len], Some(memory(14)), &[]);
-    assert_eq!((small.status, kind(small.back)), (label(Status::LoadFailed), Ok(object::UNTYPED)), "too little memory");
-    let not_memory = factory_spawn(info, &peer, &bootstrap[..len], Some(ep), &[]);
-    assert_eq!((not_memory.status, kind(not_memory.back)), (label(Status::BadRequest), Ok(object::ENDPOINT)), "an endpoint as memory");
-    let nothing = factory_spawn(info, &peer, &bootstrap[..len], None, &[]);
-    assert_eq!(nothing.status, label(Status::BadRequest), "no memory");
-    // A request that isn't a message: a root pointer to a struct far past
-    // the end of the words.
+    // An export of its own, restarted behind it.
+    let restarts = Component { routes: &[To::Serve("service")], exports: &["service"], on_end: OnEnd::Restart, ..Component::new("restarts", &peer, &bootstrap[..len]) };
+    let (handle, service) = start(info, &restarts, &[]).expect("start with an export");
+    assert_eq!(count(service, &mut out), Ok(1), "the caller gets a capability to the export");
+    let died = ipc::call(service, 2, &[], &[], &mut []).map(drop).map_err(|e| e.0);
+    assert_eq!(died, Err(error::NO_REPLY));
+    assert_eq!(count(service, &mut out), Ok(1), "restarted behind its export");
+    stop(handle);
+    assert_eq!(wait(handle), Ok(Ended::Stopped));
+    assert!(slot(service).identify().is_err(), "a stopped instance's exports go");
+    assert_eq!(used(), before, "its exports' memory comes back");
+
+    // Exports the caller imports itself, re-badged; the instance API.
+    let (bootstrap, len) = peer_bootstrap_with(Mode::Exit, 0, 0);
+    let imports = Component { routes: &[To::Export("log", "log"), To::Export("restartable", "service"), To::Supervisor], ..Component::new("imports", &peer, &bootstrap[..len]) };
+    let (handle, _) = start(info, &imports, &[]).expect("start with the caller's exports");
+    assert_eq!(wait(handle), Ok(Ended::Exited(0)));
+
+    // Refusals.
+    let refused = |component: &Component, passed: &[usize]| start(info, component, passed).err();
+    let bad = Some(Status::BadRequest as usize);
+    let base = Component::new("refused", &peer, &bootstrap[..len]);
+    assert_eq!(refused(&Component { program: &[0; 32], ..base }, &[]), Some(Status::NoSuchProgram as usize), "an unknown program");
+    assert_eq!(refused(&Component { program: &peer[..31], ..base }, &[]), bad, "a short hash");
+    assert_eq!(refused(&Component { routes: &[To::Export("memory", "account")], ..base }, &[]), bad, "an export the caller doesn't import");
+    assert_eq!(refused(&Component { routes: &[To::Held("asidPool")], ..base }, &[]), bad, "what the supervisor holds");
+    assert_eq!(refused(&Component { routes: &[To::Passed(0)], ..base }, &[]), bad, "a capability not passed");
+    assert_eq!(refused(&Component { routes: &[To::Serve("nothing")], ..base }, &[]), bad, "an export it doesn't declare");
+    assert_eq!(refused(&Component { region: true, ..base }, &[]), bad, "a region");
+    assert_eq!(refused(&Component { on_end: OnEnd::EndBoot, ..base }, &[]), bad, "ending the boot");
+    assert_eq!(refused(&Component { reservation: 1 << 30, ..base }, &[]), Some(Status::OverLimit as usize), "more than the caller has");
+    let no_account = ipc::call(info.supervisor, supervisor::START, &[], &[], &mut []).expect("start: call");
+    assert_eq!(no_account.info.label(), Status::BadRequest as usize, "no account");
+    // Not a message: a root pointer to a struct far past the words.
     let broken = [(1000 << 2) | (1 << 32)];
-    let back = slots::alloc().expect("slot");
-    ipc::set_receive_window(process_slot::CNODE, back, 1);
-    let reply = ipc::call(info.factory, process_factory::SPAWN, &broken, &[ipc::Give::moved(unknown.back)], &mut []).expect("spawn: call");
-    assert_eq!((reply.info.label(), kind(back)), (label(Status::BadRequest), Ok(object::UNTYPED)), "a malformed request");
-    // A hash of the wrong length.
-    let short = factory_spawn(info, &peer[..31], &bootstrap[..len], Some(back), &[]);
-    assert_eq!((short.status, kind(short.back)), (label(Status::BadRequest), Ok(object::UNTYPED)), "a short hash");
+    let reply = ipc::call(info.supervisor, supervisor::START, &broken, &[ipc::Give::copy(info.account)], &mut []).expect("start: call");
+    assert_eq!(reply.info.label(), Status::BadRequest as usize, "a malformed request");
+    assert_eq!(used(), before, "refusals cost nothing");
 
     expect("revoke", slot(region).revoke(), Ok(()));
-    println!("the process factory starts programs by hash with the caller's memory, reports exits, faults and kills, and gives the memory back");
+    println!("the instance API starts components with the caller's memory and capabilities, restarts them behind their exports, reports exits, faults and stops, and gives the memory back");
 }
 
 /// The log, an export of the supervisor's: it refuses an unknown method

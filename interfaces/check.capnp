@@ -9,9 +9,9 @@
 struct CheckImports {
   # The ASID pool, for address spaces of the processes the checks start.
   asidPool @0 :UInt32;
-  # The process factory, and the hash of `peer` in the boot pack, for
-  # starting it through the factory.
-  factory @1 :UInt32;
+  # The instance API, and the hash of `peer` in the boot pack, for
+  # starting it through the API.
+  supervisor @1 :UInt32;
   peerHash @2 :Data;
   # Whether user mode may use CHERI capabilities.
   cheri @3 :Bool;

@@ -43,7 +43,7 @@ use channels::{check_capnp, check_echo_service, check_ring, measure_transfer};
 use cheri::check_cheri;
 use kernel_ipc::{check_cap_transfer, check_faults, check_ipc, check_notifications};
 use memory::check_mapping;
-use processes::{check_factory, check_log, check_process, check_restart};
+use processes::{check_instances, check_log, check_process, check_restart};
 use rt::check_heap;
 use threads::check_threads;
 
@@ -62,8 +62,8 @@ struct Env {
     /// Free slots.
     empty: SlotRange,
     asid_pool: usize,
-    /// The process factory, and the hash of the peer in its boot pack.
-    factory: usize,
+    /// The instance API, and the hash of the peer in the boot pack.
+    supervisor: usize,
     peer_hash: [u8; 32],
     /// Whether user mode may use CHERI capabilities.
     cheri: bool,
@@ -101,7 +101,7 @@ fn env(startup: &'static Startup) -> Result<Env, capnp::Error> {
         cnode_radix: startup.cnode_radix,
         empty: SlotRange { start: untyped.end, end: startup.free.end },
         asid_pool: import(imports.get_asid_pool()),
-        factory: import(imports.get_factory()),
+        supervisor: import(imports.get_supervisor()),
         peer_hash: imports.get_peer_hash()?.try_into().expect("check: the peer's hash is 32 bytes"),
         cheri: imports.get_cheri(),
         log: import(imports.get_log()),
@@ -156,7 +156,7 @@ fn sap_main(a0: usize, _: usize, _: usize) -> ! {
     check_echo_service(info);
     measure_transfer(info);
     check_capnp();
-    check_factory(info);
+    check_instances(info);
     check_log(info);
     check_restart(info);
     check_accounts(info);

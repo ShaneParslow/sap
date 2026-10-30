@@ -14,7 +14,13 @@
 # enacts the composition, before anything starts, gives the serving
 # component the receive side and each client a capability badged for that
 # client. The endpoint outlives the server's instance.
+#
+# Components also start at runtime, through the instance API
+# (`Supervisor.start`), for a caller that pays for them; such an instance
+# is named after its caller ("check/helper") and ends with it.
 # TODO: lazy start (M7).
+
+using Memory = import "memory.capnp";
 
 struct Composition {
   components @0 :List(Component);
@@ -61,6 +67,11 @@ struct Route {
     # rights, to receive on and to mint capabilities to it from, with
     # badges below `sap_process::launcher::ROUTE_BADGES`.
     serve @2 :Text;
+    # For a component started through `Supervisor.start`: the capability
+    # passed in that call with this index.
+    passed @3 :UInt32;
+    # This supervisor's instance API, as this component.
+    supervisor @4 :Void;
   }
 }
 
@@ -126,4 +137,62 @@ enum OnEnd {
   # exited with 0, forget it. Not after failing more than a few times in a
   # row within a second of starting. Its routes can't move capabilities.
   restart @2;
+}
+
+# The instance API: starting components at runtime. Calls follow the
+# convention in `README.md`; the reply's label is a `Status`.
+# TODO: capability fields once RPC brings capability tables (M6); a
+# component too large for one message (by page transfer).
+interface Supervisor {
+  # Start `component`, as its caller's: named "caller/name" (unique while
+  # it runs), its memory a child account of `account` (the caller pays,
+  # for its exports' endpoints too), ended when its caller ends. Its
+  # routes may be `passed` capabilities, exports the caller imports itself
+  # (re-badged for it), its own exports, and `supervisor`; never what the
+  # supervisor holds. Its memory must be an account, its end `forget` or
+  # `restart`.
+  # Capabilities in: `account`, then the passed capabilities, in order.
+  # Out on `ok`: `instance`, then a capability to call each of its exports,
+  # in the component's order.
+  # Status: `badRequest` (a malformed request or a route it may not have),
+  # `noSuchProgram`, `overLimit` (the account's terms), `full`,
+  # `loadFailed`.
+  start @0 (component :Component, account :Memory.MemoryAccount, passed :List(Passed))
+      -> (instance :Instance, exports :List(Passed));
+}
+
+# One capability of a list (capnpc-rust has no `List(Capability)`).
+struct Passed {
+  capability @0 :Capability;
+}
+
+interface Instance {
+  # Wait for the instance to end for good (a restart isn't an end). Once
+  # answered, the handle stops working. One waiter at a time: a second
+  # `wait` while one is pending is `badRequest`.
+  wait @0 () -> (end :End);
+
+  # Stop it, for good. Stopping one that has ended does nothing.
+  stop @1 () -> ();
+}
+
+struct End {
+  union {
+    # It exited with this code.
+    exited @0 :UInt64;
+    # It faulted with this label (`sap_abi::fault`), and wasn't restarted.
+    faulted @1 :UInt64;
+    # `Instance.stop`, or its caller ended.
+    stopped @2 :Void;
+  }
+}
+
+# The label of a reply to the instance API.
+enum Status {
+  ok @0;
+  badRequest @1;
+  noSuchProgram @2;
+  overLimit @3;
+  full @4;
+  loadFailed @5;
 }

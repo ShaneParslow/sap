@@ -1,9 +1,9 @@
-//! The root task, and the root supervisor it is becoming (M7). It enacts
-//! the boot composition (`supervisor`): the memory manager, which gets the
-//! machine's RAM; the log service; and `check`, the kernel checks, which
-//! gets the ASID pool, the one other authority only the root task holds at
-//! boot. Then it serves the process factory (`factory`), which starts
-//! programs from the boot pack for its clients, until `check` exits.
+//! The root task, and the root supervisor (M7). It enacts the boot
+//! composition (`supervisor`): the memory manager, which gets the
+//! machine's RAM; the log service; a test service; and `check`, the
+//! checks, which gets the ASID pool, the one other authority only the root
+//! task holds at boot, and the instance API. Then it serves its instances
+//! and the instance API until `check` exits.
 
 #![no_std]
 #![no_main]
@@ -13,7 +13,6 @@
 
 extern crate alloc;
 
-mod factory;
 mod pack;
 mod supervisor;
 
@@ -21,20 +20,19 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use capnp::message::{Builder, SingleSegmentAllocator};
-use factory::{Answer, Factory};
 use sap_interfaces::check_capnp::check_imports;
 use sap_interfaces::log_capnp::log_imports;
 use sap_interfaces::memory_capnp::memory_imports;
 use sap_interfaces::peer_capnp::{peer_imports, Mode};
-use sap_interfaces::supervisor_capnp::{composition, OnEnd};
+use sap_interfaces::supervisor_capnp::{composition, OnEnd, Status};
 use sap_loader::Parent;
 use sap_ring::as_bytes_mut;
-use sap_rt::abi::{init_slot, object, rights, BootInfo, UntypedDesc, MAX_EXTRA_CAPS, MAX_MESSAGE_LENGTH};
+use sap_rt::abi::{init_slot, object, BootInfo, UntypedDesc, MAX_EXTRA_CAPS, MAX_MESSAGE_LENGTH};
 use sap_rt::address::mapped;
 use sap_rt::cnode::SlotRef;
 use sap_rt::runtime::{self, Memory, Resources};
 use sap_rt::{ipc, println, slots, untyped};
-use supervisor::Supervisor;
+use supervisor::{Answer, Supervisor};
 
 /// Where init's heap grows.
 const HEAP: core::ops::Range<usize> = 0x08_0000_0000..0x08_4000_0000;
@@ -74,8 +72,8 @@ fn sap_main(boot_info: usize, _: usize, _: usize) -> ! {
     runtime::start(Resources { cnode: init_slot::CNODE, slots: info.empty.start..info.empty.end, memory: Memory::Untyped(own), vspace: init_slot::VSPACE, heap: HEAP });
 
     // One endpoint for everything: the supervisor's instances report their
-    // exits and faults here, and the factory's clients and processes call
-    // it, each through a capability with its own badge.
+    // exits and faults here, and call the instance API and their handles,
+    // each through a capability with its own badge.
     let parent = Parent {
         cnode: init_slot::CNODE,
         vspace: init_slot::VSPACE,
@@ -85,14 +83,9 @@ fn sap_main(boot_info: usize, _: usize, _: usize) -> ! {
         scratch: SCRATCH,
         timer_hz: info.timer_hz,
     };
-    let (ep, mut reply, factory_cap) = (new_object(own, object::ENDPOINT), new_object(own, object::REPLY), slot());
-    let endpoint = SlotRef::new(init_slot::CNODE, ep);
-    let factory_rights = rights::WRITE | rights::GRANT | rights::GRANT_REPLY;
-    SlotRef::new(init_slot::CNODE, factory_cap).mint_from(endpoint, factory_rights, factory::FACTORY_BADGE).expect("init: badge");
-    let mut factory = Factory::new(ep, own, parent);
+    let (ep, mut reply) = (new_object(own, object::ENDPOINT), new_object(own, object::REPLY));
     let mut supervisor = Supervisor::new(ep, pool, parent);
     supervisor.hold("asidPool", init_slot::ASID_POOL);
-    supervisor.hold("factory", factory_cap);
     for (i, (cptr, _)) in spare_untyped(info, own, pool).enumerate() {
         supervisor.hold(alloc::format!("untyped.{i}"), cptr);
     }
@@ -100,26 +93,22 @@ fn sap_main(boot_info: usize, _: usize, _: usize) -> ! {
 
     let mut words = [0usize; MAX_MESSAGE_LENGTH];
     loop {
-        ipc::set_receive_window(init_slot::CNODE, factory.window, MAX_EXTRA_CAPS);
+        ipc::set_receive_window(init_slot::CNODE, supervisor.window, MAX_EXTRA_CAPS);
         let message = ipc::recv(ep, reply, &mut words).expect("init: receive");
         let (badge, label) = (message.badge, message.info.label());
         let words = &words[..message.info.length()];
-        let answer = match supervisor.handle(badge, label, words) {
-            Some(answer) => Some(answer),
-            None => factory.handle(badge, label, words, message.info.extra_caps(), reply),
-        };
-        match answer {
+        match supervisor.handle(badge, label, words, message.info.extra_caps(), reply) {
             Some(Answer::Reply(label, words, caps)) => {
                 let _ = ipc::reply(reply, label, &words, &caps);
             }
-            Some(Answer::Later) => reply = factory.fresh_reply(),
+            Some(Answer::Later) => reply = supervisor.fresh_reply(),
             Some(Answer::Nothing) => {}
             None => {
                 println!("init: ignored a message with badge {badge:#x}, label {label}");
-                let _ = ipc::reply(reply, sap_interfaces::process_capnp::Status::BadRequest as usize, &[], &[]);
+                let _ = ipc::reply(reply, Status::BadRequest as usize, &[], &[]);
             }
         }
-        factory.clear_window();
+        supervisor.clear_window();
     }
 }
 
@@ -197,8 +186,8 @@ fn bootstrap<T: capnp::traits::Owned>(build: impl FnOnce(T::Builder<'_>)) -> Vec
 /// Enact the boot composition: the memory manager, with copies of every
 /// spare untyped region as its RAM, serving accounts; the log service,
 /// serving its export; a test service restarted when it fails; then
-/// `check`, with a copy of the ASID pool, the factory capability, moved,
-/// the log and the test service as its imports. All but the memory manager
+/// `check`, with a copy of the ASID pool, the instance API, the log and the
+/// test service as its imports. All but the memory manager
 /// get accounts. Any of them but the test service ends the boot when it
 /// ends.
 fn boot(info: &BootInfo, own: usize, pool: usize, supervisor: &mut Supervisor) {
@@ -221,10 +210,11 @@ fn boot(info: &BootInfo, own: usize, pool: usize, supervisor: &mut Supervisor) {
         root.set_mode(Mode::Restartable);
         root.set_endpoint(0);
     });
-    // Imports: the ASID pool, the factory, the log, the restartable service.
+    // Imports: the ASID pool, the instance API, the log, the restartable
+    // service.
     let check = bootstrap::<check_imports::Owned>(|mut root| {
         root.set_asid_pool(0);
-        root.set_factory(1);
+        root.set_supervisor(1);
         root.set_log(2);
         root.set_restartable(3);
         root.set_peer_hash(&pack::PEER.0);
@@ -310,9 +300,7 @@ fn boot(info: &BootInfo, own: usize, pool: usize, supervisor: &mut Supervisor) {
     limits.set_stack_pages(CHECK_STACK_PAGES);
     let mut imports = component.init_imports(4);
     imports.reborrow().get(0).init_held().set_name("asidPool");
-    let mut factory = imports.reborrow().get(1).init_held();
-    factory.set_name("factory");
-    factory.set_move(true);
+    imports.reborrow().get(1).set_supervisor(());
     let mut log = imports.reborrow().get(2).init_export();
     log.set_component("log");
     log.set_name("log");
