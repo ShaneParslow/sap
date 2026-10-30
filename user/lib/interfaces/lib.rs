@@ -59,6 +59,11 @@ pub mod peer_capnp {
     include!(concat!(env!("OUT_DIR"), "/peer_capnp.rs"));
 }
 
+#[allow(clippy::all)]
+pub mod supervisor_capnp {
+    include!(concat!(env!("OUT_DIR"), "/supervisor_capnp.rs"));
+}
+
 #[cfg(feature = "alloc")]
 #[allow(clippy::all)]
 // Generated servers turn a pointer into an integer only as an identity

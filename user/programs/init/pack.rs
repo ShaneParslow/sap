@@ -1,6 +1,6 @@
 //! The boot pack: the programs init can start before there is a store,
 //! built and embedded by `build.rs`, each named by the BLAKE3 hash of its
-//! image (the boot image of the wiki's prog-loading page).
+//! image (the boot image of design/processes.md in sap-docs).
 
 /// A program's name: the BLAKE3 hash of its image.
 #[derive(Clone, Copy, PartialEq, Eq)]
