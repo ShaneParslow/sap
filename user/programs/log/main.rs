@@ -25,7 +25,7 @@ use sap_process::{launcher, process_slot, Startup};
 use sap_rt::abi::{object, MAX_MESSAGE_LENGTH};
 use sap_rt::cnode::SlotRef;
 use sap_rt::debug::Console;
-use sap_rt::{ipc, process, untyped};
+use sap_rt::{account, ipc, process, untyped};
 
 /// How many clients the service remembers the names of; later ones are
 /// asked about on every call.
@@ -89,10 +89,11 @@ fn sap_main(a0: usize, _: usize, _: usize) -> ! {
     // SAFETY: the loader started this process with its startup record.
     let startup = unsafe { process::startup(a0) };
     let endpoint = endpoint(startup).expect("log: bootstrap message");
-    // A reply object, from the service's budget.
-    let reply = startup.free.start;
+    // A reply object, from a page of the service's account.
+    let (page, reply) = (startup.free.start, startup.free.start + 1);
+    account::allocate(process_slot::ACCOUNT, 12, process_slot::CNODE, page).expect("log: a page of its account");
     let root = SlotRef { root: process_slot::CNODE, index: 0, depth: 0 };
-    untyped::retype(process_slot::UNTYPED, object::REPLY, 0, root, reply, 1).expect("log: reply object");
+    untyped::retype(page, object::REPLY, 0, root, reply, 1).expect("log: reply object");
 
     let mut clients: [Option<Client>; MAX_CLIENTS] = [const { None }; MAX_CLIENTS];
     let mut words = [0usize; MAX_MESSAGE_LENGTH];

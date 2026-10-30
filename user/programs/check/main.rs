@@ -1,7 +1,8 @@
-//! The kernel checks: the program the root task starts at boot to check
-//! the kernel's features as they arrive. Its bootstrap message
-//! (`CheckImports` in `interfaces/check.capnp`) gives it the authority the
-//! root task holds at boot: untyped memory and the ASID pool. Its output
+//! The kernel checks: the program the root supervisor starts at boot to
+//! check the kernel's features as they arrive, and the services' too. Its
+//! bootstrap message (`CheckImports` in `interfaces/check.capnp`) gives it
+//! the ASID pool, which only the root task holds at boot; its untyped
+//! memory is chunks of its memory account. Its output
 //! goes to the log, which puts the component's name before each line. It
 //! reports success by exiting with code 0; a failed check panics, which
 //! halts the machine.
@@ -18,6 +19,7 @@
 
 extern crate alloc;
 
+mod accounts;
 mod caps;
 mod memory;
 mod threads;
@@ -32,9 +34,10 @@ use sap_rt::abi::{SlotRange, UntypedDesc, MAX_BOOT_UNTYPED};
 use sap_rt::cnode::SlotRef;
 use sap_rt::sys::Error;
 use sap_rt::runtime::{self, Resources};
-use sap_rt::{println, process};
+use sap_rt::{account, println, process};
 use capnp::message::{Reader, ReaderOptions, SegmentArray};
 use sap_interfaces::check_capnp::check_imports;
+use accounts::check_accounts;
 use caps::{check_cnode_operations, check_retype};
 use channels::{check_capnp, check_echo_service, check_ring, measure_transfer};
 use cheri::check_cheri;
@@ -49,9 +52,10 @@ fn slot(i: usize) -> SlotRef {
     SlotRef::new(process_slot::CNODE, i)
 }
 
-/// What the checks work with: the startup record and the bootstrap
-/// message, laid out the way the kernel's boot information is, since the
-/// checks were written for the root task.
+/// What the checks work with: the startup record, the bootstrap message,
+/// and chunks of untyped memory from the account, laid out the way the
+/// kernel's boot information is, since the checks were written for the
+/// root task.
 struct Env {
     timer_hz: u64,
     cnode_radix: usize,
@@ -64,36 +68,43 @@ struct Env {
     /// Whether user mode may use CHERI capabilities.
     cheri: bool,
     log: usize,
-    /// Untyped memory, in consecutive slots, described in order in
-    /// `untyped_list`.
+    /// The process's memory account.
+    account: usize,
+    /// Untyped memory, chunks of the account in consecutive slots,
+    /// described in order in `untyped_list`.
     untyped: SlotRange,
     untyped_list: [UntypedDesc; MAX_BOOT_UNTYPED],
 }
 
-/// Read the bootstrap message into an `Env`.
+/// The chunks of untyped memory the checks use, by size, from the account:
+/// the first is revoked by `check_cnode_operations`, the largest is the
+/// runtime's, and each check takes the first that is large enough.
+const CHUNKS: [u8; 5] = [16, 18, 20, 22, 23];
+
+/// Read the bootstrap message into an `Env`, and take the chunks.
 fn env(startup: &'static Startup) -> Result<Env, capnp::Error> {
     let segments = [process::bootstrap(startup)];
     let reader = Reader::new(SegmentArray::new(&segments), ReaderOptions::new());
     let imports = reader.get_root::<check_imports::Reader>()?;
     let import = |index: u32| process::import(startup, index).expect("check: no such import");
-    let regions = imports.get_untyped()?;
-    assert!(regions.len() as usize <= MAX_BOOT_UNTYPED, "check: too many untyped regions");
-    let first = if regions.is_empty() { startup.free.start } else { import(regions.get(0).get_import()) };
+    let first = startup.free.start;
     let mut untyped_list = [UntypedDesc { paddr: 0, size_bits: 0, is_device: 0, _pad: [0; 6] }; MAX_BOOT_UNTYPED];
-    for (i, region) in regions.iter().enumerate() {
-        assert_eq!(import(region.get_import()), first + i, "check: untyped imports must be consecutive");
-        untyped_list[i] = UntypedDesc { paddr: region.get_paddr() as usize, size_bits: region.get_size_bits(), is_device: 0, _pad: [0; 6] };
+    for (i, &bits) in CHUNKS.iter().enumerate() {
+        let chunk = account::allocate(process_slot::ACCOUNT, bits, process_slot::CNODE, first + i).expect("check: a chunk of the account");
+        untyped_list[i] = UntypedDesc { paddr: chunk.paddr as usize, size_bits: bits, is_device: 0, _pad: [0; 6] };
     }
+    let untyped = SlotRange { start: first, end: first + CHUNKS.len() };
     Ok(Env {
         timer_hz: startup.timer_hz,
         cnode_radix: startup.cnode_radix,
-        empty: startup.free,
+        empty: SlotRange { start: untyped.end, end: startup.free.end },
         asid_pool: import(imports.get_asid_pool()),
         factory: import(imports.get_factory()),
         peer_hash: imports.get_peer_hash()?.try_into().expect("check: the peer's hash is 32 bytes"),
         cheri: imports.get_cheri(),
         log: import(imports.get_log()),
-        untyped: SlotRange { start: first, end: first + regions.len() as usize },
+        account: process_slot::ACCOUNT,
+        untyped,
         untyped_list,
     })
 }
@@ -154,6 +165,7 @@ fn sap_main(a0: usize, _: usize, _: usize) -> ! {
     check_capnp();
     check_factory(info);
     check_log(info);
+    check_accounts(info);
     check_cheri(info);
     println!("all checks passed");
     process::exit(0)

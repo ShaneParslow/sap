@@ -77,6 +77,9 @@ pub struct Launch<'a> {
     /// The caller's endpoint capability to copy into the process's
     /// launcher slot (normally badged, so the caller knows who calls).
     pub launcher: Option<usize>,
+    /// The caller's capability to the process's memory account, to copy
+    /// into its account slot.
+    pub account: Option<usize>,
     /// The caller's capabilities to give as the process's imports, in
     /// order.
     pub imports: &'a [(usize, Give)],
@@ -102,6 +105,7 @@ pub const LAUNCH: Launch<'static> = Launch {
     stack_pages: DEFAULT_STACK_PAGES,
     budget_bits: None,
     launcher: None,
+    account: None,
     imports: &[],
     bootstrap: &[],
 };
@@ -388,6 +392,9 @@ pub fn load(image: &[u8], parent: &Parent, slots: &mut Slots, launch: &Launch) -
     }
     if let Some(launcher) = launch.launcher {
         process.give(parent, process_slot::LAUNCHER, launcher, rights::ALL)?;
+    }
+    if let Some(account) = launch.account {
+        process.give(parent, process_slot::ACCOUNT, account, rights::ALL)?;
     }
     for (i, &(cap, give)) in launch.imports.iter().enumerate() {
         match give {

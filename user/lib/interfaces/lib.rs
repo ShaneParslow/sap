@@ -51,6 +51,11 @@ pub mod echo_capnp {
 }
 
 #[allow(clippy::all)]
+pub mod memory_capnp {
+    include!(concat!(env!("OUT_DIR"), "/memory_capnp.rs"));
+}
+
+#[allow(clippy::all)]
 pub mod peer_capnp {
     include!(concat!(env!("OUT_DIR"), "/peer_capnp.rs"));
 }

@@ -1,8 +1,10 @@
 //! The supervisor: starts the components of a composition
 //! (`interfaces/supervisor.capnp`) and enforces their limits. It holds a
-//! table of named capabilities that compositions route from, and a region
-//! of untyped memory it carves each instance's memory from; ending an
-//! instance is one revoke of that memory.
+//! table of named capabilities that compositions route from. An instance's
+//! memory is a memory account (`interfaces/memory.capnp`), a child of the
+//! supervisor's, which the instance is built from a chunk of; or, for the
+//! memory manager only, a region the supervisor carves from its own pool.
+//! Either way, ending an instance is one revoke.
 //!
 //! It owns the components' exports: it makes each export's endpoint when it
 //! enacts a composition, from its own memory, so the endpoint outlives the
@@ -19,12 +21,13 @@ use alloc::vec::Vec;
 
 use alloc::vec;
 
-use sap_interfaces::supervisor_capnp::{component, composition, route, OnEnd};
+use sap_interfaces::memory_capnp::{ROOT_CONTROLLER, ROOT_HOLDER};
+use sap_interfaces::supervisor_capnp::{component, composition, limits, route, OnEnd};
 use sap_loader::{self as loader, Give, Launch, Parent, Slots};
 use sap_process::launcher;
 use sap_rt::abi::{fault, init_slot, object, rights};
 use sap_rt::cnode::SlotRef;
-use sap_rt::{debug, println, slots, tcb, untyped};
+use sap_rt::{account, debug, println, slots, tcb, untyped};
 
 use crate::factory::Answer;
 use crate::pack;
@@ -59,10 +62,18 @@ pub enum StartError {
     LoadFailed,
 }
 
+/// Where an instance's objects come from.
+enum Memory {
+    /// An untyped region carved from the pool.
+    Region(usize),
+    /// A memory account: the capabilities of its holder and controller,
+    /// and the chunk the instance is built from.
+    Account { holder: usize, controller: usize, chunk: usize },
+}
+
 struct Instance {
     name: String,
-    /// The untyped region every object of the instance is made from.
-    memory: usize,
+    memory: Memory,
     objects: usize,
     /// The badged endpoint capability that is its launcher and fault
     /// handler.
@@ -90,13 +101,16 @@ pub struct Supervisor {
     /// init's endpoint, which the instances' launcher capabilities name.
     endpoint: usize,
     parent: Parent,
-    /// The untyped region instances' memory is carved from.
+    /// The untyped region regions are carved from.
     pool: usize,
+    /// The holder's capability to the supervisor's account, once the
+    /// memory manager runs, and the controller's.
+    account: Option<(usize, usize)>,
     held: Vec<(String, usize)>,
     exports: Vec<Export>,
     clients: Vec<Client>,
-    /// The badge the next client gets; never 0, so an unbadged call is
-    /// nobody's.
+    /// The badge the next client gets: from `ROUTE_BADGES` up, so neither
+    /// unbadged calls nor capabilities a server mints are anybody's route.
     next_badge: usize,
     instances: [Option<Instance>; MAX_INSTANCES],
 }
@@ -107,10 +121,11 @@ impl Supervisor {
             endpoint,
             parent,
             pool,
+            account: None,
             held: Vec::new(),
             exports: Vec::new(),
             clients: Vec::new(),
-            next_badge: 1,
+            next_badge: launcher::ROUTE_BADGES,
             instances: [const { None }; MAX_INSTANCES],
         }
     }
@@ -146,10 +161,78 @@ impl Supervisor {
                 self.exports.push(Export { component: owner.into(), name: name.into(), endpoint });
             }
         }
+        // The root account, from the memory manager's export: the manager
+        // knows its capabilities by these badges.
+        if composition.has_accounts() {
+            let accounts = composition.get_accounts().map_err(bad)?;
+            let export = self.export(text(accounts.get_component())?, text(accounts.get_name())?).ok_or(StartError::BadComponent)?;
+            let (holder, controller) = (slots::alloc().expect("init: out of slots"), slots::alloc().expect("init: out of slots"));
+            let endpoint = slot(self.exports[export].endpoint);
+            slot(holder).mint_from(endpoint, CLIENT_RIGHTS, ROOT_HOLDER as usize).expect("init: badge");
+            slot(controller).mint_from(endpoint, rights::WRITE, ROOT_CONTROLLER as usize).expect("init: badge");
+            self.account = Some((holder, controller));
+        }
         for component in components {
             self.start(component)?;
         }
         Ok(())
+    }
+
+    /// The memory an instance with `limits` is built from: the untyped
+    /// region to build it from, how to end it, and log2 of the untyped
+    /// budget it gets (0 for none).
+    fn memory(&self, limits: limits::Reader) -> Result<(usize, Memory, u8), StartError> {
+        let bad = |_| StartError::BadComponent;
+        let root = SlotRef { root: init_slot::CNODE, index: 0, depth: 0 };
+        match limits.get_memory().which().map_err(|_| StartError::BadComponent)? {
+            limits::memory::Region(region) => {
+                let region = region.map_err(bad)?;
+                let memory = slots::alloc().expect("init: out of slots");
+                if untyped::retype(self.pool, object::UNTYPED, region.get_bits() as usize, root, memory, 1).is_err() {
+                    slots::free(memory);
+                    return Err(StartError::OverLimit);
+                }
+                Ok((memory, Memory::Region(memory), region.get_budget_bits()))
+            }
+            limits::memory::Account(terms) => {
+                let terms = terms.map_err(bad)?;
+                let (parent, _) = self.account.ok_or(StartError::BadComponent)?;
+                let caps = slots::alloc_range(2).expect("init: out of slots");
+                if account::child(parent, terms.get_reservation(), terms.get_limit(), init_slot::CNODE, caps).is_err() {
+                    slots::free_range(caps, 2);
+                    return Err(StartError::OverLimit);
+                }
+                let (holder, controller, chunk) = (caps, caps + 1, slots::alloc().expect("init: out of slots"));
+                let memory = Memory::Account { holder, controller, chunk };
+                if account::allocate(holder, terms.get_process_bits(), init_slot::CNODE, chunk).is_err() {
+                    Self::end_memory(&memory);
+                    return Err(StartError::OverLimit);
+                }
+                Ok((chunk, memory, 0))
+            }
+        }
+    }
+
+    /// Destroy everything made from `memory`, and give it back.
+    fn end_memory(memory: &Memory) {
+        match *memory {
+            Memory::Region(region) => {
+                let _ = slot(region).revoke();
+                let _ = slot(region).delete();
+                slots::free(region);
+            }
+            Memory::Account { holder, controller, chunk } => {
+                // TODO: keep the account, with its reservation, for a
+                // restart (M7).
+                if let Err(error) = account::destroy(controller) {
+                    println!("init: ending an account failed: {error:?}");
+                }
+                for cap in [holder, controller, chunk] {
+                    let _ = slot(cap).delete();
+                    slots::free(cap);
+                }
+            }
+        }
     }
 
     fn start(&mut self, component: component::Reader) -> Result<(), StartError> {
@@ -184,13 +267,11 @@ impl Supervisor {
         }
         let index = self.instances.iter().position(Option::is_none).ok_or(StartError::Full)?;
 
-        // The instance's memory, carved from the pool.
-        let memory = slots::alloc().expect("init: out of slots");
-        let root = SlotRef { root: init_slot::CNODE, index: 0, depth: 0 };
-        if untyped::retype(self.pool, object::UNTYPED, limits.get_memory_bits() as usize, root, memory, 1).is_err() {
-            slots::free(memory);
-            return Err(StartError::OverLimit);
-        }
+        let (untyped, memory, budget_bits) = self.memory(limits)?;
+        let account = match memory {
+            Memory::Region(_) => None,
+            Memory::Account { holder, .. } => Some(holder),
+        };
 
         // Then the imports: nothing fails between here and the load.
         let (mut imports, mut moved, mut clients) = (Vec::new(), Vec::new(), Vec::new());
@@ -208,7 +289,7 @@ impl Supervisor {
                     clients.push((cap, Client { badge, export, component: name.clone() }));
                     (cap, Give::Move)
                 }
-                Source::Serve(export) => (self.exports[export].endpoint, Give::Copy(rights::READ)),
+                Source::Serve(export) => (self.exports[export].endpoint, Give::Copy(rights::ALL)),
             });
         }
 
@@ -220,12 +301,13 @@ impl Supervisor {
             max_priority: limits.get_max_priority() as usize,
             cnode_radix: limits.get_cnode_bits() as usize,
             stack_pages: limits.get_stack_pages() as usize,
-            budget_bits: (limits.get_budget_bits() > 0).then_some(limits.get_budget_bits() as usize),
+            budget_bits: (budget_bits > 0).then_some(budget_bits as usize),
             launcher: Some(launcher_cap),
+            account,
             imports: &imports,
             bootstrap,
         };
-        let parent = Parent { untyped: memory, ..self.parent };
+        let parent = Parent { untyped, ..self.parent };
         let mut slots = Slots { next: objects, end: objects + OBJECT_SLOTS };
         let started = loader::load(image, &parent, &mut slots, &launch).and_then(|p| {
             tcb::set_fault_handler(p.tcb, Some(launcher_cap))?;
@@ -244,19 +326,26 @@ impl Supervisor {
             return Err(StartError::LoadFailed);
         }
         self.clients.extend(clients.into_iter().map(|(_, client)| client));
-        println!("init: started {} ({} KiB image, 2^{} bytes of memory)", instance.name, image.len() / 1024, limits.get_memory_bits());
+        match limits.get_memory().which() {
+            Ok(limits::memory::Account(Ok(terms))) => println!(
+                "init: started {} ({} KiB image; account of {} KiB reserved, {} KiB limit)",
+                instance.name,
+                image.len() / 1024,
+                terms.get_reservation() >> 10,
+                terms.get_limit() >> 10
+            ),
+            _ => println!("init: started {} ({} KiB image, in a region of the pool)", instance.name, image.len() / 1024),
+        }
         self.instances[index] = Some(instance);
         Ok(())
     }
 
     /// Destroy an instance: revoking its memory deletes every object made
-    /// from it, then the memory itself goes back to the pool.
+    /// from it, then the memory itself goes back.
     fn destroy(&self, instance: &Instance) {
-        let _ = slot(instance.memory).revoke();
-        let _ = slot(instance.memory).delete();
+        Self::end_memory(&instance.memory);
         let _ = slot(instance.launcher).revoke();
         let _ = slot(instance.launcher).delete();
-        slots::free(instance.memory);
         slots::free(instance.launcher);
         slots::free_range(instance.objects, OBJECT_SLOTS);
     }

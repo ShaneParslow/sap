@@ -1,8 +1,9 @@
 //! The runtime for sap user programs: the entry point, text output (to the
 //! log, or the kernel's debug console), the panic handler, a slot
 //! allocator, locks, and (with the `heap` feature, on by default) a heap
-//! for `alloc`. A program provides `sap_main`, and starts the runtime with
-//! `runtime::start` before it uses slots, locks or the heap.
+//! for `alloc`; calls on memory accounts (`account`). A program provides
+//! `sap_main`, and starts the runtime with `runtime::start` before it uses
+//! slots, locks or the heap.
 //!
 //! The system-call wrappers are `sap-sys`, re-exported here. Rings and the
 //! loader are crates of their own (`sap-ring`, `sap-loader`).
@@ -19,6 +20,7 @@
 #![deny(implicit_provenance_casts, integer_to_ptr_transmutes)]
 
 mod arch;
+pub mod account;
 pub mod debug;
 #[cfg(feature = "heap")]
 pub mod heap;

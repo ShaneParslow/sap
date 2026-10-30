@@ -29,6 +29,10 @@ pub mod process_slot {
     pub const LAUNCHER: usize = 5;
     /// The frame of the main thread's IPC buffer, as the root task has it.
     pub const IPC_BUFFER: usize = 6;
+    /// The holder's capability to the process's memory account
+    /// (`interfaces/memory.capnp`), if its launcher gives it one; empty
+    /// otherwise.
+    pub const ACCOUNT: usize = 7;
     /// The first slot of the process's imports.
     pub const FIRST_IMPORT: usize = 8;
 }
@@ -50,6 +54,9 @@ pub mod launcher {
     pub const NO_SUCH_CLIENT: usize = 1;
     /// The longest name a `CLIENT` reply carries.
     pub const MAX_NAME: usize = 64;
+    /// Clients' badges on a supervisor's exports start here; a server
+    /// minting capabilities to its own export uses badges below.
+    pub const ROUTE_BADGES: usize = 1 << 32;
 }
 
 /// A range of virtual addresses, `start..end`.

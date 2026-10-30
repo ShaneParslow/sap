@@ -18,6 +18,11 @@
 
 struct Composition {
   components @0 :List(Component);
+  # The export of the memory manager this composition runs, for a root
+  # supervisor, which then holds the root account; instances' accounts are
+  # its children.
+  # TODO: a held account instead, for a supervisor that isn't the root.
+  accounts @1 :ExportRef;
 }
 
 struct Component {
@@ -52,7 +57,9 @@ struct Route {
     # component: the server can ask the supervisor which component a
     # badge is (`sap_process::launcher::CLIENT`).
     export @1 :ExportRef;
-    # The receive side of one of this component's own exports, by name.
+    # One of this component's own exports, by name: a capability with all
+    # rights, to receive on and to mint capabilities to it from, with
+    # badges below `sap_process::launcher::ROUTE_BADGES`.
     serve @2 :Text;
   }
 }
@@ -72,25 +79,40 @@ struct ExportRef {
 
 # The limits the supervisor enforces on an instance.
 struct Limits {
-  # Every kernel object of the instance (its address space, CNode,
-  # threads, pages) is made from an untyped region of 2^memoryBits bytes
-  # the supervisor carves from its own memory; ending the instance is one
-  # revoke of it.
-  # TODO: a memory account with a reservation and a limit, from the
-  # memory manager, instead of a fixed region (design/memory.md).
-  memoryBits @0 :UInt8;
-  # Its thread's priority and the highest it may give its own threads, at
-  # most the supervisor's own.
+  memory :union {
+    # Every kernel object of the instance is made from an untyped region
+    # of 2^bits bytes the supervisor carves from its own pool, 2^budgetBits
+    # of them its own (`process_slot::UNTYPED`); ending it is one revoke.
+    # Only for the memory manager, which can't be its own client.
+    region @0 :Region;
+    # A memory account (`memory.capnp`), the instance's
+    # `process_slot::ACCOUNT`; the instance is built from a chunk of it, so
+    # ending it is one revoke of the account.
+    account @1 :Account;
+  }
+  # Its thread's priority and the highest it may give its own threads,
+  # both held to the supervisor's own by the kernel.
   # TODO: a scheduling context, once the kernel has them.
-  priority @1 :UInt8;
-  maxPriority @2 :UInt8;
+  priority @2 :UInt8;
+  maxPriority @3 :UInt8;
   # log2 of its CNode's slots, and its stack in pages.
-  cnodeBits @3 :UInt8;
-  stackPages @4 :UInt16;
-  # log2 of the untyped memory it gets for objects of its own (its
-  # `process_slot::UNTYPED`), carved from its memory; 0 for none.
-  # TODO: the memory account replaces this too (design/memory.md).
-  budgetBits @5 :UInt8;
+  cnodeBits @4 :UInt8;
+  stackPages @5 :UInt16;
+}
+
+struct Region {
+  bits @0 :UInt8;
+  budgetBits @1 :UInt8;
+}
+
+struct Account {
+  # In bytes: the reservation and limit of the instance's account, a
+  # child of the supervisor's.
+  reservation @0 :UInt64;
+  limit @1 :UInt64;
+  # log2 of the chunk the instance is built from: its image, CNode,
+  # stack, page tables.
+  processBits @2 :UInt8;
 }
 
 enum OnEnd {
