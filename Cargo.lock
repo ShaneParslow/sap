@@ -137,8 +137,10 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "capnp 0.27.2",
+ "capnpc",
  "sap-interfaces",
  "sap-loader",
+ "sap-manifests",
  "sap-process",
  "sap-ring",
  "sap-rt",
@@ -243,6 +245,14 @@ dependencies = [
  "sap-abi",
  "sap-process",
  "sap-sys",
+]
+
+[[package]]
+name = "sap-manifests"
+version = "0.1.0"
+dependencies = [
+ "capnp 0.27.2",
+ "capnpc",
 ]
 
 [[package]]

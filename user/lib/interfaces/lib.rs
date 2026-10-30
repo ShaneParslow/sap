@@ -61,6 +61,11 @@ pub mod peer_capnp {
 }
 
 #[allow(clippy::all)]
+pub mod sap_capnp {
+    include!(concat!(env!("OUT_DIR"), "/sap_capnp.rs"));
+}
+
+#[allow(clippy::all)]
 pub mod supervisor_capnp {
     include!(concat!(env!("OUT_DIR"), "/supervisor_capnp.rs"));
 }

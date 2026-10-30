@@ -59,6 +59,12 @@ pub mod launcher {
     pub const ROUTE_BADGES: usize = 1 << 32;
 }
 
+/// `Startup::flags`.
+pub mod startup_flags {
+    /// User mode may use CHERI capabilities.
+    pub const CHERI: usize = 1 << 0;
+}
+
 /// A range of virtual addresses, `start..end`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -74,6 +80,8 @@ pub struct AddressRange {
 pub struct Startup {
     /// Ticks per second of the time counter.
     pub timer_hz: u64,
+    /// What the machine offers (`startup_flags`).
+    pub flags: usize,
     pub ipc_buffer: usize,
     pub stack: AddressRange,
     /// Addresses nothing is mapped at, for the runtime's heap.

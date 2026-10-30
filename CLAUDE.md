@@ -9,6 +9,7 @@ sap ("sap is for sapabilities") is a capability-based operating system built aro
 - `user/` — userspace: runtime libraries in `user/lib/`, programs in `user/programs/`.
 - `interfaces/` — Cap'n Proto schemas.
 - `tools/board/` — building and booting on real boards (`d1/`: the MangoPi MQ-Pro over USB).
+- `tools/manifests/` — host-only crate for init's build: reads programs' declarations (`interfaces/sap.capnp` annotations) into manifests for the boot pack. Excluded from the workspace.
 - `toolchain/` — the CHERI toolchain and xfel as submodules, built by `toolchain/build.sh` into `toolchain/out/`.
 
 ## Notes and design

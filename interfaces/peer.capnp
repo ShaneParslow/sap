@@ -16,18 +16,30 @@ enum Mode {
   exit @5;
   # Read address 0, which faults.
   crash @6;
-  # Serve `endpoint`, an export, for checking restart: a call with label 1
-  # is answered with how many calls this process has answered, counting
-  # it; label 2 faults. Its reply object is made from its memory account.
+  # Serve `Restartable` on `endpoint`, its export, for checking restart.
+  # Its reply object is made from its memory account.
   restartable @7;
 }
 
-struct PeerImports {
+using Sap = import "sap.capnp";
+
+# A service to restart: `peer` in its `restartable` mode serves it.
+interface Restartable {
+  # How many calls this process has answered, counting this one.
+  count @0 () -> (calls :UInt64);
+  # Fault.
+  crash @1 () -> ();
+}
+
+# As a component (only in `restartable` mode), it serves `Restartable`.
+struct PeerImports $Sap.program("peer") $Sap.exports([(name = "service", interface = "peer.capnp:Restartable")]) $Sap.limits((
+    memory = (account = (reservation = 2097152, limit = 2097152, processBits = 20)),
+    priority = 255, cnodeBits = 6, stackPages = 4)) {
   mode @0 :Mode;
   # For `call`, the endpoint to call init on; for the channel modes, the
   # endpoint init sends page transfers on; for `restartable`, the endpoint
   # it serves.
-  endpoint @1 :UInt32;
+  endpoint @1 :UInt32 $Sap.serves("service");
   dataPages @2 :UInt32;
   # The channel modes: this process's notification, init's doorbell, and
   # a reply object to answer page transfers with.

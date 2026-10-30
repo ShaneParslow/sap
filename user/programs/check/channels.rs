@@ -125,6 +125,7 @@ fn channel_resources(info: &Env) -> (Parent, Slots) {
         untyped: untyped_at_least(info, 20),
         scratch: 0x38_0000_0000,
         timer_hz: info.timer_hz,
+        flags: info.flags,
     };
     (parent, Slots { next: first, end: first + 400 })
 }

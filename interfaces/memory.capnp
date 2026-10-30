@@ -78,14 +78,17 @@ enum Status {
 const rootHolder :UInt64 = 2;
 const rootController :UInt64 = 3;
 
+using Sap = import "sap.capnp";
+
 # The bootstrap message of `memory`, the memory manager. A capability is
 # the index of one of its imports.
-struct MemoryImports {
+struct MemoryImports $Sap.program("memory") $Sap.exports([(name = "account", interface = "memory.capnp:MemoryAccount")]) $Sap.limits((
+    memory = (region = (bits = 22, budgetBits = 20)), priority = 255, cnodeBits = 12, stackPages = 4)) {
   # The receive side of its export, with all rights: it mints the
   # accounts' capabilities from it.
-  endpoint @0 :UInt32;
+  endpoint @0 :UInt32 $Sap.serves("account");
   # The first of the untyped regions of RAM it manages: the `ram` group,
   # which runs to the end of its imports. Each one's size and address come
   # from identifying it.
-  ram @1 :UInt32;
+  ram @1 :UInt32 $Sap.held("ram");
 }

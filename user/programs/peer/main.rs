@@ -27,7 +27,10 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use capnp::message::{Builder, Reader, ReaderOptions, SegmentArray, SingleSegmentAllocator};
 use sap_interfaces::echo::{BYTES, ERROR, REPLY, REQUEST, STOP, SUM, TRANSFER, WORDS};
 use sap_interfaces::echo_capnp::{reply, request};
+use sap_interfaces::methods::restartable;
+use sap_interfaces::peer_capnp::restartable::count_results;
 use sap_interfaces::peer_capnp::{peer_imports, Mode};
+use sap_interfaces::words;
 use sap_ring::transfer::{Frames, Receiver, TransferError};
 use sap_ring::{as_bytes, as_bytes_mut, Consumer, Layout, Producer, RingError, PAGE};
 use sap_process::{process_slot, Startup};
@@ -126,9 +129,9 @@ fn crash() {
     let _ = unsafe { core::ptr::read_volatile(mapped::<usize>(0x1000)) };
 }
 
-/// Serve `peer.endpoint` for checking restart: label 1 answers how many
-/// calls this process has answered, label 2 faults. Its supervisor starts
-/// it again with a count of 0.
+/// Serve `Restartable` on `peer.endpoint`, for checking restart: `count`
+/// answers how many calls this process has answered, `crash` faults. Its
+/// supervisor starts it again with a count of 0.
 fn restartable(peer: Peer) {
     let (page, answer) = (peer.free, peer.free + 1);
     account::allocate(process_slot::ACCOUNT, 12, process_slot::CNODE, page).expect("peer: a page of its account");
@@ -138,11 +141,17 @@ fn restartable(peer: Peer) {
     loop {
         let message = ipc::recv(peer.endpoint, answer, &mut []).expect("peer: receive");
         match message.info.label() {
-            1 => {
+            restartable::COUNT => {
                 answered += 1;
-                let _ = ipc::reply(answer, 0, &[answered], &[]);
+                let mut scratch = [0u64; 4];
+                let mut allocator = SingleSegmentAllocator::new(as_bytes_mut(&mut scratch));
+                let mut results = Builder::new(&mut allocator);
+                results.init_root::<count_results::Builder>().set_calls(answered);
+                let mut out = [0usize; 4];
+                let n = words::pack(&results, &mut out).expect("peer: count results fit");
+                let _ = ipc::reply(answer, 0, &out[..n], &[]);
             }
-            2 => crash(),
+            restartable::CRASH => crash(),
             _ => {
                 let _ = ipc::reply(answer, 1, &[], &[]);
             }

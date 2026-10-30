@@ -12,7 +12,7 @@ fn main() {
     let schemas = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../interfaces");
     let mut command = capnpc::CompilerCommand::new();
     command.src_prefix(&schemas).no_rpc();
-    for schema in ["check.capnp", "echo.capnp", "log.capnp", "memory.capnp", "peer.capnp", "supervisor.capnp"] {
+    for schema in ["check.capnp", "echo.capnp", "log.capnp", "memory.capnp", "peer.capnp", "sap.capnp", "supervisor.capnp"] {
         let path = schemas.join(schema);
         println!("cargo:rerun-if-changed={}", path.display());
         command.file(path);

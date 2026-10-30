@@ -1,0 +1,15 @@
+[package]
+name = "sap-manifests"
+version = "0.1.0"
+edition = "2024"
+description = "Reads sap's program declarations from the schemas into manifests, for init's build (host only)."
+
+[lib]
+path = "lib.rs"
+test = false
+
+[dependencies]
+capnp = "0.27.2"
+
+[build-dependencies]
+capnpc = "0.27.0"

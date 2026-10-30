@@ -29,7 +29,7 @@ mod rt;
 mod channels;
 mod cheri;
 
-use sap_process::{process_slot, Startup};
+use sap_process::{process_slot, startup_flags, Startup};
 use sap_rt::abi::{SlotRange, UntypedDesc, MAX_BOOT_UNTYPED};
 use sap_rt::cnode::SlotRef;
 use sap_rt::sys::Error;
@@ -58,6 +58,8 @@ fn slot(i: usize) -> SlotRef {
 /// root task.
 struct Env {
     timer_hz: u64,
+    /// `sap_process::startup_flags`, passed on to processes the checks start.
+    flags: usize,
     cnode_radix: usize,
     /// Free slots.
     empty: SlotRange,
@@ -98,12 +100,13 @@ fn env(startup: &'static Startup) -> Result<Env, capnp::Error> {
     let untyped = SlotRange { start: first, end: first + CHUNKS.len() };
     Ok(Env {
         timer_hz: startup.timer_hz,
+        flags: startup.flags,
         cnode_radix: startup.cnode_radix,
         empty: SlotRange { start: untyped.end, end: startup.free.end },
         asid_pool: import(imports.get_asid_pool()),
         supervisor: import(imports.get_supervisor()),
         peer_hash: imports.get_peer_hash()?.try_into().expect("check: the peer's hash is 32 bytes"),
-        cheri: imports.get_cheri(),
+        cheri: startup.flags & startup_flags::CHERI != 0,
         log: import(imports.get_log()),
         restartable: import(imports.get_restartable()),
         account: process_slot::ACCOUNT,

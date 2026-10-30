@@ -1,3 +1,6 @@
 __pycache__/
 target/
 toolchain/out/
+# Built standalone, the host-only crates get their own.
+tools/manifests/target
+tools/manifests/Cargo.lock

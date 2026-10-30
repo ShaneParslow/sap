@@ -29,7 +29,9 @@ fn build_user_program(user: &std::path::Path, name: &str) -> std::path::PathBuf 
     println!("cargo:rerun-if-changed={}", user.display());
     println!("cargo:rerun-if-changed={}", user.join("../abi").display());
     println!("cargo:rerun-if-changed={}", user.join("../interfaces").display());
-    // The workspace manifest, which picks the code generator.
+    // The workspace manifest, which picks the code generator, and the
+    // host crates build scripts use.
     println!("cargo:rerun-if-changed={}", user.join("../Cargo.toml").display());
+    println!("cargo:rerun-if-changed={}", user.join("../tools/manifests").display());
     target_dir.join("riscv64gc-unknown-sap/release").join(name)
 }

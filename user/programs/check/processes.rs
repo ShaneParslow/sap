@@ -2,7 +2,8 @@
 //! the instance API; the supervisor's exports as the log shows them; and
 //! restart.
 
-use sap_interfaces::methods::{instance, log, supervisor};
+use sap_interfaces::methods::{instance, log, restartable, supervisor};
+use sap_interfaces::peer_capnp::restartable::count_results;
 use sap_interfaces::supervisor_capnp::instance::wait_results;
 use sap_interfaces::supervisor_capnp::supervisor::start_params;
 use sap_interfaces::supervisor_capnp::{end, OnEnd, Status};
@@ -72,6 +73,7 @@ pub fn check_process(info: &Env) {
         untyped: parent_untyped,
         scratch,
         timer_hz: info.timer_hz,
+        flags: info.flags,
     };
     let mut slots = Slots { next: base + 3, end: base + 200 };
     let (bootstrap, len) = peer_bootstrap(Mode::Call, 0);
@@ -218,6 +220,22 @@ fn start(info: &Env, component: &Component, passed: &[usize]) -> Result<(usize, 
     }
 }
 
+/// `Restartable.count` on `cap`: how many calls the serving process has
+/// answered; or the call's error.
+fn count(cap: usize) -> Result<u64, usize> {
+    let mut out = [0usize; 4];
+    let reply = ipc::call(cap, restartable::COUNT, &[], &[], &mut out).map_err(|e| e.0)?;
+    assert_eq!(reply.info.label(), 0, "count");
+    let segment = [words::bytes(&out[..reply.info.length()])];
+    let message = words::reader(&segment);
+    Ok(message.get_root::<count_results::Reader>().expect("count: the results").get_calls())
+}
+
+/// `Restartable.crash` on `cap`: the call's error, as it never returns.
+fn crash(cap: usize) -> Result<(), usize> {
+    ipc::call(cap, restartable::CRASH, &[], &[], &mut []).map(drop).map_err(|e| e.0)
+}
+
 /// How an instance ended, as `wait` reports it.
 #[derive(Debug, PartialEq)]
 enum Ended {
@@ -281,9 +299,7 @@ pub fn check_instances(info: &Env) {
     let (bootstrap, len) = peer_bootstrap(Mode::Restartable, 0);
     let serves = Component { routes: &[To::Passed(0)], ..Component::new("serves", &peer, &bootstrap[..len]) };
     let (handle, _) = start(info, &serves, &[ep]).expect("start with a passed capability");
-    let mut out = [0usize; 1];
-    let count = |cap: usize, out: &mut [usize; 1]| ipc::call(cap, 1, &[], &[], out).map(|_| out[0]).map_err(|e| e.0);
-    assert_eq!(count(ep, &mut out), Ok(1), "the peer serves the passed endpoint");
+    assert_eq!(count(ep), Ok(1), "the peer serves the passed endpoint");
     assert!(used() >= before + (1 << 20), "the caller pays for it");
     assert_eq!(start(info, &serves, &[ep]).err(), Some(Status::BadRequest as usize), "a name already running");
     stop(handle);
@@ -293,10 +309,9 @@ pub fn check_instances(info: &Env) {
     // An export of its own, restarted behind it.
     let restarts = Component { routes: &[To::Serve("service")], exports: &["service"], on_end: OnEnd::Restart, ..Component::new("restarts", &peer, &bootstrap[..len]) };
     let (handle, service) = start(info, &restarts, &[]).expect("start with an export");
-    assert_eq!(count(service, &mut out), Ok(1), "the caller gets a capability to the export");
-    let died = ipc::call(service, 2, &[], &[], &mut []).map(drop).map_err(|e| e.0);
-    assert_eq!(died, Err(error::NO_REPLY));
-    assert_eq!(count(service, &mut out), Ok(1), "restarted behind its export");
+    assert_eq!(count(service), Ok(1), "the caller gets a capability to the export");
+    assert_eq!(crash(service), Err(error::NO_REPLY));
+    assert_eq!(count(service), Ok(1), "restarted behind its export");
     stop(handle);
     assert_eq!(wait(handle), Ok(Ended::Stopped));
     assert!(slot(service).identify().is_err(), "a stopped instance's exports go");
@@ -353,18 +368,11 @@ pub fn check_log(info: &Env) {
 /// export, so the same capability reaches the new process; a call the old
 /// one died in gets no reply, and the new one starts afresh.
 pub fn check_restart(info: &Env) {
-    let mut out = [0usize; 1];
-    let mut count = || {
-        let reply = ipc::call(info.restartable, 1, &[], &[], &mut out).expect("a call to the service");
-        assert_eq!(reply.info.label(), 0);
-        out[0]
-    };
-    assert_eq!((count(), count()), (1, 2), "the service counts its calls");
-    let died = ipc::call(info.restartable, 2, &[], &[], &mut []).map(drop).map_err(|e| e.0);
-    assert_eq!(died, Err(error::NO_REPLY), "a call the service died in gets no reply");
-    assert_eq!(count(), 1, "the restarted service starts afresh, on the same capability");
-    let died = ipc::call(info.restartable, 2, &[], &[], &mut []).map(drop).map_err(|e| e.0);
-    assert_eq!(died, Err(error::NO_REPLY));
-    assert_eq!((count(), count()), (1, 2), "and again");
+    let service = info.restartable;
+    assert_eq!((count(service), count(service)), (Ok(1), Ok(2)), "the service counts its calls");
+    assert_eq!(crash(service), Err(error::NO_REPLY), "a call the service died in gets no reply");
+    assert_eq!(count(service), Ok(1), "the restarted service starts afresh, on the same capability");
+    assert_eq!(crash(service), Err(error::NO_REPLY));
+    assert_eq!((count(service), count(service)), (Ok(1), Ok(2)), "and again");
     println!("a failed service restarts behind the same capability; the call it died in gets no reply");
 }

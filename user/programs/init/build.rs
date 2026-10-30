@@ -1,17 +1,35 @@
 //! Builds the programs init can start and writes the boot pack: a table of
 //! them in `$OUT_DIR/pack.rs`, each named by the BLAKE3 hash of its image,
-//! for `pack.rs` to include.
+//! with its manifest (`tools/manifests`), for `pack.rs` to include.
 
 use std::fmt::Write;
 use std::path::PathBuf;
 
 include!("../../build_program.rs");
 
+
 /// The programs in the boot pack, by crate name under user/programs/.
 const PROGRAMS: &[&str] = &["check", "log", "memory", "peer"];
 
 fn main() {
     let dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    let out = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    // Every schema, for its declarations; the Rust capnpc writes is unused.
+    let interfaces = dir.join("../../../interfaces");
+    let request = out.join("request.bin");
+    std::fs::create_dir_all(out.join("unused")).unwrap();
+    let mut command = capnpc::CompilerCommand::new();
+    command.src_prefix(&interfaces).output_path(out.join("unused")).no_rpc().raw_code_generator_request_path(&request);
+    for entry in std::fs::read_dir(&interfaces).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_some_and(|e| e == "capnp") {
+            println!("cargo:rerun-if-changed={}", path.display());
+            command.file(path);
+        }
+    }
+    command.run().expect("compiling the schemas in interfaces/");
+    let manifests = sap_manifests::manifests(&request);
+
     let mut pack = String::new();
     let mut table = String::from("pub static PROGRAMS: &[Program] = &[\n");
     for &name in PROGRAMS {
@@ -21,9 +39,10 @@ fn main() {
         let constant = name.to_uppercase();
         writeln!(pack, "/// `{name}`: BLAKE3 {}.", hash.to_hex()).unwrap();
         writeln!(pack, "pub const {constant}: Hash = Hash({:?});", hash.as_bytes()).unwrap();
-        writeln!(table, "    Program {{ name: {name:?}, hash: {constant}, image: include_bytes!({:?}) }},", elf.display().to_string()).unwrap();
+        let manifest = manifests.get(name).unwrap_or_else(|| panic!("{name} declares no bootstrap struct ($Sap.program)"));
+        writeln!(pack, "static {constant}_MANIFEST: [u64; {}] = {manifest:?};", manifest.len()).unwrap();
+        writeln!(table, "    Program {{ name: {name:?}, hash: {constant}, image: include_bytes!({:?}), manifest: &{constant}_MANIFEST }},", elf.display().to_string()).unwrap();
     }
     table.push_str("];\n");
-    let out = PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("pack.rs");
-    std::fs::write(out, pack + &table).unwrap();
+    std::fs::write(out.join("pack.rs"), pack + &table).unwrap();
 }

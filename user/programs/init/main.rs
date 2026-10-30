@@ -23,9 +23,12 @@ use capnp::message::{Builder, SingleSegmentAllocator};
 use sap_interfaces::check_capnp::check_imports;
 use sap_interfaces::log_capnp::log_imports;
 use sap_interfaces::memory_capnp::memory_imports;
+use sap_interfaces::sap_capnp::manifest;
+use sap_interfaces::words;
 use sap_interfaces::peer_capnp::{peer_imports, Mode};
 use sap_interfaces::supervisor_capnp::{composition, OnEnd, Status};
 use sap_loader::Parent;
+use sap_process::startup_flags;
 use sap_ring::as_bytes_mut;
 use sap_rt::abi::{init_slot, object, BootInfo, UntypedDesc, MAX_EXTRA_CAPS, MAX_MESSAGE_LENGTH};
 use sap_rt::address::mapped;
@@ -82,12 +85,13 @@ fn sap_main(boot_info: usize, _: usize, _: usize) -> ! {
         untyped: own,
         scratch: SCRATCH,
         timer_hz: info.timer_hz,
+        flags: if info.cheri != 0 { startup_flags::CHERI } else { 0 },
     };
     let (ep, mut reply) = (new_object(own, object::ENDPOINT), new_object(own, object::REPLY));
     let mut supervisor = Supervisor::new(ep, pool, parent);
     supervisor.hold("asidPool", init_slot::ASID_POOL);
     supervisor.hold_group("ram", spare_untyped(info, own, pool).map(|(cptr, _)| cptr).collect());
-    boot(info, &mut supervisor);
+    boot(&mut supervisor);
 
     let mut words = [0usize; MAX_MESSAGE_LENGTH];
     loop {
@@ -112,7 +116,11 @@ fn sap_main(boot_info: usize, _: usize, _: usize) -> ! {
 
 fn report(info: &BootInfo) {
     for program in pack::PROGRAMS {
-        println!("init: boot pack: {} {}", program.name, program.hash);
+        let segment = [words::bytes(program.manifest_words())];
+        let message = words::reader(&segment);
+        let manifest = message.get_root::<manifest::Reader>().expect("init: a manifest");
+        let (imports, exports) = (manifest.get_imports().map_or(0, |l| l.len()), manifest.get_exports().map_or(0, |l| l.len()));
+        println!("init: boot pack: {} {} ({imports} imports, {exports} exports declared)", program.name, program.hash);
     }
     let untyped = &info.untyped_list[..info.untyped.len()];
     let bytes: usize = untyped.iter().map(|u| 1usize << u.size_bits).sum();
@@ -188,7 +196,7 @@ fn bootstrap<T: capnp::traits::Owned>(build: impl FnOnce(T::Builder<'_>)) -> Vec
 /// test service as its imports. All but the memory manager
 /// get accounts. Any of them but the test service ends the boot when it
 /// ends.
-fn boot(info: &BootInfo, supervisor: &mut Supervisor) {
+fn boot(supervisor: &mut Supervisor) {
 
     // The memory manager's bootstrap message. Imports: its export, then
     // the `ram` group.
@@ -209,7 +217,6 @@ fn boot(info: &BootInfo, supervisor: &mut Supervisor) {
         root.set_log(2);
         root.set_restartable(3);
         root.set_peer_hash(&pack::PEER.0);
-        root.set_cheri(info.cheri != 0);
     });
 
     // One segment, as every message is without capnp's `alloc` feature:

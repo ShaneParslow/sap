@@ -58,8 +58,10 @@ pub struct Parent {
     /// An unused, 1 GiB-aligned region of the caller's address space for
     /// filling pages.
     pub scratch: usize,
-    /// Ticks per second of the time counter, passed on in startup records.
+    /// Ticks per second of the time counter, and what the machine offers
+    /// (`sap_process::startup_flags`), passed on in startup records.
     pub timer_hz: u64,
+    pub flags: usize,
 }
 
 /// What the new process starts with, besides its image.
@@ -350,6 +352,7 @@ pub fn load(image: &[u8], parent: &Parent, slots: &mut Slots, launch: &Launch) -
         bytes.fill(0);
         let record = Startup {
             timer_hz: parent.timer_hz,
+            flags: parent.flags,
             ipc_buffer,
             stack: AddressRange { start: stack_bottom, end: STACK_TOP },
             heap: HEAP,

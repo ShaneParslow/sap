@@ -1,6 +1,7 @@
 //! The boot pack: the programs init can start before there is a store,
 //! built and embedded by `build.rs`, each named by the BLAKE3 hash of its
-//! image (the boot image of design/processes.md in sap-docs).
+//! image and with its manifest (the boot image of design/processes.md in
+//! sap-docs).
 
 /// A program's name: the BLAKE3 hash of its image.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -17,6 +18,9 @@ pub struct Program {
     pub name: &'static str,
     pub hash: Hash,
     image: &'static [u8],
+    /// Its declarations (`sap_capnp::Manifest`): the words of a
+    /// single-segment message.
+    pub manifest: &'static [u64],
 }
 
 include!(concat!(env!("OUT_DIR"), "/pack.rs"));
@@ -26,4 +30,14 @@ include!(concat!(env!("OUT_DIR"), "/pack.rs"));
 pub fn find(hash: &Hash) -> Option<&'static [u8]> {
     let program = PROGRAMS.iter().find(|p| p.hash == *hash)?;
     (blake3::hash(program.image).as_bytes() == &hash.0).then_some(program.image)
+}
+
+impl Program {
+    /// The manifest as IPC-style words, for `sap_interfaces::words`.
+    pub fn manifest_words(&self) -> &'static [usize] {
+        // SAFETY: `usize` is `u64` on every target sap supports (RV64), so
+        // the slice covers the same memory with the same layout.
+        const _: () = assert!(size_of::<usize>() == size_of::<u64>());
+        unsafe { core::slice::from_raw_parts(self.manifest.as_ptr().cast::<usize>(), self.manifest.len()) }
+    }
 }

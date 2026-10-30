@@ -6,18 +6,19 @@
 # imports.
 # TODO: capability fields once Cap'n Proto RPC brings capability tables (M6).
 
-struct CheckImports {
+using Sap = import "sap.capnp";
+
+struct CheckImports $Sap.program("check") $Sap.limits((
+    memory = (account = (reservation = 33554432, limit = 50331648, processBits = 21)),
+    priority = 255, maxPriority = 255, cnodeBits = 12, stackPages = 16)) {
   # The ASID pool, for address spaces of the processes the checks start.
-  asidPool @0 :UInt32;
+  asidPool @0 :UInt32 $Sap.held("asidPool");
   # The instance API, and the hash of `peer` in the boot pack, for
   # starting it through the API.
-  supervisor @1 :UInt32;
-  peerHash @2 :Data;
-  # Whether user mode may use CHERI capabilities.
-  cheri @3 :Bool;
+  supervisor @1 :UInt32 $Sap.held("supervisor");
+  peerHash @2 :Data $Sap.programHash("peer");
   # The log, which the checks' output goes to.
-  log @4 :UInt32;
-  # A service its supervisor restarts when it fails (`peer`'s
-  # `restartable`).
-  restartable @5 :UInt32;
+  log @3 :UInt32 $Sap.interface("log.capnp:Log");
+  # A service its supervisor restarts when it fails.
+  restartable @4 :UInt32 $Sap.interface("peer.capnp:Restartable");
 }
