@@ -31,7 +31,7 @@ use sap_ring::as_bytes_mut;
 use sap_rt::abi::{init_slot, object, rights, BootInfo, UntypedDesc, MAX_EXTRA_CAPS, MAX_MESSAGE_LENGTH};
 use sap_rt::address::mapped;
 use sap_rt::cnode::SlotRef;
-use sap_rt::runtime::{self, Resources};
+use sap_rt::runtime::{self, Memory, Resources};
 use sap_rt::{ipc, println, slots, untyped};
 use supervisor::Supervisor;
 
@@ -66,7 +66,7 @@ fn sap_main(boot_info: usize, _: usize, _: usize) -> ! {
     report(info);
     let own = own_untyped(info);
     let pool = pool_untyped(info, own);
-    runtime::start(Resources { cnode: init_slot::CNODE, slots: info.empty.start..info.empty.end, untyped: own, vspace: init_slot::VSPACE, heap: HEAP });
+    runtime::start(Resources { cnode: init_slot::CNODE, slots: info.empty.start..info.empty.end, memory: Memory::Untyped(own), vspace: init_slot::VSPACE, heap: HEAP });
 
     // One endpoint for everything: the supervisor's instances report their
     // exits and faults here, and the factory's clients and processes call

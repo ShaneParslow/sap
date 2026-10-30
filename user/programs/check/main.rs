@@ -33,7 +33,7 @@ use sap_process::{process_slot, Startup};
 use sap_rt::abi::{SlotRange, UntypedDesc, MAX_BOOT_UNTYPED};
 use sap_rt::cnode::SlotRef;
 use sap_rt::sys::Error;
-use sap_rt::runtime::{self, Resources};
+use sap_rt::runtime::{self, Memory, Resources};
 use sap_rt::{account, println, process};
 use capnp::message::{Reader, ReaderOptions, SegmentArray};
 use sap_interfaces::check_capnp::check_imports;
@@ -77,9 +77,9 @@ struct Env {
 }
 
 /// The chunks of untyped memory the checks use, by size, from the account:
-/// the first is revoked by `check_cnode_operations`, the largest is the
-/// runtime's, and each check takes the first that is large enough.
-const CHUNKS: [u8; 5] = [16, 18, 20, 22, 23];
+/// the first is revoked by `check_cnode_operations`, and each check takes
+/// the first that is large enough. The runtime takes chunks of its own.
+const CHUNKS: [u8; 4] = [16, 18, 20, 22];
 
 /// Read the bootstrap message into an `Env`, and take the chunks.
 fn env(startup: &'static Startup) -> Result<Env, capnp::Error> {
@@ -115,21 +115,11 @@ const HEAP: core::ops::Range<usize> = 0x08_0000_0000..0x08_4000_0000;
 /// allocator has the rest.
 const CHECK_SLOTS: usize = 1024;
 
-/// The untyped region the runtime gets for the heap: the largest, but never
-/// the first, which `check_cnode_operations` revokes. No check uses it.
-fn runtime_untyped(info: &Env) -> usize {
-    let list = &info.untyped_list[1..info.untyped.len()];
-    let (i, _) = list.iter().enumerate().filter(|(_, u)| u.is_device == 0).max_by_key(|(_, u)| u.size_bits).expect("no untyped memory for the heap");
-    info.untyped.start + 1 + i
-}
-
-/// The first untyped region of at least `2^bits` bytes, other than the
-/// runtime's.
+/// The first untyped region of at least `2^bits` bytes.
 fn untyped_at_least(info: &Env, bits: u8) -> usize {
-    let runtime = runtime_untyped(info);
     (info.untyped.start..info.untyped.end)
         .zip(&info.untyped_list)
-        .find(|&(cptr, u)| u.size_bits >= bits && u.is_device == 0 && cptr != runtime)
+        .find(|&(_, u)| u.size_bits >= bits && u.is_device == 0)
         .map(|(cptr, _)| cptr)
         .unwrap_or_else(|| panic!("no untyped region of 2^{bits} bytes"))
 }
@@ -145,7 +135,7 @@ fn sap_main(a0: usize, _: usize, _: usize) -> ! {
         cnode: process_slot::CNODE,
         slots: info.empty.start + CHECK_SLOTS..info.empty.end,
         vspace: process_slot::VSPACE,
-        untyped: runtime_untyped(info),
+        memory: Memory::Account(info.account),
         heap: HEAP,
     });
     check_cnode_operations(info);

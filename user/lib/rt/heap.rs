@@ -2,11 +2,13 @@
 //!
 //! A first-fit free list (the `linked_list_allocator` crate) over a range of
 //! the program's address space. The heap starts empty and grows upward on
-//! demand: frames are retyped from untyped memory the program gave the
-//! runtime, into slots from the slot allocator, and mapped at the top, with
-//! page tables added as the range needs them. Before the runtime is
-//! initialised, or once the range or the memory runs out, allocation fails
-//! (and `alloc` panics).
+//! demand: frames are retyped from untyped memory, into slots from the
+//! slot allocator, and mapped at the top, with page tables added as the
+//! range needs them. The memory is the region the program gave the
+//! runtime, or chunks it takes from the program's memory account as it
+//! grows (`runtime::Memory`). Before the runtime is initialised, or once
+//! the range or the memory runs out, allocation fails (and `alloc`
+//! panics).
 //!
 //! TODO: return memory: the heap never shrinks, and freed frames stay
 //! mapped. Needed once long-running services allocate in bursts.
@@ -38,7 +40,11 @@ struct Grower {
     end: usize,
     cnode: usize,
     vspace: usize,
+    /// The untyped memory frames and page tables come from.
     untyped: usize,
+    /// The account more comes from, and how much of `untyped` is left
+    /// (every object the heap makes is a page).
+    account: Option<(usize, usize)>,
 }
 
 static HEAP: Mutex<Option<Grower>> = Mutex::new(None);
@@ -76,13 +82,17 @@ unsafe impl GlobalAlloc for Allocator {
 }
 
 /// Start an empty heap that may grow over `region` (page-aligned, unused),
-/// with frames and page tables from `untyped`, their capabilities in slots
-/// of `cnode`, mapped in `vspace`. `notification` is the heap lock's.
-pub(crate) fn init(cnode: usize, vspace: usize, untyped: usize, region: Range<usize>, notification: usize) {
+/// with frames and page tables from `untyped`, then from chunks of
+/// `account` (with how much of `untyped` is left), their capabilities in
+/// slots of `cnode`, mapped in `vspace`. `notification` is the heap lock's.
+pub(crate) fn init(cnode: usize, vspace: usize, untyped: usize, account: Option<(usize, usize)>, region: Range<usize>, notification: usize) {
     assert!(region.start % PAGE == 0 && region.end % PAGE == 0, "heap: region not page-aligned");
     let mut heap = HEAP.lock();
     assert!(heap.is_none(), "heap: already initialised");
-    *heap = Some(Grower { heap: Heap::empty(), start: region.start, top: region.start, end: region.end, cnode, vspace, untyped });
+    // The locks took the start of the first chunk: the heap's pages begin
+    // at the next page.
+    let account = account.map(|(account, size)| (account, size - PAGE));
+    *heap = Some(Grower { heap: Heap::empty(), start: region.start, top: region.start, end: region.end, cnode, vspace, untyped, account });
     drop(heap);
     HEAP.set_notification(notification);
 }
@@ -100,6 +110,21 @@ impl Grower {
             return Err(Error(error::NOT_ENOUGH_MEMORY));
         }
         let pages = bytes / PAGE;
+        // From an account, a chunk for the frames and the page tables they
+        // may need, if what is left of this one isn't enough.
+        if let Some((account, left)) = self.account {
+            let need = bytes + PAGE * (pages / 512 + 2);
+            if need > left {
+                let bits = need.next_power_of_two().trailing_zeros().max(16) as u8;
+                let chunk = slots::alloc().ok_or(Error(error::NOT_ENOUGH_MEMORY))?;
+                if crate::account::allocate(account, bits, self.cnode, chunk).is_err() {
+                    slots::free(chunk);
+                    return Err(Error(error::NOT_ENOUGH_MEMORY));
+                }
+                self.untyped = chunk;
+                self.account = Some((account, 1 << bits));
+            }
+        }
         let first = slots::alloc_range(pages).ok_or(Error(error::NOT_ENOUGH_MEMORY))?;
         let root = SlotRef { root: self.cnode, index: 0, depth: 0 };
         for chunk in (0..pages).step_by(MAX_RETYPE_COUNT) {
@@ -107,9 +132,11 @@ impl Grower {
             untyped::retype(self.untyped, object::FRAME_4K, 0, root, first + chunk, count)?;
         }
         let (untyped, cnode) = (self.untyped, self.cnode);
+        let mut tables = 0;
         let mut new_table = || {
             let table = slots::alloc().ok_or(Error(error::NOT_ENOUGH_MEMORY))?;
             untyped::retype(untyped, object::PAGE_TABLE, 0, SlotRef { root: cnode, index: 0, depth: 0 }, table, 1)?;
+            tables += 1;
             Ok(table)
         };
         let rw = rights::READ | rights::WRITE;
@@ -125,6 +152,9 @@ impl Grower {
             } else {
                 self.heap.extend(bytes);
             }
+        }
+        if let Some((account, left)) = self.account {
+            self.account = Some((account, left - bytes - tables * PAGE));
         }
         self.top += bytes;
         Ok(())

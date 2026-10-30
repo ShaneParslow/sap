@@ -40,7 +40,7 @@ use sap_process::process_slot;
 use sap_rt::abi::{object, rights, MAX_MESSAGE_LENGTH};
 use sap_rt::cnode::SlotRef;
 use sap_rt::ipc::{self, Give};
-use sap_rt::runtime::{self, Resources};
+use sap_rt::runtime::{self, Memory, Resources};
 use sap_rt::{println, process, slots, untyped};
 
 /// The smallest and largest chunks.
@@ -390,7 +390,7 @@ fn sap_main(a0: usize, _: usize, _: usize) -> ! {
     let reply = free.start;
     let root = SlotRef { root: process_slot::CNODE, index: 0, depth: 0 };
     untyped::retype(process_slot::UNTYPED, object::REPLY, 0, root, reply, 1).expect("memory: reply object");
-    runtime::start(Resources { cnode: process_slot::CNODE, slots: free.start + 1..free.end, untyped: process_slot::UNTYPED, vspace: process_slot::VSPACE, heap: HEAP });
+    runtime::start(Resources { cnode: process_slot::CNODE, slots: free.start + 1..free.end, memory: Memory::Untyped(process_slot::UNTYPED), vspace: process_slot::VSPACE, heap: HEAP });
     let mut manager = manager(startup).expect("memory: bootstrap message");
     println!("memory: {} MiB of RAM in {} regions", manager.total >> 20, manager.blocks.len());
 

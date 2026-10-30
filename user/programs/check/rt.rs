@@ -8,7 +8,7 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use sap_process::process_slot;
 use sap_rt::abi::{object, rights};
 use sap_rt::cnode::SlotRef;
-use sap_rt::{heap, notification, println, slots, sync, sys, tcb, untyped};
+use sap_rt::{account, heap, notification, println, slots, sync, sys, tcb, untyped};
 use crate::{Env, expect, slot, untyped_at_least};
 use crate::threads::spawn;
 
@@ -41,10 +41,12 @@ extern "C" fn handoff_worker(done: usize, me: usize, _: usize) -> ! {
 }
 
 /// The heap: nothing mapped before the first allocation, growth across page
-/// tables, alignment, reuse of freed memory, and two threads allocating at
-/// once through the heap's lock.
+/// tables and chunks of the account, charged to it, alignment, reuse of
+/// freed memory, and two threads allocating at once through the heap's
+/// lock.
 pub fn check_heap(info: &Env) {
     assert_eq!(heap::mapped(), 0, "nothing should be mapped before the first allocation");
+    let before = account::usage(info.account).expect("check's account").used;
     // black_box: the compiler may otherwise remove an allocation it sees
     // freed unused.
     let boxed = core::hint::black_box(Box::new(41usize));
@@ -56,6 +58,8 @@ pub fn check_heap(info: &Env) {
     let big: Vec<usize> = core::hint::black_box((0..300_000).collect());
     assert_eq!(big.iter().sum::<usize>(), 300_000 * 299_999 / 2);
     assert!(heap::mapped() > 2 << 20, "the heap should have grown past 2 MiB");
+    let charged = account::usage(info.account).expect("check's account").used - before;
+    assert!(charged >= heap::mapped() as u64 - 64 * 1024, "the heap's growth is charged to the account ({charged} bytes)");
     let layout = Layout::from_size_align(100, 4096).unwrap();
     // SAFETY: a non-zero size; freed with the same layout.
     let aligned = core::hint::black_box(unsafe { alloc::alloc::alloc(layout) });
