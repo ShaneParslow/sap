@@ -107,5 +107,5 @@ pub fn check_heap(info: &Env) {
     drop(held);
     expect("handoff", notification::wait(handoff_done).map(drop), Ok(()));
     assert_eq!(*HANDOFF.lock(), 7, "the woken thread should have taken the lock");
-    println!("check: heap grows, aligns, reuses memory and serves two threads ({} KiB mapped); a mutex sleeps and wakes", heap::mapped() / 1024);
+    println!("heap grows, aligns, reuses memory and serves two threads ({} KiB mapped); a mutex sleeps and wakes", heap::mapped() / 1024);
 }

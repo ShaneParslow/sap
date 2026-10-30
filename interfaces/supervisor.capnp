@@ -8,9 +8,13 @@
 #
 # A capability is named by what the supervisor holds, not by a slot: the
 # supervisor keeps a table of named capabilities ("asidPool", "untyped.3")
-# and routes from it.
-# TODO: routes to other components' exports, exports the supervisor owns,
-# lazy start and restart, once components serve each other (M7).
+# and routes from it, or by the export of a component it runs.
+#
+# Exports belong to the supervisor: it makes each export's endpoint when it
+# enacts the composition, before anything starts, gives the serving
+# component the receive side and each client a capability badged for that
+# client. The endpoint outlives the server's instance.
+# TODO: lazy start and restart, which exports are for (M7).
 
 struct Composition {
   components @0 :List(Component);
@@ -29,15 +33,41 @@ struct Component {
   limits @4 :Limits;
   # What the supervisor does when the instance ends.
   onEnd @5 :OnEnd;
+  # The endpoints the component serves, for routes to name.
+  exports @6 :List(Export);
+}
+
+struct Export {
+  # Unique within the component.
+  name @0 :Text;
+  # TODO: the interface's hash, for checking routes against it (M6).
 }
 
 # Where one import comes from.
 struct Route {
-  # A capability in the supervisor's table, by name.
-  held @0 :Text;
+  union {
+    # A capability in the supervisor's table.
+    held @0 :Held;
+    # A capability to call another component's export, badged for this
+    # component: the server can ask the supervisor which component a
+    # badge is (`sap_process::launcher::CLIENT`).
+    export @1 :ExportRef;
+    # The receive side of one of this component's own exports, by name.
+    serve @2 :Text;
+  }
+}
+
+struct Held {
+  name @0 :Text;
   # Moved (the supervisor gives its capability up) or copied with all
-  # its rights.
+  # its rights. Untyped memory is copied, never moved: a copy keeps the
+  # supervisor's right to revoke it.
   move @1 :Bool;
+}
+
+struct ExportRef {
+  component @0 :Text;
+  name @1 :Text;
 }
 
 # The limits the supervisor enforces on an instance.
@@ -57,6 +87,10 @@ struct Limits {
   # log2 of its CNode's slots, and its stack in pages.
   cnodeBits @3 :UInt8;
   stackPages @4 :UInt16;
+  # log2 of the untyped memory it gets for objects of its own (its
+  # `process_slot::UNTYPED`), carved from its memory; 0 for none.
+  # TODO: the memory account replaces this too (design/memory.md).
+  budgetBits @5 :UInt8;
 }
 
 enum OnEnd {

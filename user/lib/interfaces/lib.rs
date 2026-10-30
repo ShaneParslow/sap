@@ -1,7 +1,7 @@
 //! Rust bindings for sap's Cap'n Proto interfaces, generated at build time
 //! from the schemas in interfaces/ at the top of the repository.
 //!
-//! Schemas that declare interfaces (`process_capnp`) need the `alloc`
+//! Schemas that declare interfaces (`process_capnp`, `log_capnp`) need the `alloc`
 //! feature: capnpc's code for an interface uses the heap. A program without
 //! a heap gets only the plain structs.
 
@@ -55,6 +55,11 @@ pub mod echo_capnp {
 }
 
 #[allow(clippy::all)]
+pub mod log_messages_capnp {
+    include!(concat!(env!("OUT_DIR"), "/log_messages_capnp.rs"));
+}
+
+#[allow(clippy::all)]
 pub mod peer_capnp {
     include!(concat!(env!("OUT_DIR"), "/peer_capnp.rs"));
 }
@@ -71,4 +76,11 @@ pub mod supervisor_capnp {
 #[allow(implicit_provenance_casts)]
 pub mod process_capnp {
     include!(concat!(env!("OUT_DIR"), "/process_capnp.rs"));
+}
+
+#[cfg(feature = "alloc")]
+#[allow(clippy::all)]
+#[allow(implicit_provenance_casts)]
+pub mod log_capnp {
+    include!(concat!(env!("OUT_DIR"), "/log_capnp.rs"));
 }

@@ -41,6 +41,15 @@ pub mod launcher {
     /// The process is done: word 0 is its exit code, 0 for success. No
     /// reply comes.
     pub const EXIT: usize = 0x100;
+    /// A call asking which component a client of the process's exports
+    /// is: word 0 is the badge its calls arrive with. The reply's label is
+    /// 0 and its words are the name's length in bytes, then the name's
+    /// bytes packed little-endian; label `NO_SUCH_CLIENT` if the badge
+    /// isn't a client of the caller's exports.
+    pub const CLIENT: usize = 0x101;
+    pub const NO_SUCH_CLIENT: usize = 1;
+    /// The longest name a `CLIENT` reply carries.
+    pub const MAX_NAME: usize = 64;
 }
 
 /// A range of virtual addresses, `start..end`.

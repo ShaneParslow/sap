@@ -113,7 +113,7 @@ pub fn check_notifications(info: &Env) {
     assert_eq!(WAIT_ERROR.load(Ordering::Relaxed), error::FAILED_LOOKUP, "the waiter should see its capability gone");
 
     expect("revoke", slot(parent).revoke(), Ok(()));
-    println!("check: notifications, badges, waiting, suspension and deletion behave");
+    println!("notifications, badges, waiting, suspension and deletion behave");
 }
 
 /// Server state, read by the checks.
@@ -259,7 +259,7 @@ pub fn check_ipc(info: &Env) {
     assert_eq!(SERVER_ERROR.load(Ordering::Relaxed), error::FAILED_LOOKUP, "the server's RECV didn't fail");
 
     expect("revoke", slot(parent).revoke(), Ok(()));
-    println!("check: endpoints, calls, replies, bound notifications and deletion behave");
+    println!("endpoints, calls, replies, bound notifications and deletion behave");
 }
 
 /// The keeper's receive window and what it last received.
@@ -368,7 +368,7 @@ pub fn check_cap_transfer(info: &Env) {
     clear();
 
     expect("revoke", slot(parent).revoke(), Ok(()));
-    println!("check: capability transfer, grant rights and receive windows behave");
+    println!("capability transfer, grant rights and receive windows behave");
 }
 
 /// What the faulting thread read after its handler fixed the fault.
@@ -447,5 +447,5 @@ pub fn check_faults(info: &Env) {
     assert!((entry..entry + 0x100).contains(&pc3), "the unhandled thread isn't stopped in faulter");
 
     expect("revoke", slot(parent).revoke(), Ok(()));
-    println!("check: faults delivered, fixed, refused and unhandled behave");
+    println!("faults delivered, fixed, refused and unhandled behave");
 }

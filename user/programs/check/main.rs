@@ -1,9 +1,10 @@
 //! The kernel checks: the program the root task starts at boot to check
 //! the kernel's features as they arrive. Its bootstrap message
 //! (`CheckImports` in `interfaces/check.capnp`) gives it the authority the
-//! root task holds at boot: untyped memory and the ASID pool. It reports
-//! success by exiting with code 0; a failed check panics, which halts the
-//! machine.
+//! root task holds at boot: untyped memory and the ASID pool. Its output
+//! goes to the log, which puts the component's name before each line. It
+//! reports success by exiting with code 0; a failed check panics, which
+//! halts the machine.
 //!
 //! The checks are grouped by area, one module each, and run in the order
 //! `sap_main` calls them. Helpers they share (`Env`, `slot`, `expect`, the
@@ -39,7 +40,7 @@ use channels::{check_capnp, check_echo_service, check_ring, measure_transfer};
 use cheri::check_cheri;
 use kernel_ipc::{check_cap_transfer, check_faults, check_ipc, check_notifications};
 use memory::check_mapping;
-use processes::{check_factory, check_process};
+use processes::{check_factory, check_log, check_process};
 use rt::check_heap;
 use threads::check_threads;
 
@@ -62,6 +63,7 @@ struct Env {
     peer_hash: [u8; 32],
     /// Whether user mode may use CHERI capabilities.
     cheri: bool,
+    log: usize,
     /// Untyped memory, in consecutive slots, described in order in
     /// `untyped_list`.
     untyped: SlotRange,
@@ -90,6 +92,7 @@ fn env(startup: &'static Startup) -> Result<Env, capnp::Error> {
         factory: import(imports.get_factory()),
         peer_hash: imports.get_peer_hash()?.try_into().expect("check: the peer's hash is 32 bytes"),
         cheri: imports.get_cheri(),
+        log: import(imports.get_log()),
         untyped: SlotRange { start: first, end: first + regions.len() as usize },
         untyped_list,
     })
@@ -126,6 +129,7 @@ fn sap_main(a0: usize, _: usize, _: usize) -> ! {
     let startup = unsafe { process::startup(a0) };
     let env = env(startup).expect("check: bootstrap message");
     let info = &env;
+    sap_rt::debug::set_log(info.log);
     runtime::start(Resources {
         cnode: process_slot::CNODE,
         slots: info.empty.start + CHECK_SLOTS..info.empty.end,
@@ -144,7 +148,7 @@ fn sap_main(a0: usize, _: usize, _: usize) -> ! {
     // Before anything else allocates: it checks that the heap starts empty.
     // Building a Cap'n Proto message allocates, since capnp's `alloc`
     // feature (for the process factory's interfaces) keeps a builder's
-    // segments in a `Vec`.
+    // segments in a `Vec`; printing doesn't (`sap_rt::debug::encode_output`).
     check_heap(info);
     check_process(info);
     check_ring(info);
@@ -152,8 +156,9 @@ fn sap_main(a0: usize, _: usize, _: usize) -> ! {
     measure_transfer(info);
     check_capnp();
     check_factory(info);
+    check_log(info);
     check_cheri(info);
-    println!("check: all checks passed");
+    println!("all checks passed");
     process::exit(0)
 }
 

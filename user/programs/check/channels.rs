@@ -11,6 +11,8 @@ use sap_rt::{ipc, println, slots, sys, untyped, vspace};
 use capnp::message::{Builder, Reader, ReaderOptions, SegmentArray, SingleSegmentAllocator};
 use sap_interfaces::echo;
 use sap_interfaces::echo_capnp::{reply, request};
+use sap_interfaces::log_messages_capnp::output;
+use sap_interfaces::words;
 use sap_interfaces::peer_capnp::Mode;
 use sap_loader::{self as loader, Give, Launch, Parent, Slots, LAUNCH};
 use sap_ring::transfer::{Frames, Sender, TransferError, MAX_LEN, MAX_PAGES};
@@ -155,12 +157,12 @@ pub fn check_ring(info: &Env) {
     assert_eq!(checksum, MESSAGES * (MESSAGES + 1) / 2, "checksum");
     sys::yield_now(); // let the peer report and stop
     println!(
-        "check: {MESSAGES} records round trip over shared-memory rings; check slept {} time(s) waiting for echoes, {} for space",
+        "{MESSAGES} records round trip over shared-memory rings; check slept {} time(s) waiting for echoes, {} for space",
         back.sleeps, out.sleeps
     );
     expect("revoke", slot(parent.untyped).revoke(), Ok(()));
     slots::free_range(slots.end - 400, 400);
-    println!("check: shared-memory rings between processes behave");
+    println!("shared-memory rings between processes behave");
 }
 
 /// The blob length of request number `i` on the ring: it grows and shrinks
@@ -233,7 +235,7 @@ pub fn check_echo_service(info: &Env) {
         }
         received += 1;
     }
-    println!("check: {REQUESTS} Cap'n Proto requests ({} KiB) answered across processes, read copied and in place", bytes / 1024);
+    println!("{REQUESTS} Cap'n Proto requests ({} KiB) answered across processes, read copied and in place", bytes / 1024);
 
     // Requests too large for the ring (its largest body is under 4 KiB) go
     // by page transfer: built in a private buffer, written into init's
@@ -283,7 +285,7 @@ pub fn check_echo_service(info: &Env) {
         check_reply(id, blob_len, &as_bytes(&reply_words)[..record.len]);
     }
     assert_eq!(sender.call(ep, 0, 0, MAX_LEN + 1, |_| (), &mut []).map(drop), Err(TransferError::TooLong), "longer than one call carries");
-    println!("check: 3 requests ({} KiB) by page transfer, read in place; shared, mapped and non-frame transfers refused", transferred / 1024);
+    println!("3 requests ({} KiB) by page transfer, read in place; shared, mapped and non-frame transfers refused", transferred / 1024);
 
     // Not Cap'n Proto: the peer answers with an error and carries on.
     out.send(echo::REQUEST, 1000, &[0xff; 40]);
@@ -308,7 +310,7 @@ pub fn check_echo_service(info: &Env) {
     assert_eq!(back.recv(&mut reply_words), Err(RingError::Corrupt), "a record past what was published");
     expect("revoke", slot(parent.untyped).revoke(), Ok(()));
     slots::free_range(slots.end - 400, 400);
-    println!("check: Cap'n Proto over rings refuses malformed and oversized requests and a lying peer");
+    println!("Cap'n Proto over rings refuses malformed and oversized requests and a lying peer");
 }
 
 /// The peer's checksum (`sum_bytes`): little-endian words, the tail as
@@ -355,7 +357,7 @@ pub fn measure_transfer(info: &Env) {
     });
     let us = |t: u64| format!("{}.{} us", t / 10, t % 10);
     println!(
-        "check: per call: yield {}, identify {}, map+unmap {}, map+write+unmap {}",
+        "per call: yield {}, identify {}, map+unmap {}, map+write+unmap {}",
         us(null), us(identify), us(map_unmap), us(touch)
     );
     let data: Vec<u8> = (0..MAX_LEN).map(|k| (k * 7 + k / 251) as u8).collect();
@@ -372,7 +374,7 @@ pub fn measure_transfer(info: &Env) {
     };
     // Tenths of a microsecond per round trip.
     let tenths = |ticks: u64| ticks * 10_000_000 / info.timer_hz / ROUNDS;
-    println!("check: round trips of n bytes, ring copy vs page transfer (QEMU, {} Hz timer):", info.timer_hz);
+    println!("round trips of n bytes, ring copy vs page transfer (QEMU, {} Hz timer):", info.timer_hz);
     for n in [256, 1024, 4096, 8192, 16384, 32768, 61440] {
         let mut ticks = [0u64; 2];
         for (way, transfer) in [false, true].into_iter().enumerate() {
@@ -383,7 +385,7 @@ pub fn measure_transfer(info: &Env) {
             }
             ticks[way] = sys::time() - start;
         }
-        println!("check:   {n:>6} B: copy {}, transfer {}", us(tenths(ticks[0])), us(tenths(ticks[1])));
+        println!("  {n:>6} B: copy {}, transfer {}", us(tenths(ticks[0])), us(tenths(ticks[1])));
     }
     out.send(echo::STOP, 0, &[]);
     assert_eq!(back.recv(&mut sum).map(|r| r.kind), Ok(echo::STOP), "the stop record");
@@ -398,7 +400,8 @@ struct Words<const N: usize>([u8; N]);
 
 /// Cap'n Proto within one process: a request built in a fixed buffer with no
 /// heap, read back through the checked reader, and a corrupted pointer, bad
-/// UTF-8 and an over-long traversal rejected rather than trusted.
+/// UTF-8 and an over-long traversal rejected rather than trusted. Also the
+/// runtime's hand-made encoding of the log's `Output`, against capnp's.
 pub fn check_capnp() {
     let mut space = Words([0; 1024]);
     let mut message = Builder::new(SingleSegmentAllocator::new(&mut space.0));
@@ -450,5 +453,17 @@ pub fn check_capnp() {
     let reader = Reader::new(SegmentArray::new(&segments), options);
     let over = reader.get_root::<request::Reader>().and_then(|r| r.get_numbers().and_then(|_| r.get_blob()).map(drop));
     assert!(over.is_err(), "a traversal past the limit should be refused");
-    println!("check: Cap'n Proto messages build without a heap, read back, and refuse bad pointers, UTF-8 and traversal");
+
+    for text in ["", "a", "seven b", "eight by", "a line of output, with an é\n"] {
+        let mut space = Words([0; 1024]);
+        let mut allocator = SingleSegmentAllocator::new(&mut space.0);
+        let mut message = Builder::new(&mut allocator);
+        message.init_root::<output::Builder>().set_text(text);
+        let mut expected = [0usize; 64];
+        let n = words::pack(&message, &mut expected).expect("an output message fits");
+        let mut got = [0usize; 64];
+        let m = sap_rt::debug::encode_output(text, (&mut got[..sap_rt::debug::OUTPUT_WORDS]).try_into().unwrap());
+        assert_eq!(&got[..m], &expected[..n], "the runtime encodes {text:?} as capnp does");
+    }
+    println!("Cap'n Proto messages build without a heap, read back, and refuse bad pointers, UTF-8 and traversal; the log's output encodes as capnp's");
 }

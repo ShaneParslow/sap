@@ -1,12 +1,12 @@
-//! Processes: a second program in its own address space, and the process
-//! factory.
+//! Processes: a second program in its own address space, the process
+//! factory, and the supervisor's exports as the log shows them.
 
-use sap_interfaces::methods::{process, process_factory};
+use sap_interfaces::methods::{log, process, process_factory};
 use sap_interfaces::process_capnp::process::wait_results;
 use sap_interfaces::process_capnp::process_factory::spawn_params;
 use sap_interfaces::process_capnp::{end, Status};
 use sap_interfaces::words;
-use sap_process::process_slot;
+use sap_process::{launcher, process_slot};
 use sap_rt::abi::{attr, error, fault, object, rights};
 use sap_rt::cnode::SlotRef;
 use sap_rt::sys::Error;
@@ -126,7 +126,7 @@ pub fn check_process(info: &Env) {
 
     expect("unmap scratch", vspace::unmap_frame(marker), Ok(()));
     expect("revoke", slot(parent_untyped).revoke(), Ok(()));
-    println!("check: a second process, calls between address spaces and isolation behave");
+    println!("a second process, calls between address spaces and isolation behave");
 }
 
 /// What a `spawn` returned: its status, and the slot the handle (on
@@ -262,5 +262,21 @@ pub fn check_factory(info: &Env) {
     assert_eq!((short.status, kind(short.back)), (label(Status::BadRequest), Ok(object::UNTYPED)), "a short hash");
 
     expect("revoke", slot(region).revoke(), Ok(()));
-    println!("check: the process factory starts programs by hash with the caller's memory, reports exits, faults and kills, and gives the memory back");
+    println!("the process factory starts programs by hash with the caller's memory, reports exits, faults and kills, and gives the memory back");
+}
+
+/// The log, an export of the supervisor's: it refuses an unknown method
+/// and malformed text, and the supervisor names a client only to the
+/// server it is a client of, so `check`, which serves nothing, learns
+/// nobody's name.
+pub fn check_log(info: &Env) {
+    let mut out = [0usize; 8];
+    let label = |r: Result<ipc::Received, Error>| r.expect("a call").info.label();
+    assert_eq!(label(ipc::call(info.log, 7, &[], &[], &mut out)), 1, "the log should refuse an unknown method");
+    // A struct whose text pointer runs far past the message.
+    let malformed = [1 << 48, 1 | (2 << 32) | (1000 << 35)];
+    assert_eq!(label(ipc::call(info.log, log::WRITE, &malformed, &[], &mut out)), 1, "the log should refuse malformed text");
+    let asked = ipc::call(process_slot::LAUNCHER, launcher::CLIENT, &[1], &[], &mut out);
+    assert_eq!(label(asked), launcher::NO_SUCH_CLIENT, "the supervisor should name clients only to their server");
+    println!("the log refuses unknown methods and malformed text; the supervisor names a client only to its server");
 }

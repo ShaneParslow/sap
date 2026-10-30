@@ -150,6 +150,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b23ac50abb8261cb38c6e2a7192d3302e0836dac1628f6a93b82b4fad185897"
 
 [[package]]
+name = "log"
+version = "0.1.0"
+dependencies = [
+ "capnp",
+ "sap-interfaces",
+ "sap-process",
+ "sap-rt",
+]
+
+[[package]]
 name = "pastey"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -237,6 +247,7 @@ name = "sap-rt"
 version = "0.1.0"
 dependencies = [
  "linked_list_allocator",
+ "sap-interfaces",
  "sap-process",
  "sap-sys",
 ]

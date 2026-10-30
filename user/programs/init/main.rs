@@ -1,9 +1,9 @@
 //! The root task, and the root supervisor it is becoming (M7). It enacts
-//! the boot composition (`supervisor`), which today is one component:
-//! `check`, the kernel checks, which gets the authority only the root task
-//! holds at boot: untyped memory and the ASID pool. Then it serves the
-//! process factory (`factory`), which starts programs from the boot pack
-//! for its clients, until `check` exits.
+//! the boot composition (`supervisor`): the log service, and `check`, the
+//! kernel checks, which gets the authority only the root task holds at
+//! boot: untyped memory and the ASID pool. Then it serves the process
+//! factory (`factory`), which starts programs from the boot pack for its
+//! clients, until `check` exits.
 
 #![no_std]
 #![no_main]
@@ -23,6 +23,7 @@ use alloc::vec::Vec;
 use capnp::message::{Builder, SingleSegmentAllocator};
 use factory::{Answer, Factory};
 use sap_interfaces::check_capnp::check_imports;
+use sap_interfaces::log_messages_capnp::log_imports;
 use sap_interfaces::supervisor_capnp::{composition, OnEnd};
 use sap_loader::Parent;
 use sap_ring::as_bytes_mut;
@@ -45,6 +46,9 @@ const CHECK_CNODE_BITS: u8 = 12;
 const CHECK_STACK_PAGES: u16 = 16;
 /// `check`'s memory: 2 MiB, for its 633 KiB image, its CNode and stack.
 const CHECK_MEMORY_BITS: u8 = 21;
+/// The log service's memory, and its budget, for its reply object.
+const LOG_MEMORY_BITS: u8 = 20;
+const LOG_BUDGET_BITS: u8 = 12;
 
 #[unsafe(no_mangle)]
 fn sap_main(boot_info: usize, _: usize, _: usize) -> ! {
@@ -86,10 +90,11 @@ fn sap_main(boot_info: usize, _: usize, _: usize) -> ! {
         let message = ipc::recv(ep, reply, &mut words).expect("init: receive");
         let (badge, label) = (message.badge, message.info.label());
         let words = &words[..message.info.length()];
-        if supervisor.handle(badge, label, words) {
-            continue;
-        }
-        match factory.handle(badge, label, words, message.info.extra_caps(), reply) {
+        let answer = match supervisor.handle(badge, label, words) {
+            Some(answer) => Some(answer),
+            None => factory.handle(badge, label, words, message.info.extra_caps(), reply),
+        };
+        match answer {
             Some(Answer::Reply(label, words, caps)) => {
                 let _ = ipc::reply(reply, label, &words, &caps);
             }
@@ -162,41 +167,64 @@ fn new_object(from: usize, object_type: usize) -> usize {
     at
 }
 
-/// Enact the boot composition: `check`, with copies of the ASID pool and
-/// every spare untyped region and the factory capability, moved, as its
-/// imports; it ends the boot when it ends.
-fn boot(info: &BootInfo, own: usize, pool: usize, supervisor: &mut Supervisor) {
-    let count = spare_untyped(info, own, pool).count();
-
-    // check's bootstrap message. Imports: the ASID pool, the factory, then
-    // the untyped regions in boot order. On the heap: the stack is only
-    // 16 KiB.
+/// A bootstrap message: a single-segment message built by `build`. On the
+/// heap: the stack is only 16 KiB.
+fn bootstrap<T: capnp::traits::Owned>(build: impl FnOnce(T::Builder<'_>)) -> Vec<u8> {
     let mut scratch = vec![0u64; 512];
     let mut allocator = SingleSegmentAllocator::new(as_bytes_mut(&mut scratch));
     let mut message = Builder::new(&mut allocator);
-    let mut root = message.init_root::<check_imports::Builder>();
-    root.set_asid_pool(0);
-    root.set_factory(1);
-    root.set_peer_hash(&pack::PEER.0);
-    root.set_cheri(info.cheri != 0);
-    let mut list = root.init_untyped(count as u32);
-    for (i, (_, &UntypedDesc { paddr, size_bits, .. })) in spare_untyped(info, own, pool).enumerate() {
-        let mut region = list.reborrow().get(i as u32);
-        region.set_import(2 + i as u32);
-        region.set_size_bits(size_bits);
-        region.set_paddr(paddr as u64);
-    }
+    build(message.init_root::<T::Builder<'_>>());
     let segments = message.get_segments_for_output();
     assert_eq!(segments.len(), 1, "init: a bootstrap message is one segment");
     // Copied out: the allocator zeroes its buffer when the message goes.
-    let bootstrap: Vec<u8> = segments[0].to_vec();
-    drop(message);
+    segments[0].to_vec()
+}
+
+/// Enact the boot composition: the log service, serving its export; then
+/// `check`, with copies of the ASID pool and every spare untyped region,
+/// the factory capability, moved, and the log as its imports. Either one
+/// ends the boot when it ends.
+fn boot(info: &BootInfo, own: usize, pool: usize, supervisor: &mut Supervisor) {
+    let count = spare_untyped(info, own, pool).count();
+
+    // check's bootstrap message. Imports: the ASID pool, the factory, the
+    // log, then the untyped regions in boot order.
+    let check = bootstrap::<check_imports::Owned>(|mut root| {
+        root.set_asid_pool(0);
+        root.set_factory(1);
+        root.set_log(2);
+        root.set_peer_hash(&pack::PEER.0);
+        root.set_cheri(info.cheri != 0);
+        let mut list = root.init_untyped(count as u32);
+        for (i, (_, &UntypedDesc { paddr, size_bits, .. })) in spare_untyped(info, own, pool).enumerate() {
+            let mut region = list.reborrow().get(i as u32);
+            region.set_import(3 + i as u32);
+            region.set_size_bits(size_bits);
+            region.set_paddr(paddr as u64);
+        }
+    });
+    let log = bootstrap::<log_imports::Owned>(|mut root| root.set_endpoint(0));
 
     let mut message = capnp::message::Builder::new_default();
-    let mut component = message.init_root::<composition::Builder>().init_components(1).get(0);
+    let mut components = message.init_root::<composition::Builder>().init_components(2);
+    let mut component = components.reborrow().get(0);
+    component.set_name("log");
+    component.set_program(&pack::LOG.0);
+    component.set_bootstrap(&log);
+    component.set_on_end(OnEnd::EndBoot);
+    component.reborrow().init_exports(1).get(0).set_name("log");
+    let mut limits = component.reborrow().init_limits();
+    limits.set_memory_bits(LOG_MEMORY_BITS);
+    limits.set_priority(255);
+    limits.set_cnode_bits(6);
+    limits.set_stack_pages(4);
+    limits.set_budget_bits(LOG_BUDGET_BITS);
+    component.init_imports(1).get(0).set_serve("log");
+
+    let mut component = components.get(1);
     component.set_name("check");
     component.set_program(&pack::CHECK.0);
-    component.set_bootstrap(&bootstrap);
+    component.set_bootstrap(&check);
     component.set_on_end(OnEnd::EndBoot);
     let mut limits = component.reborrow().init_limits();
     limits.set_memory_bits(CHECK_MEMORY_BITS);
@@ -204,13 +232,17 @@ fn boot(info: &BootInfo, own: usize, pool: usize, supervisor: &mut Supervisor) {
     limits.set_max_priority(255);
     limits.set_cnode_bits(CHECK_CNODE_BITS);
     limits.set_stack_pages(CHECK_STACK_PAGES);
-    let mut imports = component.init_imports(2 + count as u32);
-    imports.reborrow().get(0).set_held("asidPool");
-    imports.reborrow().get(1).set_held("factory");
-    imports.reborrow().get(1).set_move(true);
+    let mut imports = component.init_imports(3 + count as u32);
+    imports.reborrow().get(0).init_held().set_name("asidPool");
+    let mut factory = imports.reborrow().get(1).init_held();
+    factory.set_name("factory");
+    factory.set_move(true);
+    let mut log = imports.reborrow().get(2).init_export();
+    log.set_component("log");
+    log.set_name("log");
     // Copied, never moved: the supervisor keeps the right to revoke them.
     for i in 0..count {
-        imports.reborrow().get(2 + i as u32).set_held(alloc::format!("untyped.{i}").as_str());
+        imports.reborrow().get(3 + i as u32).init_held().set_name(alloc::format!("untyped.{i}").as_str());
     }
     let composition = message.get_root_as_reader::<composition::Reader>().expect("init: the boot composition");
     supervisor.enact(composition).expect("init: enact the boot composition");

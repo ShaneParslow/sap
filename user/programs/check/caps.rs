@@ -33,7 +33,7 @@ pub fn check_cnode_operations(info: &Env) {
     // Addresses that don't resolve.
     expect("slot out of range", a.copy_from(slot(1 << info.cnode_radix), rights::ALL), Err(error::FAILED_LOOKUP));
     expect("wrong depth", a.copy_from(SlotRef { depth: 8, ..tcb }, rights::ALL), Err(error::FAILED_LOOKUP));
-    println!("check: CNode copy, move, delete and revoke behave");
+    println!("CNode copy, move, delete and revoke behave");
 }
 
 /// Retype untyped memory into objects, run it out, and get it back by
@@ -92,5 +92,5 @@ pub fn check_retype(info: &Env) {
     expect("the original retypes again", untyped::retype(region, object::FRAME_4K, 0, in_root, copy, 1), Ok(()));
     expect("revoke once more", slot(region).revoke(), Ok(()));
     expect("revoke the carve", slot(parent).revoke(), Ok(()));
-    println!("check: untyped retype, exhaustion and reuse after revoke behave");
+    println!("untyped retype, exhaustion and reuse after revoke behave");
 }

@@ -16,6 +16,8 @@ struct CheckImports {
   peerHash @3 :Data;
   # Whether user mode may use CHERI capabilities.
   cheri @4 :Bool;
+  # The log, which the checks' output goes to.
+  log @5 :UInt32;
 }
 
 struct Untyped {

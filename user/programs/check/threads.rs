@@ -94,7 +94,7 @@ pub fn check_threads(info: &Env) {
     }
     assert_eq!(COUNTER.load(Ordering::Relaxed), after, "a deleted thread ran");
     expect("revoke", slot(parent).revoke(), Ok(()));
-    println!("check: threads, priorities, preemption, suspension and deletion behave");
+    println!("threads, priorities, preemption, suspension and deletion behave");
 }
 
 /// Start a thread in this address space at `entry(args)`, with a 4 KiB

@@ -103,5 +103,5 @@ pub fn check_mapping(info: &Env) {
     // Revoking the region deletes every object: frames and tables are
     // unmapped, and the new address space's ASID is freed.
     expect("revoke", slot(parent).revoke(), Ok(()));
-    println!("check: page tables, frames, ASIDs and unmapping behave");
+    println!("page tables, frames, ASIDs and unmapping behave");
 }

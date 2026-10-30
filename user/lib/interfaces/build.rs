@@ -4,13 +4,13 @@
 use std::path::Path;
 
 /// Schemas with interfaces, whose generated code needs `alloc`.
-const WITH_INTERFACES: &[&str] = &["process.capnp"];
+const WITH_INTERFACES: &[&str] = &["process.capnp", "log.capnp"];
 
 fn main() {
     let schemas = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../interfaces");
     let mut command = capnpc::CompilerCommand::new();
     command.src_prefix(&schemas);
-    for schema in ["check.capnp", "echo.capnp", "peer.capnp", "supervisor.capnp"].iter().chain(WITH_INTERFACES) {
+    for schema in ["check.capnp", "echo.capnp", "log_messages.capnp", "peer.capnp", "supervisor.capnp"].iter().chain(WITH_INTERFACES) {
         let path = schemas.join(schema);
         println!("cargo:rerun-if-changed={}", path.display());
         command.file(path);

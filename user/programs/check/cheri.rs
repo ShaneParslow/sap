@@ -140,5 +140,5 @@ pub fn check_cheri(info: &Env) {
         }
         assert_eq!(tag, 1, "a capability stored to {place} keeps its tag");
     }
-    println!("check: CHERI capabilities survive system calls and interrupts in registers, and loads and stores on the stack and heap; kernel-written results are integers; DDC and the pc are bounded to user addresses, and DDC is per thread");
+    println!("CHERI capabilities survive system calls and interrupts in registers, and loads and stores on the stack and heap; kernel-written results are integers; DDC and the pc are bounded to user addresses, and DDC is per thread");
 }
