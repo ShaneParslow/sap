@@ -14,12 +14,19 @@
 //!
 //! Each instance's launcher and fault handler is a capability to init's
 //! endpoint with the badge `INSTANCE_BADGE` + its index.
-//! TODO: lazy start and restart (design/processes.md in sap-docs).
+//!
+//! An instance whose component says `restart` is started again when it
+//! fails, in the same memory, emptied, and with the same exports, so its
+//! clients' capabilities keep working: a call it died in gets no reply
+//! (`NO_REPLY`), and calls after wait for the new process.
+//! TODO: lazy start (design/processes.md in sap-docs).
 
 use alloc::string::String;
 use alloc::vec::Vec;
 
 use alloc::vec;
+
+use capnp::message::{Builder, SingleSegmentAllocator};
 
 use sap_interfaces::memory_capnp::{ROOT_CONTROLLER, ROOT_HOLDER};
 use sap_interfaces::supervisor_capnp::{component, composition, limits, route, OnEnd};
@@ -27,6 +34,8 @@ use sap_loader::{self as loader, Give, Launch, Parent, Slots};
 use sap_process::launcher;
 use sap_rt::abi::{fault, init_slot, object, rights};
 use sap_rt::cnode::SlotRef;
+use sap_interfaces::words;
+use sap_rt::sys::time;
 use sap_rt::{account, debug, println, slots, tcb, untyped};
 
 use crate::factory::Answer;
@@ -39,6 +48,9 @@ const MAX_INSTANCES: usize = 8;
 /// Slots in init's CNode for each instance's objects, while the loader
 /// builds it.
 const OBJECT_SLOTS: usize = 256;
+/// How many times in a row an instance may fail within a second of
+/// starting before the supervisor stops restarting it.
+const MAX_RAPID: u32 = 3;
 /// The rights of a client's capability to an export: call, and pass
 /// capabilities both ways.
 const CLIENT_RIGHTS: usize = rights::WRITE | rights::GRANT | rights::GRANT_REPLY;
@@ -73,12 +85,18 @@ enum Memory {
 
 struct Instance {
     name: String,
+    /// The component, kept to start it again: a single-segment message.
+    component: Vec<usize>,
     memory: Memory,
     objects: usize,
     /// The badged endpoint capability that is its launcher and fault
     /// handler.
     launcher: usize,
     on_end: OnEnd,
+    /// When its process started, and how many times in a row it failed
+    /// within a second of starting.
+    started: u64,
+    rapid: u32,
 }
 
 /// An endpoint a component serves.
@@ -178,10 +196,9 @@ impl Supervisor {
         Ok(())
     }
 
-    /// The memory an instance with `limits` is built from: the untyped
-    /// region to build it from, how to end it, and log2 of the untyped
-    /// budget it gets (0 for none).
-    fn memory(&self, limits: limits::Reader) -> Result<(usize, Memory, u8), StartError> {
+    /// The memory an instance with `limits` is built from: a region, or an
+    /// account (whose chunk `launch` takes).
+    fn memory(&self, limits: limits::Reader) -> Result<Memory, StartError> {
         let bad = |_| StartError::BadComponent;
         let root = SlotRef { root: init_slot::CNODE, index: 0, depth: 0 };
         match limits.get_memory().which().map_err(|_| StartError::BadComponent)? {
@@ -192,7 +209,7 @@ impl Supervisor {
                     slots::free(memory);
                     return Err(StartError::OverLimit);
                 }
-                Ok((memory, Memory::Region(memory), region.get_budget_bits()))
+                Ok(Memory::Region(memory))
             }
             limits::memory::Account(terms) => {
                 let terms = terms.map_err(bad)?;
@@ -202,13 +219,7 @@ impl Supervisor {
                     slots::free_range(caps, 2);
                     return Err(StartError::OverLimit);
                 }
-                let (holder, controller, chunk) = (caps, caps + 1, slots::alloc().expect("init: out of slots"));
-                let memory = Memory::Account { holder, controller, chunk };
-                if account::allocate(holder, terms.get_process_bits(), init_slot::CNODE, chunk).is_err() {
-                    Self::end_memory(&memory);
-                    return Err(StartError::OverLimit);
-                }
-                Ok((chunk, memory, 0))
+                Ok(Memory::Account { holder: caps, controller: caps + 1, chunk: slots::alloc().expect("init: out of slots") })
             }
         }
     }
@@ -238,11 +249,40 @@ impl Supervisor {
     fn start(&mut self, component: component::Reader) -> Result<(), StartError> {
         let bad = |_| StartError::BadComponent;
         let name: String = text(component.get_name())?.into();
+        let on_end = component.get_on_end().map_err(|_| StartError::BadComponent)?;
+        if on_end == OnEnd::Restart {
+            // A moved capability would be gone for the next instance.
+            for route in component.get_imports().map_err(bad)? {
+                if let Ok(route::Held(Ok(held))) = route.which()
+                    && held.get_move()
+                {
+                    return Err(StartError::BadComponent);
+                }
+            }
+        }
+        let index = self.instances.iter().position(Option::is_none).ok_or(StartError::Full)?;
+        let memory = self.memory(component.get_limits().map_err(bad)?)?;
+        let launcher_cap = slots::alloc().expect("init: out of slots");
+        slot(launcher_cap).mint_from(slot(self.endpoint), rights::WRITE | rights::GRANT, INSTANCE_BADGE + index).expect("init: badge");
+        let objects = slots::alloc_range(OBJECT_SLOTS).expect("init: slots for an instance");
+        let instance = Instance { name, component: keep(component)?, memory, objects, launcher: launcher_cap, on_end, started: time(), rapid: 0 };
+        if let Err(error) = self.launch(component, &instance) {
+            self.destroy(&instance);
+            return Err(error);
+        }
+        self.instances[index] = Some(instance);
+        Ok(())
+    }
+
+    /// Build and start a process of `component` for `instance`, from its
+    /// memory, with its launcher.
+    fn launch(&mut self, component: component::Reader, instance: &Instance) -> Result<(), StartError> {
+        let bad = |_| StartError::BadComponent;
+        let name = &instance.name;
         let hash: [u8; 32] = component.get_program().map_err(bad)?.try_into().map_err(|_| StartError::BadComponent)?;
         let image = pack::find(&pack::Hash(hash)).ok_or(StartError::NoSuchProgram)?;
         // The kernel holds priorities to init's own maximum.
         let limits = component.get_limits().map_err(bad)?;
-        let on_end = component.get_on_end().map_err(|_| StartError::BadComponent)?;
         let bootstrap = component.get_bootstrap().map_err(bad)?;
         // Resolve every route before making anything.
         enum Source {
@@ -262,15 +302,19 @@ impl Supervisor {
                     let to = to.map_err(bad)?;
                     Source::Client(self.export(text(to.get_component())?, text(to.get_name())?).ok_or(StartError::BadComponent)?)
                 }
-                route::Serve(export) => Source::Serve(self.export(&name, text(export)?).ok_or(StartError::BadComponent)?),
+                route::Serve(export) => Source::Serve(self.export(name, text(export)?).ok_or(StartError::BadComponent)?),
             });
         }
-        let index = self.instances.iter().position(Option::is_none).ok_or(StartError::Full)?;
 
-        let (untyped, memory, budget_bits) = self.memory(limits)?;
-        let account = match memory {
-            Memory::Region(_) => None,
-            Memory::Account { holder, .. } => Some(holder),
+        // What the process is built from: the region, or a chunk of the
+        // account.
+        let (untyped, budget_bits, account) = match instance.memory {
+            Memory::Region(region) => (region, region_terms(limits)?.get_budget_bits(), None),
+            Memory::Account { holder, chunk, .. } => {
+                let bits = account_terms(limits)?.get_process_bits();
+                account::allocate(holder, bits, init_slot::CNODE, chunk).map_err(|_| StartError::OverLimit)?;
+                (chunk, 0, Some(holder))
+            }
         };
 
         // Then the imports: nothing fails between here and the load.
@@ -293,24 +337,21 @@ impl Supervisor {
             });
         }
 
-        let launcher_cap = slots::alloc().expect("init: out of slots");
-        slot(launcher_cap).mint_from(slot(self.endpoint), rights::WRITE | rights::GRANT, INSTANCE_BADGE + index).expect("init: badge");
-        let objects = slots::alloc_range(OBJECT_SLOTS).expect("init: slots for an instance");
         let launch = Launch {
             priority: limits.get_priority() as usize,
             max_priority: limits.get_max_priority() as usize,
             cnode_radix: limits.get_cnode_bits() as usize,
             stack_pages: limits.get_stack_pages() as usize,
             budget_bits: (budget_bits > 0).then_some(budget_bits as usize),
-            launcher: Some(launcher_cap),
+            launcher: Some(instance.launcher),
             account,
             imports: &imports,
             bootstrap,
         };
         let parent = Parent { untyped, ..self.parent };
-        let mut slots = Slots { next: objects, end: objects + OBJECT_SLOTS };
+        let mut slots = Slots { next: instance.objects, end: instance.objects + OBJECT_SLOTS };
         let started = loader::load(image, &parent, &mut slots, &launch).and_then(|p| {
-            tcb::set_fault_handler(p.tcb, Some(launcher_cap))?;
+            tcb::set_fault_handler(p.tcb, Some(instance.launcher))?;
             Ok(p.start()?)
         });
         // Moved capabilities are gone from the table either way, and the
@@ -320,39 +361,95 @@ impl Supervisor {
             let _ = slot(cap).delete();
             slots::free(cap);
         }
-        let instance = Instance { name, memory, objects, launcher: launcher_cap, on_end };
         if started.is_err() {
-            self.destroy(&instance);
             return Err(StartError::LoadFailed);
         }
         self.clients.extend(clients.into_iter().map(|(_, client)| client));
         match limits.get_memory().which() {
             Ok(limits::memory::Account(Ok(terms))) => println!(
                 "init: started {} ({} KiB image; account of {} KiB reserved, {} KiB limit)",
-                instance.name,
+                name,
                 image.len() / 1024,
                 terms.get_reservation() >> 10,
                 terms.get_limit() >> 10
             ),
-            _ => println!("init: started {} ({} KiB image, in a region of the pool)", instance.name, image.len() / 1024),
+            _ => println!("init: started {} ({} KiB image, in a region of the pool)", name, image.len() / 1024),
         }
-        self.instances[index] = Some(instance);
         Ok(())
+    }
+
+    /// Destroy everything instance `instance` was built from, keeping its
+    /// memory (empty, with the account's reservation and the composition's
+    /// limit) and its launcher, for a new process.
+    fn reset(&mut self, instance: &Instance) -> Result<(), StartError> {
+        match instance.memory {
+            Memory::Region(region) => {
+                let _ = slot(region).revoke();
+            }
+            Memory::Account { controller, .. } => {
+                account::revoke(controller).map_err(|_| StartError::OverLimit)?;
+                let limit = with_component(&instance.component, |component| {
+                    let limits = component.get_limits().map_err(|_| StartError::BadComponent)?;
+                    Ok(account_terms(limits)?.get_limit())
+                })?;
+                account::set_limit(controller, limit).map_err(|_| StartError::OverLimit)?;
+            }
+        }
+        let _ = slot(instance.launcher).revoke();
+        for object in instance.objects..instance.objects + OBJECT_SLOTS {
+            let _ = slot(object).delete();
+        }
+        self.clients.retain(|c| c.component != instance.name);
+        Ok(())
+    }
+
+    /// Start instance `index` again after it failed, unless it keeps
+    /// failing: more than `MAX_RAPID` times in a row within a second of
+    /// starting.
+    /// TODO: back off between restarts, once the supervisor can wait with
+    /// a timeout (kernel timeouts or a timer service).
+    fn restart(&mut self, index: usize, mut instance: Instance) {
+        let now = time();
+        instance.rapid = if now - instance.started < self.parent.timer_hz { instance.rapid + 1 } else { 0 };
+        if instance.rapid > MAX_RAPID {
+            println!("init: {} keeps failing; not restarting it", instance.name);
+            self.destroy(&instance);
+            return;
+        }
+        println!("init: restarting {}", instance.name);
+        let result = self.reset(&instance).and_then(|()| {
+            let words = core::mem::take(&mut instance.component);
+            let result = with_component(&words, |component| self.launch(component, &instance));
+            instance.component = words;
+            result
+        });
+        match result {
+            Ok(()) => {
+                instance.started = now;
+                self.instances[index] = Some(instance);
+            }
+            Err(error) => {
+                println!("init: restarting {} failed: {error:?}", instance.name);
+                self.destroy(&instance);
+            }
+        }
     }
 
     /// Destroy an instance: revoking its memory deletes every object made
     /// from it, then the memory itself goes back.
-    fn destroy(&self, instance: &Instance) {
+    fn destroy(&mut self, instance: &Instance) {
         Self::end_memory(&instance.memory);
         let _ = slot(instance.launcher).revoke();
         let _ = slot(instance.launcher).delete();
         slots::free(instance.launcher);
         slots::free_range(instance.objects, OBJECT_SLOTS);
+        self.clients.retain(|c| c.component != instance.name);
     }
 
     /// Handle a message from an instance's launcher capability, if `badge`
-    /// is one: an exit or a fault ends the instance; `CLIENT` asks about a
-    /// client of its exports.
+    /// is one: an exit or a fault ends the instance, and restarts it if it
+    /// failed and its component says so; `CLIENT` asks about a client of
+    /// its exports.
     pub fn handle(&mut self, badge: usize, label: usize, words: &[usize]) -> Option<Answer> {
         let index = badge.wrapping_sub(INSTANCE_BADGE);
         if index >= MAX_INSTANCES || self.instances[index].is_none() {
@@ -381,10 +478,13 @@ impl Supervisor {
             }
         };
         let instance = self.instances[index].take().unwrap();
-        self.destroy(&instance);
         match instance.on_end {
-            OnEnd::Forget => {}
-            OnEnd::EndBoot => debug::halt(!success),
+            OnEnd::Restart if !success => self.restart(index, instance),
+            OnEnd::Forget | OnEnd::Restart => self.destroy(&instance),
+            OnEnd::EndBoot => {
+                self.destroy(&instance);
+                debug::halt(!success)
+            }
         }
         Some(Answer::Nothing)
     }
@@ -408,4 +508,38 @@ impl Supervisor {
 /// The text of a field of a composition.
 fn text(field: capnp::Result<capnp::text::Reader<'_>>) -> Result<&str, StartError> {
     field.ok().and_then(|t| t.to_str().ok()).ok_or(StartError::BadComponent)
+}
+
+/// A copy of `component`, as a single-segment message, to read with `read`.
+fn keep(component: component::Reader) -> Result<Vec<usize>, StartError> {
+    let size = component.total_size().map_err(|_| StartError::BadComponent)?.word_count as usize + 1;
+    let mut space = vec![0u64; size];
+    let mut allocator = SingleSegmentAllocator::new(sap_ring::as_bytes_mut(&mut space));
+    let mut message = Builder::new(&mut allocator);
+    message.set_root(component).map_err(|_| StartError::BadComponent)?;
+    let mut kept = vec![0usize; size];
+    let n = words::pack(&message, &mut kept).ok_or(StartError::BadComponent)?;
+    kept.truncate(n);
+    Ok(kept)
+}
+
+/// Call `f` with the component `keep` copied into `kept`.
+fn with_component<T>(kept: &[usize], f: impl FnOnce(component::Reader) -> Result<T, StartError>) -> Result<T, StartError> {
+    let segment = [words::bytes(kept)];
+    let reader = words::reader(&segment);
+    f(reader.get_root::<component::Reader>().map_err(|_| StartError::BadComponent)?)
+}
+
+fn region_terms(limits: limits::Reader<'_>) -> Result<sap_interfaces::supervisor_capnp::region::Reader<'_>, StartError> {
+    match limits.get_memory().which() {
+        Ok(limits::memory::Region(Ok(region))) => Ok(region),
+        _ => Err(StartError::BadComponent),
+    }
+}
+
+fn account_terms(limits: limits::Reader<'_>) -> Result<sap_interfaces::supervisor_capnp::account::Reader<'_>, StartError> {
+    match limits.get_memory().which() {
+        Ok(limits::memory::Account(Ok(terms))) => Ok(terms),
+        _ => Err(StartError::BadComponent),
+    }
 }

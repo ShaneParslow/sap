@@ -17,4 +17,7 @@ struct CheckImports {
   cheri @3 :Bool;
   # The log, which the checks' output goes to.
   log @4 :UInt32;
+  # A service its supervisor restarts when it fails (`peer`'s
+  # `restartable`).
+  restartable @5 :UInt32;
 }

@@ -43,7 +43,7 @@ use channels::{check_capnp, check_echo_service, check_ring, measure_transfer};
 use cheri::check_cheri;
 use kernel_ipc::{check_cap_transfer, check_faults, check_ipc, check_notifications};
 use memory::check_mapping;
-use processes::{check_factory, check_log, check_process};
+use processes::{check_factory, check_log, check_process, check_restart};
 use rt::check_heap;
 use threads::check_threads;
 
@@ -68,6 +68,8 @@ struct Env {
     /// Whether user mode may use CHERI capabilities.
     cheri: bool,
     log: usize,
+    /// A service restarted when it fails.
+    restartable: usize,
     /// The process's memory account.
     account: usize,
     /// Untyped memory, chunks of the account in consecutive slots,
@@ -103,6 +105,7 @@ fn env(startup: &'static Startup) -> Result<Env, capnp::Error> {
         peer_hash: imports.get_peer_hash()?.try_into().expect("check: the peer's hash is 32 bytes"),
         cheri: imports.get_cheri(),
         log: import(imports.get_log()),
+        restartable: import(imports.get_restartable()),
         account: process_slot::ACCOUNT,
         untyped,
         untyped_list,
@@ -155,6 +158,7 @@ fn sap_main(a0: usize, _: usize, _: usize) -> ! {
     check_capnp();
     check_factory(info);
     check_log(info);
+    check_restart(info);
     check_accounts(info);
     check_cheri(info);
     println!("all checks passed");

@@ -25,6 +25,7 @@ use factory::{Answer, Factory};
 use sap_interfaces::check_capnp::check_imports;
 use sap_interfaces::log_capnp::log_imports;
 use sap_interfaces::memory_capnp::memory_imports;
+use sap_interfaces::peer_capnp::{peer_imports, Mode};
 use sap_interfaces::supervisor_capnp::{composition, OnEnd};
 use sap_loader::Parent;
 use sap_ring::as_bytes_mut;
@@ -53,6 +54,10 @@ const MEMORY_BUDGET_BITS: u8 = 20;
 /// its reply object.
 const LOG_PROCESS_BITS: u8 = 20;
 const LOG_ACCOUNT: u64 = 2 << 20;
+/// The restartable test service's account (`peer`, heapless): built from
+/// 1 MiB, with a page for its reply object.
+const RESTARTABLE_PROCESS_BITS: u8 = 20;
+const RESTARTABLE_ACCOUNT: u64 = 2 << 20;
 /// `check`'s account: built from 2 MiB (its 633 KiB image, CNode and
 /// stack); the rest for its heap and the untyped memory its checks use.
 const CHECK_PROCESS_BITS: u8 = 21;
@@ -191,9 +196,11 @@ fn bootstrap<T: capnp::traits::Owned>(build: impl FnOnce(T::Builder<'_>)) -> Vec
 
 /// Enact the boot composition: the memory manager, with copies of every
 /// spare untyped region as its RAM, serving accounts; the log service,
-/// serving its export; then `check`, with a copy of the ASID pool, the
-/// factory capability, moved, and the log as its imports. The log and
-/// `check` get accounts. Any of them ends the boot when it ends.
+/// serving its export; a test service restarted when it fails; then
+/// `check`, with a copy of the ASID pool, the factory capability, moved,
+/// the log and the test service as its imports. All but the memory manager
+/// get accounts. Any of them but the test service ends the boot when it
+/// ends.
 fn boot(info: &BootInfo, own: usize, pool: usize, supervisor: &mut Supervisor) {
     let count = spare_untyped(info, own, pool).count();
 
@@ -210,11 +217,16 @@ fn boot(info: &BootInfo, own: usize, pool: usize, supervisor: &mut Supervisor) {
         }
     });
     let log = bootstrap::<log_imports::Owned>(|mut root| root.set_endpoint(0));
-    // Imports: the ASID pool, the factory, the log.
+    let restartable = bootstrap::<peer_imports::Owned>(|mut root| {
+        root.set_mode(Mode::Restartable);
+        root.set_endpoint(0);
+    });
+    // Imports: the ASID pool, the factory, the log, the restartable service.
     let check = bootstrap::<check_imports::Owned>(|mut root| {
         root.set_asid_pool(0);
         root.set_factory(1);
         root.set_log(2);
+        root.set_restartable(3);
         root.set_peer_hash(&pack::PEER.0);
         root.set_cheri(info.cheri != 0);
     });
@@ -228,7 +240,7 @@ fn boot(info: &BootInfo, own: usize, pool: usize, supervisor: &mut Supervisor) {
     let mut accounts = root.reborrow().init_accounts();
     accounts.set_component("memory");
     accounts.set_name("account");
-    let mut components = root.init_components(3);
+    let mut components = root.init_components(4);
 
     let mut component = components.reborrow().get(0);
     component.set_name("memory");
@@ -266,7 +278,23 @@ fn boot(info: &BootInfo, own: usize, pool: usize, supervisor: &mut Supervisor) {
     limits.set_stack_pages(4);
     component.init_imports(1).get(0).set_serve("log");
 
-    let mut component = components.get(2);
+    let mut component = components.reborrow().get(2);
+    component.set_name("restartable");
+    component.set_program(&pack::PEER.0);
+    component.set_bootstrap(&restartable);
+    component.set_on_end(OnEnd::Restart);
+    component.reborrow().init_exports(1).get(0).set_name("service");
+    let mut limits = component.reborrow().init_limits();
+    let mut terms = limits.reborrow().init_memory().init_account();
+    terms.set_reservation(RESTARTABLE_ACCOUNT);
+    terms.set_limit(RESTARTABLE_ACCOUNT);
+    terms.set_process_bits(RESTARTABLE_PROCESS_BITS);
+    limits.set_priority(255);
+    limits.set_cnode_bits(6);
+    limits.set_stack_pages(4);
+    component.init_imports(1).get(0).set_serve("service");
+
+    let mut component = components.get(3);
     component.set_name("check");
     component.set_program(&pack::CHECK.0);
     component.set_bootstrap(&check);
@@ -280,14 +308,17 @@ fn boot(info: &BootInfo, own: usize, pool: usize, supervisor: &mut Supervisor) {
     limits.set_max_priority(255);
     limits.set_cnode_bits(CHECK_CNODE_BITS);
     limits.set_stack_pages(CHECK_STACK_PAGES);
-    let mut imports = component.init_imports(3);
+    let mut imports = component.init_imports(4);
     imports.reborrow().get(0).init_held().set_name("asidPool");
     let mut factory = imports.reborrow().get(1).init_held();
     factory.set_name("factory");
     factory.set_move(true);
-    let mut log = imports.get(2).init_export();
+    let mut log = imports.reborrow().get(2).init_export();
     log.set_component("log");
     log.set_name("log");
+    let mut restartable = imports.get(3).init_export();
+    restartable.set_component("restartable");
+    restartable.set_name("service");
     let composition = message.get_root_as_reader::<composition::Reader>().expect("init: the boot composition");
     supervisor.enact(composition).expect("init: enact the boot composition");
 }

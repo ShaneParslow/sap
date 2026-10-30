@@ -280,3 +280,23 @@ pub fn check_log(info: &Env) {
     assert_eq!(label(asked), launcher::NO_SUCH_CLIENT, "the supervisor should name clients only to their server");
     println!("the log refuses unknown methods and malformed text; the supervisor names a client only to its server");
 }
+
+/// Restart: a service the supervisor restarts when it fails keeps its
+/// export, so the same capability reaches the new process; a call the old
+/// one died in gets no reply, and the new one starts afresh.
+pub fn check_restart(info: &Env) {
+    let mut out = [0usize; 1];
+    let mut count = || {
+        let reply = ipc::call(info.restartable, 1, &[], &[], &mut out).expect("a call to the service");
+        assert_eq!(reply.info.label(), 0);
+        out[0]
+    };
+    assert_eq!((count(), count()), (1, 2), "the service counts its calls");
+    let died = ipc::call(info.restartable, 2, &[], &[], &mut []).map(drop).map_err(|e| e.0);
+    assert_eq!(died, Err(error::NO_REPLY), "a call the service died in gets no reply");
+    assert_eq!(count(), 1, "the restarted service starts afresh, on the same capability");
+    let died = ipc::call(info.restartable, 2, &[], &[], &mut []).map(drop).map_err(|e| e.0);
+    assert_eq!(died, Err(error::NO_REPLY));
+    assert_eq!((count(), count()), (1, 2), "and again");
+    println!("a failed service restarts behind the same capability; the call it died in gets no reply");
+}

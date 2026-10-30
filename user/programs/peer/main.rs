@@ -9,7 +9,9 @@
 //! - `sumBytes`: sum the bytes of each record or page transfer (for
 //!   measuring);
 //! - `exit` and `crash`: exit with a code, or fault, for checking how a
-//!   process manager hears of either.
+//!   process manager hears of either;
+//! - `restartable`: serve an export until asked to fault, for checking that
+//!   its supervisor restarts it.
 //!
 //! It runs without a heap: Cap'n Proto messages are built in a fixed buffer.
 
@@ -30,7 +32,9 @@ use sap_ring::transfer::{Frames, Receiver, TransferError};
 use sap_ring::{as_bytes, as_bytes_mut, Consumer, Layout, Producer, RingError, PAGE};
 use sap_process::{process_slot, Startup};
 use sap_rt::address::mapped;
-use sap_rt::{ipc, notification, println, process, tcb};
+use sap_rt::abi::object;
+use sap_rt::cnode::SlotRef;
+use sap_rt::{account, ipc, notification, println, process, tcb, untyped};
 
 /// An address mapped only in the root task's address space.
 const PARENT_ONLY: usize = 0x38_0000_0000;
@@ -84,7 +88,7 @@ fn imports(startup: &'static Startup) -> Result<(Mode, Peer, usize), BadBootstra
     let nothing = Peer { endpoint: 0, data_pages: 0, notification: 0, doorbell: 0, reply: 0, free: 0 };
     let peer = match mode {
         Mode::Exit | Mode::Crash => nothing,
-        Mode::Call => Peer { endpoint: import(imports.get_endpoint())?, ..nothing },
+        Mode::Call | Mode::Restartable => Peer { endpoint: import(imports.get_endpoint())?, free: startup.free.start, ..nothing },
         _ => Peer {
             endpoint: import(imports.get_endpoint())?,
             data_pages: imports.get_data_pages() as usize,
@@ -109,13 +113,40 @@ fn sap_main(a0: usize, _: usize, _: usize) -> ! {
         Mode::Misbehave => misbehave(peer, channel(peer)),
         Mode::SumBytes => sum_bytes(peer, channel(peer)),
         Mode::Exit => process::exit(code),
-        Mode::Crash => {
-            // SAFETY: deliberately reads an address nothing is mapped at.
-            let _ = unsafe { core::ptr::read_volatile(mapped::<usize>(0x1000)) };
-        }
+        Mode::Crash => crash(),
+        Mode::Restartable => restartable(peer),
     }
     loop {
         let _ = tcb::suspend(process_slot::TCB);
+    }
+}
+
+fn crash() {
+    // SAFETY: deliberately reads an address nothing is mapped at.
+    let _ = unsafe { core::ptr::read_volatile(mapped::<usize>(0x1000)) };
+}
+
+/// Serve `peer.endpoint` for checking restart: label 1 answers how many
+/// calls this process has answered, label 2 faults. Its supervisor starts
+/// it again with a count of 0.
+fn restartable(peer: Peer) {
+    let (page, answer) = (peer.free, peer.free + 1);
+    account::allocate(process_slot::ACCOUNT, 12, process_slot::CNODE, page).expect("peer: a page of its account");
+    let root = SlotRef { root: process_slot::CNODE, index: 0, depth: 0 };
+    untyped::retype(page, object::REPLY, 0, root, answer, 1).expect("peer: reply object");
+    let mut answered = 0;
+    loop {
+        let message = ipc::recv(peer.endpoint, answer, &mut []).expect("peer: receive");
+        match message.info.label() {
+            1 => {
+                answered += 1;
+                let _ = ipc::reply(answer, 0, &[answered], &[]);
+            }
+            2 => crash(),
+            _ => {
+                let _ = ipc::reply(answer, 1, &[], &[]);
+            }
+        }
     }
 }
 

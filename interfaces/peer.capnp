@@ -16,12 +16,17 @@ enum Mode {
   exit @5;
   # Read address 0, which faults.
   crash @6;
+  # Serve `endpoint`, an export, for checking restart: a call with label 1
+  # is answered with how many calls this process has answered, counting
+  # it; label 2 faults. Its reply object is made from its memory account.
+  restartable @7;
 }
 
 struct PeerImports {
   mode @0 :Mode;
   # For `call`, the endpoint to call init on; for the channel modes, the
-  # endpoint init sends page transfers on.
+  # endpoint init sends page transfers on; for `restartable`, the endpoint
+  # it serves.
   endpoint @1 :UInt32;
   dataPages @2 :UInt32;
   # The channel modes: this process's notification, init's doorbell, and

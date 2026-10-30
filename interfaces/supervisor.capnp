@@ -14,7 +14,7 @@
 # enacts the composition, before anything starts, gives the serving
 # component the receive side and each client a capability badged for that
 # client. The endpoint outlives the server's instance.
-# TODO: lazy start and restart, which exports are for (M7).
+# TODO: lazy start (M7).
 
 struct Composition {
   components @0 :List(Component);
@@ -121,4 +121,9 @@ enum OnEnd {
   # End the boot: with success if the instance exited with 0, else with
   # failure. For the root supervisor's test program.
   endBoot @1;
+  # If it failed (faulted, or exited with a code other than 0), start it
+  # again in the same memory, emptied, serving the same exports; if it
+  # exited with 0, forget it. Not after failing more than a few times in a
+  # row within a second of starting. Its routes can't move capabilities.
+  restart @2;
 }
