@@ -8,10 +8,6 @@ path = "lib.rs"
 test = false
 bench = false
 
-[features]
-# Schemas with interfaces, whose generated code needs a heap.
-alloc = ["capnp/alloc"]
-
 [dependencies]
 capnp = { version = "0.27.2", default-features = false }
 

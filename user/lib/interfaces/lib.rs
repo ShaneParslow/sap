@@ -1,17 +1,13 @@
 //! Rust bindings for sap's Cap'n Proto interfaces, generated at build time
-//! from the schemas in interfaces/ at the top of the repository.
-//!
-//! Schemas that declare interfaces (`process_capnp`, `log_capnp`) need the `alloc`
-//! feature: capnpc's code for an interface uses the heap. A program without
-//! a heap gets only the plain structs.
+//! from the schemas in interfaces/ at the top of the repository, without
+//! capnp-rust's RPC code (`build.rs`): an interface is a module of its
+//! methods' params and results structs. Nothing here needs a heap, and
+//! building a message never allocates.
 
 #![no_std]
 #![feature(strict_provenance_lints)]
 // Pointers come from `sap_sys::address::mapped`, never from integer casts.
 #![deny(implicit_provenance_casts, integer_to_ptr_transmutes)]
-
-#[cfg(feature = "alloc")]
-extern crate alloc;
 
 pub mod words;
 
@@ -55,11 +51,6 @@ pub mod echo_capnp {
 }
 
 #[allow(clippy::all)]
-pub mod log_messages_capnp {
-    include!(concat!(env!("OUT_DIR"), "/log_messages_capnp.rs"));
-}
-
-#[allow(clippy::all)]
 pub mod peer_capnp {
     include!(concat!(env!("OUT_DIR"), "/peer_capnp.rs"));
 }
@@ -69,18 +60,12 @@ pub mod supervisor_capnp {
     include!(concat!(env!("OUT_DIR"), "/supervisor_capnp.rs"));
 }
 
-#[cfg(feature = "alloc")]
 #[allow(clippy::all)]
-// Generated servers turn a pointer into an integer only as an identity
-// (`as_ptr`), never back into a pointer.
-#[allow(implicit_provenance_casts)]
-pub mod process_capnp {
-    include!(concat!(env!("OUT_DIR"), "/process_capnp.rs"));
-}
-
-#[cfg(feature = "alloc")]
-#[allow(clippy::all)]
-#[allow(implicit_provenance_casts)]
 pub mod log_capnp {
     include!(concat!(env!("OUT_DIR"), "/log_capnp.rs"));
+}
+
+#[allow(clippy::all)]
+pub mod process_capnp {
+    include!(concat!(env!("OUT_DIR"), "/process_capnp.rs"));
 }

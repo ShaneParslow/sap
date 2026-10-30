@@ -11,8 +11,6 @@ use sap_rt::{ipc, println, slots, sys, untyped, vspace};
 use capnp::message::{Builder, Reader, ReaderOptions, SegmentArray, SingleSegmentAllocator};
 use sap_interfaces::echo;
 use sap_interfaces::echo_capnp::{reply, request};
-use sap_interfaces::log_messages_capnp::output;
-use sap_interfaces::words;
 use sap_interfaces::peer_capnp::Mode;
 use sap_loader::{self as loader, Give, Launch, Parent, Slots, LAUNCH};
 use sap_ring::transfer::{Frames, Sender, TransferError, MAX_LEN, MAX_PAGES};
@@ -400,8 +398,7 @@ struct Words<const N: usize>([u8; N]);
 
 /// Cap'n Proto within one process: a request built in a fixed buffer with no
 /// heap, read back through the checked reader, and a corrupted pointer, bad
-/// UTF-8 and an over-long traversal rejected rather than trusted. Also the
-/// runtime's hand-made encoding of the log's `Output`, against capnp's.
+/// UTF-8 and an over-long traversal rejected rather than trusted.
 pub fn check_capnp() {
     let mut space = Words([0; 1024]);
     let mut message = Builder::new(SingleSegmentAllocator::new(&mut space.0));
@@ -453,17 +450,5 @@ pub fn check_capnp() {
     let reader = Reader::new(SegmentArray::new(&segments), options);
     let over = reader.get_root::<request::Reader>().and_then(|r| r.get_numbers().and_then(|_| r.get_blob()).map(drop));
     assert!(over.is_err(), "a traversal past the limit should be refused");
-
-    for text in ["", "a", "seven b", "eight by", "a line of output, with an é\n"] {
-        let mut space = Words([0; 1024]);
-        let mut allocator = SingleSegmentAllocator::new(&mut space.0);
-        let mut message = Builder::new(&mut allocator);
-        message.init_root::<output::Builder>().set_text(text);
-        let mut expected = [0usize; 64];
-        let n = words::pack(&message, &mut expected).expect("an output message fits");
-        let mut got = [0usize; 64];
-        let m = sap_rt::debug::encode_output(text, (&mut got[..sap_rt::debug::OUTPUT_WORDS]).try_into().unwrap());
-        assert_eq!(&got[..m], &expected[..n], "the runtime encodes {text:?} as capnp does");
-    }
-    println!("Cap'n Proto messages build without a heap, read back, and refuse bad pointers, UTF-8 and traversal; the log's output encodes as capnp's");
+    println!("Cap'n Proto messages build without a heap, read back, and refuse bad pointers, UTF-8 and traversal");
 }

@@ -5,17 +5,19 @@
 # capability was made for (`supervisor.capnp`), so a program can't write
 # as another.
 #
-# Calls follow the convention in `process.capnp`. The messages are in
-# `log_messages.capnp`, apart from the interface, because capnpc-rust's
-# code for an interface needs a heap and programs without one write to the
-# log too.
+# Calls follow the convention in `process.capnp`.
 # TODO: levels, a ring of recent lines, readers, keeping it in the store
 # (design/userspace.md).
-
-using Messages = import "log_messages.capnp";
 
 interface Log {
   # Write `text`, where a line may span several calls. Answered once
   # written.
-  write @0 Messages.Output -> ();
+  write @0 (text :Text) -> ();
+}
+
+# The bootstrap message of `log`, the log service. A capability is the
+# index of one of its imports.
+struct LogImports {
+  # The receive side of the service's export.
+  endpoint @0 :UInt32;
 }

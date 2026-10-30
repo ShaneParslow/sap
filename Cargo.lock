@@ -244,6 +244,7 @@ dependencies = [
 name = "sap-rt"
 version = "0.1.0"
 dependencies = [
+ "capnp",
  "linked_list_allocator",
  "sap-interfaces",
  "sap-process",

@@ -18,7 +18,8 @@
 use core::fmt::Write;
 
 use capnp::message::{Reader, ReaderOptions, SegmentArray};
-use sap_interfaces::log_messages_capnp::{log_imports, output};
+use sap_interfaces::log_capnp::log::write_params;
+use sap_interfaces::log_capnp::log_imports;
 use sap_interfaces::{methods, words};
 use sap_process::{launcher, process_slot, Startup};
 use sap_rt::abi::{object, MAX_MESSAGE_LENGTH};
@@ -107,7 +108,7 @@ fn sap_main(a0: usize, _: usize, _: usize) -> ! {
 fn write(clients: &mut [Option<Client>; MAX_CLIENTS], badge: usize, words: &[usize]) -> usize {
     let segment = [words::bytes(words)];
     let reader = words::reader(&segment);
-    let Some(text) = reader.get_root::<output::Reader>().and_then(|t| t.get_text()).ok().and_then(|t| t.to_str().ok()) else {
+    let Some(text) = reader.get_root::<write_params::Reader>().and_then(|t| t.get_text()).ok().and_then(|t| t.to_str().ok()) else {
         return BAD_REQUEST;
     };
     if let Some(client) = clients.iter_mut().flatten().find(|c| c.badge == badge) {

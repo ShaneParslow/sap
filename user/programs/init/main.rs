@@ -23,7 +23,7 @@ use alloc::vec::Vec;
 use capnp::message::{Builder, SingleSegmentAllocator};
 use factory::{Answer, Factory};
 use sap_interfaces::check_capnp::check_imports;
-use sap_interfaces::log_messages_capnp::log_imports;
+use sap_interfaces::log_capnp::log_imports;
 use sap_interfaces::supervisor_capnp::{composition, OnEnd};
 use sap_loader::Parent;
 use sap_ring::as_bytes_mut;
@@ -205,7 +205,11 @@ fn boot(info: &BootInfo, own: usize, pool: usize, supervisor: &mut Supervisor) {
     });
     let log = bootstrap::<log_imports::Owned>(|mut root| root.set_endpoint(0));
 
-    let mut message = capnp::message::Builder::new_default();
+    // One segment, as every message is without capnp's `alloc` feature:
+    // room for the whole composition, on the heap.
+    let mut space = vec![0u64; 2048];
+    let mut allocator = SingleSegmentAllocator::new(as_bytes_mut(&mut space));
+    let mut message = Builder::new(&mut allocator);
     let mut components = message.init_root::<composition::Builder>().init_components(2);
     let mut component = components.reborrow().get(0);
     component.set_name("log");

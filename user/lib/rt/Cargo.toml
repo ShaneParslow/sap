@@ -20,5 +20,6 @@ heap = ["dep:linked_list_allocator"]
 linked_list_allocator = { version = "0.10.6", default-features = false, optional = true }
 sap-sys = { path = "../sys" }
 sap-process = { path = "../process" }
-# The log's method ordinals, for `print!`.
+# The log's interface, for `print!`.
+capnp = { version = "0.27.2", default-features = false }
 sap-interfaces = { path = "../interfaces" }

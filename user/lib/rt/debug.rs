@@ -9,7 +9,9 @@
 use core::fmt::{self, Write};
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use sap_interfaces::methods;
+use capnp::message::{Builder, SingleSegmentAllocator};
+use sap_interfaces::log_capnp::log::write_params;
+use sap_interfaces::{methods, words};
 use sap_sys::abi::syscall::{DEBUG_HALT, DEBUG_PUTCHAR};
 use sap_sys::ipc;
 use sap_sys::sys::syscall1;
@@ -45,32 +47,9 @@ struct Log {
     len: usize,
 }
 
-#[doc(hidden)]
-/// The words of an `Output` message of one chunk: its root pointer, the
+/// Room for a `write` call's params of one chunk: the root pointer, the
 /// text's pointer, and the text with its terminating zero.
-pub const OUTPUT_WORDS: usize = 2 + (CHUNK + 1).div_ceil(8);
-
-/// Encode `log_messages.capnp`'s `Output { text }` into `words`, as
-/// `sap_interfaces::words::pack` would put a builder's message; the number
-/// of words. By hand, since building a message with capnp allocates when
-/// its `alloc` feature is on, and printing must not: the heap prints, and
-/// `check` checks that the heap starts empty. `check` compares the encoding
-/// with capnp's.
-#[doc(hidden)]
-pub fn encode_output(text: &str, words: &mut [usize; OUTPUT_WORDS]) -> usize {
-    let bytes = &text.as_bytes()[..text.len().min(CHUNK)];
-    // The root: a struct pointer to the next word, no data, one pointer.
-    words[0] = 1 << 48;
-    // The text: a list pointer to the word after it, of bytes, with the
-    // terminating zero.
-    words[1] = 1 | (2 << 32) | ((bytes.len() + 1) << 35);
-    let n = 2 + (bytes.len() + 1).div_ceil(8);
-    words[2..n].fill(0);
-    for (i, &byte) in bytes.iter().enumerate() {
-        words[2 + i / 8] |= (byte as usize) << (8 * (i % 8));
-    }
-    n
-}
+const PARAMS_WORDS: usize = 2 + (CHUNK + 1).div_ceil(8);
 
 impl Log {
     fn flush(&mut self) {
@@ -82,11 +61,19 @@ impl Log {
         }
     }
 
-    /// Write `text` to the log; whether it was written.
+    /// Write `text` to the log; whether it was written. Builds the message
+    /// on the stack: nothing in printing allocates.
     fn write(log: usize, text: &str) -> bool {
-        let mut words = [0; OUTPUT_WORDS];
-        let n = encode_output(text, &mut words);
-        matches!(ipc::call(log, methods::log::WRITE, &words[..n], &[], &mut []), Ok(reply) if reply.info.label() == 0)
+        let mut scratch = [0u64; PARAMS_WORDS];
+        // SAFETY: any bytes are valid `u8`s, and the slice covers exactly
+        // the scratch words, which it borrows.
+        let bytes = unsafe { core::slice::from_raw_parts_mut(scratch.as_mut_ptr().cast::<u8>(), PARAMS_WORDS * 8) };
+        let mut allocator = SingleSegmentAllocator::new(bytes);
+        let mut message = Builder::new(&mut allocator);
+        message.init_root::<write_params::Builder>().set_text(text);
+        let mut buffer = [0usize; PARAMS_WORDS];
+        let Some(n) = words::pack(&message, &mut buffer) else { return false };
+        matches!(ipc::call(log, methods::log::WRITE, &buffer[..n], &[], &mut []), Ok(reply) if reply.info.label() == 0)
     }
 }
 

@@ -1,16 +1,18 @@
 //! Generate Rust from the Cap'n Proto schemas in interfaces/. Needs the
 //! `capnp` schema compiler on the PATH.
+//!
+//! Without capnp-rust's RPC code (the vendored capnpc's `no_rpc`, see
+//! third_party/capnpc/SAP.md): sap's calls are its own (`process.capnp`
+//! describes them), and capnp-rust's RPC code needs capnp's `alloc`
+//! feature, under which building any message allocates.
 
 use std::path::Path;
-
-/// Schemas with interfaces, whose generated code needs `alloc`.
-const WITH_INTERFACES: &[&str] = &["process.capnp", "log.capnp"];
 
 fn main() {
     let schemas = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../interfaces");
     let mut command = capnpc::CompilerCommand::new();
-    command.src_prefix(&schemas);
-    for schema in ["check.capnp", "echo.capnp", "log_messages.capnp", "peer.capnp", "supervisor.capnp"].iter().chain(WITH_INTERFACES) {
+    command.src_prefix(&schemas).no_rpc();
+    for schema in ["check.capnp", "echo.capnp", "log.capnp", "peer.capnp", "process.capnp", "supervisor.capnp"] {
         let path = schemas.join(schema);
         println!("cargo:rerun-if-changed={}", path.display());
         command.file(path);
@@ -19,9 +21,6 @@ fn main() {
     let request = out.join("request.bin");
     command.raw_code_generator_request_path(&request);
     command.run().expect("compiling the schemas in interfaces/ (is the capnp tool installed?)");
-    for schema in WITH_INTERFACES {
-        qualify_alloc(&out.join(schema.replace(".capnp", "_capnp.rs")));
-    }
     write_methods(&request, &out.join("methods.rs"));
 }
 
@@ -64,15 +63,4 @@ fn snake(name: &str) -> String {
         }
     }
     out
-}
-
-/// The code capnpc generates for an interface names `Box` and calls
-/// `to_string` as if `std`'s prelude were in scope, inside modules of its
-/// own, where no `use` around the `include!` reaches. Spell them out so the
-/// code compiles in a `no_std` crate with `alloc`.
-fn qualify_alloc(path: &Path) {
-    let code = std::fs::read_to_string(path).unwrap();
-    let code = code.replace("Box<", "::alloc::boxed::Box<").replace("\".to_string()", "\".into()");
-    assert!(!code.contains(".to_string()"), "{}: an unexpected to_string", path.display());
-    std::fs::write(path, code).unwrap();
 }
