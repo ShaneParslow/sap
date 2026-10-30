@@ -8,8 +8,6 @@
 resolver = "3"
 members = ["abi", "kernel", "user/lib/sys", "user/lib/rt", "user/lib/ring", "user/lib/loader", "user/lib/process", "user/lib/interfaces", "user/programs/init", "user/programs/check", "user/programs/peer", "user/programs/log"]
 default-members = ["kernel"]
-# Vendored host-side crates, built only by build scripts.
-exclude = ["third_party"]
 
 [profile.dev]
 panic = "abort"
@@ -17,6 +15,7 @@ panic = "abort"
 [profile.release]
 panic = "abort"
 
-# Cap'n Proto's code generator, vendored (third_party/capnpc/SAP.md).
+# Cap'n Proto's code generator with `no_rpc` (user/lib/interfaces/build.rs),
+# from a fork until upstream has it; then back to crates.io's.
 [patch.crates-io]
-capnpc = { path = "third_party/capnpc" }
+capnpc = { git = "https://github.com/ShaneParslow/capnproto-rust", rev = "0800c3be27245a6ef893a5b6833249bcafc8af89" }

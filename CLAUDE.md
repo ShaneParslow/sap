@@ -10,7 +10,6 @@ sap ("sap is for sapabilities") is a capability-based operating system built aro
 - `interfaces/` — Cap'n Proto schemas.
 - `tools/board/` — building and booting on real boards (`d1/`: the MangoPi MQ-Pro over USB).
 - `toolchain/` — the CHERI toolchain and xfel as submodules, built by `toolchain/build.sh` into `toolchain/out/`.
-- `third_party/` — vendored host-side crates with sap's changes: `capnpc` (Cap'n Proto code generation without RPC code; `third_party/capnpc/SAP.md`).
 
 ## Notes and design
 

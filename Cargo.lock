@@ -37,10 +37,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "capnp"
+version = "0.27.3"
+source = "git+https://github.com/ShaneParslow/capnproto-rust?rev=0800c3be27245a6ef893a5b6833249bcafc8af89#0800c3be27245a6ef893a5b6833249bcafc8af89"
+dependencies = [
+ "embedded-io",
+]
+
+[[package]]
 name = "capnpc"
 version = "0.27.0"
+source = "git+https://github.com/ShaneParslow/capnproto-rust?rev=0800c3be27245a6ef893a5b6833249bcafc8af89#0800c3be27245a6ef893a5b6833249bcafc8af89"
 dependencies = [
- "capnp",
+ "capnp 0.27.3",
 ]
 
 [[package]]
@@ -63,7 +72,7 @@ checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 name = "check"
 version = "0.1.0"
 dependencies = [
- "capnp",
+ "capnp 0.27.2",
  "sap-interfaces",
  "sap-loader",
  "sap-process",
@@ -127,7 +136,7 @@ name = "init"
 version = "0.1.0"
 dependencies = [
  "blake3",
- "capnp",
+ "capnp 0.27.2",
  "sap-interfaces",
  "sap-loader",
  "sap-process",
@@ -151,7 +160,7 @@ checksum = "2b23ac50abb8261cb38c6e2a7192d3302e0836dac1628f6a93b82b4fad185897"
 name = "log"
 version = "0.1.0"
 dependencies = [
- "capnp",
+ "capnp 0.27.2",
  "sap-interfaces",
  "sap-process",
  "sap-rt",
@@ -167,7 +176,7 @@ checksum = "2ee67f1008b1ba2321834326597b8e186293b049a023cdef258527550b9935b4"
 name = "peer"
 version = "0.1.0"
 dependencies = [
- "capnp",
+ "capnp 0.27.2",
  "sap-interfaces",
  "sap-process",
  "sap-ring",
@@ -200,7 +209,7 @@ version = "0.1.0"
 name = "sap-interfaces"
 version = "0.1.0"
 dependencies = [
- "capnp",
+ "capnp 0.27.2",
  "capnpc",
 ]
 
@@ -244,7 +253,7 @@ dependencies = [
 name = "sap-rt"
 version = "0.1.0"
 dependencies = [
- "capnp",
+ "capnp 0.27.2",
  "linked_list_allocator",
  "sap-interfaces",
  "sap-process",

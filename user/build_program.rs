@@ -29,8 +29,7 @@ fn build_user_program(user: &std::path::Path, name: &str) -> std::path::PathBuf 
     println!("cargo:rerun-if-changed={}", user.display());
     println!("cargo:rerun-if-changed={}", user.join("../abi").display());
     println!("cargo:rerun-if-changed={}", user.join("../interfaces").display());
-    // The vendored code generator, and the patch that points at it.
-    println!("cargo:rerun-if-changed={}", user.join("../third_party").display());
+    // The workspace manifest, which picks the code generator.
     println!("cargo:rerun-if-changed={}", user.join("../Cargo.toml").display());
     target_dir.join("riscv64gc-unknown-sap/release").join(name)
 }

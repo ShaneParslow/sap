@@ -1,10 +1,10 @@
 //! Generate Rust from the Cap'n Proto schemas in interfaces/. Needs the
 //! `capnp` schema compiler on the PATH.
 //!
-//! Without capnp-rust's RPC code (the vendored capnpc's `no_rpc`, see
-//! third_party/capnpc/SAP.md): sap's calls are its own (`process.capnp`
-//! describes them), and capnp-rust's RPC code needs capnp's `alloc`
-//! feature, under which building any message allocates.
+//! Without capnp-rust's RPC code (`no_rpc`, from a fork of capnpc the root
+//! `Cargo.toml` patches in until upstream has it): sap's calls are its own
+//! (`process.capnp` describes them), and capnp-rust's RPC code needs
+//! capnp's `alloc` feature, under which building any message allocates.
 
 use std::path::Path;
 
