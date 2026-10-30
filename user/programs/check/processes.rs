@@ -8,7 +8,9 @@ use sap_interfaces::supervisor_capnp::instance::wait_results;
 use sap_interfaces::supervisor_capnp::supervisor::start_params;
 use sap_interfaces::supervisor_capnp::{end, OnEnd, Status};
 use sap_interfaces::words;
-use sap_process::{launcher, process_slot};
+use alloc::vec;
+use alloc::vec::Vec;
+use sap_process::{launcher, process_slot, MAX_BOOTSTRAP};
 use sap_rt::abi::{attr, error, fault, object, rights};
 use sap_rt::cnode::SlotRef;
 use sap_rt::sys::Error;
@@ -113,6 +115,7 @@ pub fn check_process(info: &Env) {
     // succeed if it could see this address space.
     expect("scratch page", untyped::retype(parent_untyped, object::FRAME_4K, 0, in_root, slots.next, 1), Ok(()));
     let marker = slots.next;
+    slots.next += 1;
     expect("map scratch", vspace::map_frame(marker, process_slot::VSPACE, scratch, rights::READ | rights::WRITE, attr::EXECUTE_NEVER), Ok(()));
     peer.start().expect("start the peer");
 
@@ -128,8 +131,31 @@ pub fn check_process(info: &Env) {
     expect("leave it suspended", ipc::reply(reply, 1, &[], &[]), Ok(()));
 
     expect("unmap scratch", vspace::unmap_frame(marker), Ok(()));
+
+    // A bootstrap message longer than a page: the struct three pages in,
+    // past zeroed words its root pointer skips. The peer exits with the
+    // code it reads there.
+    let (bootstrap, len) = peer_bootstrap_with(Mode::Exit, 0, 9);
+    let mut message: Vec<u64> = bootstrap[..len].chunks(8).map(|c| {
+        let mut word = [0u8; 8];
+        word[..c.len()].copy_from_slice(c);
+        u64::from_le_bytes(word)
+    }).collect();
+    const SKIP: usize = 3 * 512;
+    // A struct pointer's offset, in words, is its bits 2 to 31; the
+    // struct has no pointers of its own to adjust.
+    message[0] += (SKIP as u64) << 2;
+    message.splice(1..1, core::iter::repeat_n(0, SKIP));
+    let far: Vec<u8> = message.iter().flat_map(|w| w.to_le_bytes()).collect();
+    let long = Launch { priority: 255, launcher: Some(badged), bootstrap: &far, ..LAUNCH };
+    loader::load(PEER, &parent, &mut slots, &long).and_then(|p| Ok(p.start()?)).expect("load with a long bootstrap");
+    let exit = ipc::recv(ep, reply, &mut words).expect("the peer's exit");
+    assert_eq!((exit.info.label(), words[0]), (launcher::EXIT, 9), "the peer read its bootstrap past its first page");
+    let too_long = vec![0u8; MAX_BOOTSTRAP + 1];
+    let refused_long = refused(loader::load(PEER, &parent, &mut slots, &Launch { bootstrap: &too_long, ..long }));
+    assert_eq!(refused_long, Some(LoadError::BadLaunch("bootstrap message too long")));
     expect("revoke", slot(parent_untyped).revoke(), Ok(()));
-    println!("a second process, calls between address spaces and isolation behave");
+    println!("a second process, calls between address spaces, isolation and a bootstrap of several pages behave");
 }
 
 /// A route of a component started through the instance API.

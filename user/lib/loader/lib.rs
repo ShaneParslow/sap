@@ -274,7 +274,10 @@ pub fn load(image: &[u8], parent: &Parent, slots: &mut Slots, launch: &Launch) -
     }
     let stack_bottom = STACK_TOP - launch.stack_pages * PAGE;
     let ipc_buffer = stack_bottom - 2 * PAGE;
-    let startup_page = ipc_buffer - 2 * PAGE;
+    // The startup record, then the bootstrap message, in as many pages as
+    // they take.
+    let startup_pages = (BOOTSTRAP_OFFSET + launch.bootstrap.len()).div_ceil(PAGE);
+    let startup_page = ipc_buffer - (1 + startup_pages) * PAGE;
     // The image's addresses, relative to the load base, must stay below the
     // startup page and the heap.
     let limit = (HEAP.start - LOAD_BASE).min(startup_page - LOAD_BASE);
@@ -348,26 +351,39 @@ pub fn load(image: &[u8], parent: &Parent, slots: &mut Slots, launch: &Launch) -
     ensure_tables(parent, slots, space, ipc_buffer)?;
     vspace::map_frame(buffer, space, ipc_buffer, rw, attr::EXECUTE_NEVER)?;
 
-    let startup = filled_frame(parent, slots, |bytes| {
-        bytes.fill(0);
-        let record = Startup {
-            timer_hz: parent.timer_hz,
-            flags: parent.flags,
-            ipc_buffer,
-            stack: AddressRange { start: stack_bottom, end: STACK_TOP },
-            heap: HEAP,
-            cnode_radix: launch.cnode_radix,
-            imports: SlotRange { start: process_slot::FIRST_IMPORT, end: first_free },
-            free: SlotRange { start: first_free, end: 1 << launch.cnode_radix },
-            bootstrap_len: launch.bootstrap.len(),
-        };
-        // SAFETY: the page is aligned for the record and large enough.
-        unsafe { bytes.as_mut_ptr().cast::<Startup>().write(record) };
-        bytes[BOOTSTRAP_OFFSET..BOOTSTRAP_OFFSET + launch.bootstrap.len()].copy_from_slice(launch.bootstrap);
-        Ok(())
-    })?;
-    ensure_tables(parent, slots, space, startup_page)?;
-    vspace::map_frame(startup, space, startup_page, rights::READ, attr::EXECUTE_NEVER)?;
+    let record = Startup {
+        timer_hz: parent.timer_hz,
+        flags: parent.flags,
+        ipc_buffer,
+        stack: AddressRange { start: stack_bottom, end: STACK_TOP },
+        heap: HEAP,
+        cnode_radix: launch.cnode_radix,
+        imports: SlotRange { start: process_slot::FIRST_IMPORT, end: first_free },
+        free: SlotRange { start: first_free, end: 1 << launch.cnode_radix },
+        bootstrap_len: launch.bootstrap.len(),
+    };
+    let mut record = Some(record);
+    for page in 0..startup_pages {
+        // The bytes of record-then-message this page holds.
+        let (start, end) = (page * PAGE, (page + 1) * PAGE);
+        let frame = filled_frame(parent, slots, |bytes| {
+            bytes.fill(0);
+            if let Some(record) = record.take() {
+                // SAFETY: the page is aligned for the record and large
+                // enough.
+                unsafe { bytes.as_mut_ptr().cast::<Startup>().write(record) };
+            }
+            let message = BOOTSTRAP_OFFSET..BOOTSTRAP_OFFSET + launch.bootstrap.len();
+            let (from, to) = (message.start.max(start), message.end.min(end));
+            if from < to {
+                bytes[from - start..to - start].copy_from_slice(&launch.bootstrap[from - BOOTSTRAP_OFFSET..to - BOOTSTRAP_OFFSET]);
+            }
+            Ok(())
+        })?;
+        let va = startup_page + page * PAGE;
+        ensure_tables(parent, slots, space, va)?;
+        vspace::map_frame(frame, space, va, rights::READ, attr::EXECUTE_NEVER)?;
+    }
 
     // The thread's capability space is the new CNode, with a guard so that
     // full-width addresses name its slots directly.

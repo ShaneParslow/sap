@@ -1,7 +1,7 @@
 //! The process ABI: what a launcher gives a process it starts, other than
 //! the root task, which the kernel starts with its boot information
-//! (`sap_abi::BootInfo`). A startup record and the bootstrap message, in a
-//! read-only page whose address arrives in `a0`; fixed slots for the
+//! (`sap_abi::BootInfo`). A startup record and the bootstrap message, in
+//! read-only pages whose address arrives in `a0`; fixed slots for the
 //! process's own objects, then its imports; and the calls a process makes
 //! on its launcher. The kernel knows none of it: launchers and the runtime
 //! agree on it between themselves, so it is userspace's, like seL4's
@@ -75,7 +75,8 @@ pub struct AddressRange {
 
 /// What a process's launcher tells it at startup, in a read-only page whose
 /// address arrives in its first argument register. The bootstrap message
-/// follows the record in the same page.
+/// follows the record, `BOOTSTRAP_OFFSET` bytes in, continuing into as many
+/// read-only pages after it as it needs (`MAX_STARTUP_PAGES` in all).
 #[repr(C)]
 pub struct Startup {
     /// Ticks per second of the time counter.
@@ -100,9 +101,10 @@ pub struct Startup {
 
 /// Where the bootstrap message starts in the startup page.
 pub const BOOTSTRAP_OFFSET: usize = 128;
+/// The most pages the startup record and bootstrap message take: a longer
+/// message continues in the pages after the record's, mapped contiguously.
+pub const MAX_STARTUP_PAGES: usize = 16;
 /// The longest bootstrap message.
-// TODO: larger bootstraps, in frames of their own (M7, if a program needs
-// more than a page).
-pub const MAX_BOOTSTRAP: usize = 4096 - BOOTSTRAP_OFFSET;
+pub const MAX_BOOTSTRAP: usize = MAX_STARTUP_PAGES * 4096 - BOOTSTRAP_OFFSET;
 
 const _: () = assert!(core::mem::size_of::<Startup>() <= BOOTSTRAP_OFFSET);

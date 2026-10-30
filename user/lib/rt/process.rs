@@ -16,13 +16,14 @@ pub unsafe fn startup(a0: usize) -> &'static Startup {
     unsafe { &*mapped::<Startup>(a0) }
 }
 
-/// The bootstrap message that follows `startup` in its page, in the flat
+/// The bootstrap message that follows `startup` in its pages, in the flat
 /// Cap'n Proto encoding.
 pub fn bootstrap(startup: &'static Startup) -> &'static [u8] {
     let len = startup.bootstrap_len.min(MAX_BOOTSTRAP);
     let record: *const Startup = startup;
-    // SAFETY: the bootstrap message lies in the same read-only page as the
-    // record, `BOOTSTRAP_OFFSET` bytes in, and is at most `MAX_BOOTSTRAP`.
+    // SAFETY: the bootstrap message lies in the read-only pages the loader
+    // mapped contiguously from the record's, `BOOTSTRAP_OFFSET` bytes in,
+    // and is at most `MAX_BOOTSTRAP`.
     unsafe { core::slice::from_raw_parts(record.cast::<u8>().add(BOOTSTRAP_OFFSET), len) }
 }
 
