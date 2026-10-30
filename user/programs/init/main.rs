@@ -162,11 +162,10 @@ fn new_object(from: usize, object_type: usize) -> usize {
     at
 }
 
-/// Enact the boot composition: `check`, with a copy of the ASID pool, the
-/// factory capability and every spare untyped region, moved, as its
+/// Enact the boot composition: `check`, with copies of the ASID pool and
+/// every spare untyped region and the factory capability, moved, as its
 /// imports; it ends the boot when it ends.
 fn boot(info: &BootInfo, own: usize, pool: usize, supervisor: &mut Supervisor) {
-    assert!(pack::find(&pack::Hash([0; 32])).is_none(), "init: the boot pack has no program of that hash");
     let count = spare_untyped(info, own, pool).count();
 
     // check's bootstrap message. Imports: the ASID pool, the factory, then
@@ -209,10 +208,9 @@ fn boot(info: &BootInfo, own: usize, pool: usize, supervisor: &mut Supervisor) {
     imports.reborrow().get(0).set_held("asidPool");
     imports.reborrow().get(1).set_held("factory");
     imports.reborrow().get(1).set_move(true);
+    // Copied, never moved: the supervisor keeps the right to revoke them.
     for i in 0..count {
-        let mut route = imports.reborrow().get(2 + i as u32);
-        route.set_held(alloc::format!("untyped.{i}").as_str());
-        route.set_move(true);
+        imports.reborrow().get(2 + i as u32).set_held(alloc::format!("untyped.{i}").as_str());
     }
     let composition = message.get_root_as_reader::<composition::Reader>().expect("init: the boot composition");
     supervisor.enact(composition).expect("init: enact the boot composition");
