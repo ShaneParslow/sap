@@ -38,6 +38,7 @@ pub struct CodeGenerationCommand {
     raw_code_generator_request_path: Option<PathBuf>,
     capnp_root: String,
     crates_provide_map: HashMap<u64, String>,
+    no_rpc: bool,
 }
 
 impl Default for CodeGenerationCommand {
@@ -48,6 +49,7 @@ impl Default for CodeGenerationCommand {
             raw_code_generator_request_path: None,
             capnp_root: "::capnp".into(),
             crates_provide_map: HashMap::new(),
+            no_rpc: false,
         }
     }
 }
@@ -91,6 +93,12 @@ impl CodeGenerationCommand {
         P: AsRef<Path>,
     {
         self.raw_code_generator_request_path = Some(path.as_ref().to_path_buf());
+        self
+    }
+
+    /// Generates no RPC code (sap): see [`crate::CompilerCommand::no_rpc`].
+    pub fn no_rpc(&mut self, no_rpc: bool) -> &mut Self {
+        self.no_rpc = no_rpc;
         self
     }
 
@@ -207,6 +215,11 @@ pub struct GeneratorContext<'a> {
 
     /// Root path for referencing things in the `capnp` crate from the generated code.
     pub capnp_root: String,
+
+    /// Whether to generate RPC code: interfaces' clients and servers, and
+    /// accessors of interface-typed fields (sap: see
+    /// `CompilerCommand::no_rpc`).
+    pub rpc: bool,
 }
 
 impl<'a> GeneratorContext<'a> {
@@ -230,6 +243,7 @@ impl<'a> GeneratorContext<'a> {
             scope_map: collections::hash_map::HashMap::<u64, Vec<String>>::new(),
             node_parents: collections::hash_map::HashMap::new(),
             capnp_root: code_generation_command.capnp_root.clone(),
+            rpc: !code_generation_command.no_rpc,
         };
 
         let crates_provide = &code_generation_command.crates_provide_map;
@@ -2084,7 +2098,17 @@ fn generate_node(
                     field::Group(_) => has_pointer_field = true,
                 }
 
-                if !is_union_field {
+                // Without RPC code, an interface-typed field has no accessors
+                // but its haser: its value would be an RPC client.
+                let rpc_only = !ctx.rpc
+                    && matches!(field.which()?, field::Slot(s) if matches!(s.get_type()?.which()?, type_::Interface(_)));
+                if rpc_only && is_union_field {
+                    return Err(capnp::Error::failed(format!(
+                        "{styled_name}: an interface-typed field in a union needs RPC code"
+                    )));
+                }
+                if rpc_only {
+                } else if !is_union_field {
                     pipeline_impl_interior.push(generate_pipeline_getter(ctx, field)?);
                     let (ty, get, default_decl) = getter_text(ctx, &field, true, true)?;
                     if let Some(default) = default_decl {
@@ -2108,12 +2132,14 @@ fn generate_node(
                     union_fields.push(field);
                 }
 
-                builder_members.push(generate_setter(
-                    ctx,
-                    discriminant_offset,
-                    &styled_name,
-                    &field,
-                )?);
+                if !rpc_only {
+                    builder_members.push(generate_setter(
+                        ctx,
+                        discriminant_offset,
+                        &styled_name,
+                        &field,
+                    )?);
+                }
 
                 reader_members.push(generate_haser(
                     discriminant_offset,
@@ -2675,6 +2701,28 @@ fn generate_node(
                 }
 
                 method.get_annotations()?;
+            }
+
+            if !ctx.rpc {
+                // Without RPC code, an interface is a module of its type id,
+                // its methods' params and results structs and the nodes
+                // nested in it, and an `Owned` that introspects as a
+                // capability, for the introspection of fields of its type.
+                if is_generic {
+                    return Err(capnp::Error::failed(format!(
+                        "{node_name}: a generic interface needs RPC code"
+                    )));
+                }
+                output.push(BlankLine);
+                output.push(Line(format!("pub mod {node_name} {{")));
+                output.push(indent(vec![
+                    line("pub struct Owned(());"),
+                    Line(fmt!(ctx,"impl {capnp}::introspect::Introspect for Owned {{ fn introspect() -> {capnp}::introspect::Type {{ {capnp}::introspect::TypeVariant::Capability.into() }} }}")),
+                    Line(format!("pub const TYPE_ID: u64 = {};", format_u64(node_id))),
+                    Branch(nested_output),
+                ]));
+                output.push(line("}"));
+                return Ok(Branch(output));
             }
 
             let mut base_dispatch_arms = Vec::new();

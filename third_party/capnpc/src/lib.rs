@@ -118,6 +118,7 @@ pub struct CompilerCommand {
     default_parent_module: Vec<String>,
     raw_code_generator_request_path: Option<PathBuf>,
     crate_provides_map: HashMap<u64, String>,
+    no_rpc: bool,
 }
 
 impl CompilerCommand {
@@ -282,6 +283,16 @@ impl CompilerCommand {
         self
     }
 
+    /// Generates no RPC code (sap's addition): an interface becomes a module
+    /// of its methods' params and results structs, without a client, server
+    /// or dispatch, and interface-typed fields get no accessors but their
+    /// hasers. The generated code then needs only what `capnp` has without
+    /// its `alloc` feature.
+    pub fn no_rpc(&mut self) -> &mut Self {
+        self.no_rpc = true;
+        self
+    }
+
     /// If set, the generator will also write a file containing the raw code generator request to the
     /// specified path.
     pub fn raw_code_generator_request_path<P>(&mut self, path: P) -> &mut Self
@@ -376,7 +387,8 @@ impl CompilerCommand {
         code_generation_command
             .output_directory(output_path)
             .default_parent_module(self.default_parent_module.clone())
-            .crates_provide_map(self.crate_provides_map.clone());
+            .crates_provide_map(self.crate_provides_map.clone())
+            .no_rpc(self.no_rpc);
         if let Some(raw_code_generator_request_path) = &self.raw_code_generator_request_path {
             code_generation_command
                 .raw_code_generator_request_path(raw_code_generator_request_path.clone());
