@@ -82,6 +82,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "composer"
+version = "0.1.0"
+dependencies = [
+ "capnp 0.27.2",
+ "capnpc",
+ "sap-interfaces",
+ "sap-process",
+ "sap-ring",
+ "sap-rt",
+]
+
+[[package]]
 name = "constant_time_eq"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

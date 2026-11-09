@@ -1,0 +1,21 @@
+[package]
+name = "composer"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "composer"
+path = "main.rs"
+test = false
+bench = false
+
+[dependencies]
+# No heap: messages are built in fixed buffers.
+sap-rt = { path = "../../lib/rt", default-features = false }
+sap-process = { path = "../../lib/process" }
+sap-ring = { path = "../../lib/ring" }
+capnp = { version = "0.27.2", default-features = false }
+sap-interfaces = { path = "../../lib/interfaces" }
+
+[build-dependencies]
+capnpc = "0.27.0"
