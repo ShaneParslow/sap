@@ -10,7 +10,7 @@ include!("../../build_components.rs");
 
 
 /// The programs in the boot pack, by crate name under user/programs/.
-const PROGRAMS: &[&str] = &["check", "log", "memory", "peer", "resolver"];
+const PROGRAMS: &[&str] = &["check", "counter", "log", "memory", "peer", "resolver"];
 
 /// The schema files under `dir`, recursively.
 fn schemas(dir: &Path, out: &mut Vec<PathBuf>) {

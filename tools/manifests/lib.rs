@@ -180,6 +180,14 @@ fn evaluate(file: &Path, constant: &str, interfaces: &Path, user: &Path) -> Vec<
     words.iter().flat_map(|w| w.to_le_bytes()).collect()
 }
 
+/// `message`, a flat message, in canonical form: the resolver reads
+/// settings only so (`Wanted.settings`).
+fn canonical(message: &[u8]) -> Vec<u8> {
+    let segments: [&[u8]; 1] = [message];
+    let reader = capnp::message::Reader::new(capnp::message::SegmentArray::new(&segments), capnp::message::ReaderOptions::new());
+    capnp::Word::words_to_bytes(&reader.canonicalize().unwrap()).to_vec()
+}
+
 /// The resolver's bootstrap message: `programs` (name, hash, manifest) and
 /// the boot request `boot`: a request file in `requests` (`<boot>.capnp`,
 /// whose constant `request` it is), or else a program's name, which then
@@ -188,6 +196,7 @@ pub fn resolver_bootstrap(boot: &str, requests: &Path, interfaces: &Path, user: 
     let mut builder = capnp::message::Builder::new(capnp::message::HeapAllocator::new().first_segment_words(1 << 16));
     let mut root = builder.init_root::<resolver_bootstrap::Builder>();
     root.set_compositions(0);
+    root.set_endpoint(1);
     let mut list = root.reborrow().init_programs(programs.len() as u32);
     for (i, (_, hash, manifest)) in programs.iter().enumerate() {
         let mut out = list.reborrow().get(i as u32);
@@ -212,9 +221,10 @@ pub fn resolver_bootstrap(boot: &str, requests: &Path, interfaces: &Path, user: 
             component.set_name(w.get_name().unwrap());
             component.set_program(w.get_program().unwrap());
             component.set_on_end(w.get_on_end().unwrap());
+            component.set_routes(w.get_routes().unwrap()).unwrap();
             let constant = w.get_settings_constant().unwrap().to_str().unwrap();
             if !constant.is_empty() {
-                component.set_settings(&evaluate(&file, constant, interfaces, user));
+                component.set_settings(&canonical(&evaluate(&file, constant, interfaces, user)));
             }
         }
     } else {
@@ -222,10 +232,10 @@ pub fn resolver_bootstrap(boot: &str, requests: &Path, interfaces: &Path, user: 
         let mut component = out.reborrow().init_components(1).get(0);
         component.set_name(boot);
         component.set_program(boot);
-        component.set_on_end(crate::supervisor_capnp::OnEnd::EndBoot);
+        component.set_on_end(crate::supervisor_capnp::OnEnd::EndComposition);
         let mut grant = out.init_grants(1).get(0);
         grant.set_component(boot);
-        grant.set_held("endBoot");
+        grant.set_held("endComposition");
     }
     flat(&builder.get_segments_for_output(), "the resolver's bootstrap")
 }

@@ -16,22 +16,23 @@ struct PeerBootstrap $Component.program("peer")
   # it serves.
   endpoint @0 :UInt32 $Component.serves("service");
 
+  # What it does; by default, as a component, it serves `Restartable`.
   mode :union {
-    # A call to its parent over `endpoint`, then a read of the parent's
-    # memory.
-    call @1 :Void;
-    # The channel modes, over `channel`.
-    echoWords @2 :Void;
-    serveEcho @3 :Void;
-    misbehave @4 :Void;
-    sumBytes @5 :Void;
-    # Exit with this code.
-    exit @6 :UInt32;
-    # Read address 0, which faults.
-    crash @7 :Void;
     # Serve `Restartable` on `endpoint`, its export. Its reply object is
     # made from its memory account.
-    restartable @8 :Void;
+    restartable @1 :Void;
+    # A call to its parent over `endpoint`, then a read of the parent's
+    # memory.
+    call @2 :Void;
+    # The channel modes, over `channel`.
+    echoWords @3 :Void;
+    serveEcho @4 :Void;
+    misbehave @5 :Void;
+    sumBytes @6 :Void;
+    # Exit with this code.
+    exit @7 :UInt32;
+    # Read address 0, which faults.
+    crash @8 :Void;
   }
 
   # For the channel modes: two rings of `dataPages` data pages each, this

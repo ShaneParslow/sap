@@ -180,7 +180,7 @@ fn bootstrap<T: capnp::traits::Owned>(build: impl FnOnce(T::Builder<'_>)) -> Vec
 /// manager, with copies of every spare untyped region as its RAM (the `ram`
 /// group), serving accounts; and the resolver, which adds whatever the boot
 /// request (`SAP_BOOT`) wants through `Compositions`, with the request's
-/// grants, which init gives the supervisor. Each one's limits and exports
+/// grants, which init gives the supervisor, then serves `Resolver`. Each one's limits and exports
 /// are its manifest's.
 fn boot(supervisor: &mut Supervisor) {
     let memory = bootstrap::<memory_bootstrap::Owned>(|mut root| {
@@ -211,7 +211,7 @@ fn boot(supervisor: &mut Supervisor) {
     accounts.set_name("account");
     let mut components = root.init_components(2);
     for (i, (name, program, bootstrap, on_end)) in
-        [("memory", &pack::MEMORY, &memory[..], OnEnd::EndBoot), ("resolver", &pack::RESOLVER, resolver, OnEnd::Forget)].into_iter().enumerate()
+        [("memory", &pack::MEMORY, &memory[..], OnEnd::EndComposition), ("resolver", &pack::RESOLVER, resolver, OnEnd::Forget)].into_iter().enumerate()
     {
         let entry = pack::PROGRAMS.iter().find(|p| p.hash == *program).expect("init: a base program");
         let segment = [words::bytes(entry.manifest_words())];
@@ -230,14 +230,16 @@ fn boot(supervisor: &mut Supervisor) {
             export.set_name(e.get_name().expect("init: an export"));
             export.set_interface(e.get_interface());
         }
-        let mut imports = component.init_imports(if name == "memory" { 2 } else { 1 });
+        // In the order of the bootstrap messages' import indices.
+        let mut imports = component.init_imports(2);
         if name == "memory" {
             imports.reborrow().get(0).set_serve("account");
             // Copied, never moved: the supervisor keeps the right to revoke
             // them.
             imports.get(1).init_held().set_name("ram");
         } else {
-            imports.get(0).init_held().set_name("compositions");
+            imports.reborrow().get(0).init_held().set_name("compositions");
+            imports.get(1).set_serve("resolver");
         }
     }
     let composition = message.get_root_as_reader::<composition::Reader>().expect("init: the base composition");

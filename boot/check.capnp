@@ -10,12 +10,12 @@ const restartable :Peer.PeerBootstrap = (mode = (restartable = void));
 
 const request :Resolver.Request = (
   components = [
-    (name = "check", program = "check", onEnd = endBoot),
+    (name = "check", program = "check", onEnd = endComposition),
     (name = "restartable", program = "peer", settingsConstant = "restartable", onEnd = restart),
   ],
   grants = [
     (component = "check", held = "asidPool"),
     (component = "check", held = "supervisor"),
-    (component = "check", held = "endBoot"),
+    (component = "check", held = "endComposition"),
   ],
 );

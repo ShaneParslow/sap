@@ -1,19 +1,26 @@
 //! The Supervisor interface (`Supervisor` and `Instance` in
-//! `interfaces/system/supervisor.capnp`): components started at runtime, for a
-//! caller that pays for them. Calls arrive as `interfaces/README.md`
+//! `interfaces/system/supervisor.capnp`): compositions started at runtime,
+//! for a caller that pays for them. Calls arrive as `interfaces/README.md`
 //! describes.
 //!
-//! Such an instance is named after its caller ("check/helper"), and its
-//! memory is a child of the account the caller passes, which also pays for
-//! its exports' endpoints, so the caller can spend only its own memory. Its
-//! routes may be capabilities passed in the call (kept, for restarts),
-//! exports the caller imports itself (re-badged for it), its own exports
-//! and the Supervisor interface; nothing the supervisor holds. It ends with its
-//! caller. Its handle doesn't own it: dropping the handle leaves it running
-//! (the kernel can't tell the supervisor), but it is still bounded by its
+//! `compose` makes an empty composition the caller fills through its own
+//! `Compositions` capability (`compose.rs`) and starts with `enact`;
+//! `start` is a composition of one, started at once. Either way the caller
+//! gets an `Instance` handle to the whole composition.
+//!
+//! A member is named after the caller ("check/helper"), and its memory is
+//! a child of the account the caller passes, which also pays for the
+//! members' exports' endpoints, so the caller can spend only its own
+//! memory. A member's routes may be capabilities passed in the call (kept,
+//! for restarts), exports the caller imports itself (re-badged for it), its
+//! own exports, other members' exports and the Supervisor interface;
+//! nothing the supervisor holds. A composition ends with its caller. Its
+//! handle doesn't own it: dropping the handle leaves it running (the
+//! kernel can't tell the supervisor), but it is still bounded by its
 //! caller's account and lifetime.
 
 use alloc::format;
+use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -21,41 +28,54 @@ use capnp::message::{Builder, SingleSegmentAllocator};
 use sap_interfaces::methods;
 use sap_interfaces::supervisor_capnp::instance::wait_results;
 use sap_interfaces::supervisor_capnp::supervisor::start_params;
-use sap_interfaces::supervisor_capnp::{component, route, OnEnd, Status};
+use sap_interfaces::supervisor_capnp::{component, Status};
 use sap_interfaces::words;
-use sap_rt::abi::{init_slot, object, rights, MAX_EXTRA_CAPS};
-use sap_rt::cnode::SlotRef;
+use sap_rt::abi::rights;
 use sap_rt::endpoint::{self, Give as Send};
-use sap_rt::{account, untyped};
+use sap_rt::account;
 
-use super::{
-    account_terms, drop_original, drop_slot, new_slot, slot, text, with_component, Answer, End, Export, Instance, Memory, StartError,
-    Supervisor, HANDLE_BADGE, MAX_INSTANCES,
-};
+use super::compose::Scope;
+use super::{drop_original, drop_slot, new_slot, slot, text, Answer, End, StartError, Supervisor, CLIENT_RIGHTS, COMPOSED_BADGE, HANDLE_BADGE, MAX_COMPOSED};
 
-/// What an instance started through the API has besides an instance.
-pub(super) struct Dynamic {
-    /// The index of the instance that started it.
+/// A composition started at runtime for a caller.
+pub(super) struct Composed {
+    /// The index of the instance that made it, and its name, which its
+    /// members' names start with.
     pub caller: usize,
-    /// The original of its caller's handle; 0 until it is made.
+    pub caller_name: String,
+    /// The originals of the caller's handle to it (`HANDLE_BADGE`) and of
+    /// the capability to add to it (`COMPOSED_BADGE`; 0 for `start`).
     pub handle: usize,
+    pub compositions: usize,
     /// The capabilities passed in the call, kept to give each process a
     /// copy.
     pub passed: Vec<usize>,
     /// The caller's account, which pays.
     pub payer: usize,
-    /// The chunk of it the exports' endpoints are made from (its id and
-    /// slot), the endpoints, and the caller's capabilities to them.
+    /// The chunk of it the members' exports' endpoints are made from (its
+    /// id and slot), once a member has exports; the endpoints; the caller's
+    /// capabilities to them, for `start`.
     pub chunk: Option<(u64, usize)>,
     pub endpoints: Vec<usize>,
     pub callers_caps: Vec<usize>,
+    /// Every member added, by its full name, and those not started yet,
+    /// kept until `enact`.
+    pub members: Vec<String>,
+    pub pending: Vec<Vec<usize>>,
     /// How it ended, while nobody has waited for it yet.
     pub ended: Option<End>,
     /// The reply object of a caller waiting for it to end.
     pub waiter: Option<usize>,
 }
 
-fn status(error: StartError) -> Status {
+impl Composed {
+    /// The full name of its member `name`.
+    pub fn member(&self, name: &str) -> String {
+        format!("{}/{name}", self.caller_name)
+    }
+}
+
+pub(super) fn status(error: StartError) -> Status {
     match error {
         StartError::BadComponent => Status::BadRequest,
         StartError::NoSuchProgram => Status::NoSuchProgram,
@@ -65,42 +85,12 @@ fn status(error: StartError) -> Status {
     }
 }
 
-fn refuse(status: Status) -> Answer {
+pub(super) fn refuse(status: Status) -> Answer {
     Answer::Reply(status as usize, Vec::new(), Vec::new())
 }
 
-/// Give back what `dynamic` holds besides its handle: its exports'
-/// endpoints (releasing their chunk destroys them, and every capability to
-/// them), the passed capabilities and the payer's.
-pub(super) fn release(dynamic: &Dynamic) {
-    if let Some((id, chunk)) = dynamic.chunk {
-        let _ = account::release(dynamic.payer, id);
-        drop_slot(chunk);
-    }
-    for &s in dynamic.endpoints.iter().chain(&dynamic.callers_caps).chain(&dynamic.passed) {
-        drop_slot(s);
-    }
-    drop_slot(dynamic.payer);
-}
-
-/// An entry for an instance that has ended and waits to be waited for.
-pub(super) fn ended(dynamic: Dynamic) -> Instance {
-    Instance {
-        name: Default::default(),
-        component: Vec::new(),
-        memory: Memory::Untyped(0),
-        objects: 0,
-        parent_cap: 0,
-        api: 0,
-        on_end: OnEnd::Forget,
-        started: 0,
-        rapid: 0,
-        dynamic: Some(dynamic),
-    }
-}
-
-/// Answer a waiter on `reply`: the instance ended as `end`.
-pub(super) fn answer(reply: usize, end: End) {
+/// Answer a waiter on `reply`: the composition ended as `end`.
+fn answer(reply: usize, end: End) {
     let mut scratch = [0u64; 8];
     let mut allocator = SingleSegmentAllocator::new(sap_ring::as_bytes_mut(&mut scratch));
     let mut message = Builder::new(&mut allocator);
@@ -119,71 +109,35 @@ impl Supervisor {
     /// A call on the Supervisor interface from instance `caller`, with `caps`
     /// capabilities in the window.
     pub(super) fn serve_api(&mut self, caller: usize, label: usize, words: &[usize], caps: usize) -> Answer {
-        if label != methods::supervisor::START || caps == 0 {
+        if caps == 0 {
             return refuse(Status::BadRequest);
         }
-        let segment = [words::bytes(words)];
-        let message = words::reader(&segment);
-        let Ok(component) = message.get_root::<start_params::Reader>().and_then(|p| p.get_component()) else {
-            return refuse(Status::BadRequest);
-        };
-        self.start_for(caller, component, caps).unwrap_or_else(|error| refuse(status(error)))
-    }
-
-    /// Whether `component` may be started for `caller` with `passed`
-    /// capabilities: an account, not ending the boot, and routes it may
-    /// have.
-    fn check_request(&self, caller: usize, component: component::Reader, passed: usize) -> Result<(), StartError> {
-        let bad = |_| StartError::BadComponent;
-        account_terms(component.get_limits().map_err(bad)?)?;
-        if component.get_on_end().map_err(|_| StartError::BadComponent)? == OnEnd::EndBoot {
-            return Err(StartError::BadComponent);
-        }
-        let exports = component.get_exports().map_err(bad)?;
-        if exports.len() as usize >= MAX_EXTRA_CAPS {
-            return Err(StartError::BadComponent);
-        }
-        let caller_component = &self.instances[caller].as_ref().expect("init: no such caller").component;
-        for route in component.get_imports().map_err(bad)? {
-            let allowed = match route.which().map_err(|_| StartError::BadComponent)? {
-                route::Held(_) => false,
-                route::Client(to) => {
-                    let to = to.map_err(bad)?;
-                    let (c, n) = (text(to.get_component())?, text(to.get_name())?);
-                    // Only an export the caller imports itself.
-                    with_component(caller_component, |caller| {
-                        Ok(caller.get_imports().map_err(bad)?.iter().any(|r| match r.which() {
-                            Ok(route::Client(Ok(t))) => text(t.get_component()) == Ok(c) && text(t.get_name()) == Ok(n),
-                            _ => false,
-                        }))
-                    })?
-                }
-                route::Serve(name) => {
-                    let name = text(name)?;
-                    exports.iter().any(|e| text(e.get_name()) == Ok(name))
-                }
-                route::Passed(i) => (i as usize) < passed,
-                route::Supervisor(()) => true,
-            };
-            if !allowed {
-                return Err(StartError::BadComponent);
+        match label {
+            methods::supervisor::START => {
+                let segment = [words::bytes(words)];
+                let message = words::reader(&segment);
+                let Ok(component) = message.get_root::<start_params::Reader>().and_then(|p| p.get_component()) else {
+                    return refuse(Status::BadRequest);
+                };
+                self.start_for(caller, component, caps).unwrap_or_else(|error| refuse(status(error)))
             }
+            methods::supervisor::COMPOSE => match self.new_composed(caller, caps, true) {
+                Ok(c) => {
+                    let composed = self.composed[c].as_ref().expect("init: just made");
+                    Answer::Reply(Status::Ok as usize, Vec::new(), vec![Send::copy(composed.compositions), Send::copy(composed.handle)])
+                }
+                Err(error) => refuse(status(error)),
+            },
+            _ => refuse(Status::BadRequest),
         }
-        Ok(())
     }
 
-    fn start_for(&mut self, caller: usize, component: component::Reader, caps: usize) -> Result<Answer, StartError> {
-        let bad = |_| StartError::BadComponent;
-        let caller_name = self.instances[caller].as_ref().expect("init: no such caller").name.clone();
-        let name = format!("{caller_name}/{}", text(component.get_name())?);
-        if self.instances.iter().flatten().any(|i| !i.ended() && i.name == name) {
-            return Err(StartError::BadComponent);
-        }
-        self.check_request(caller, component, caps - 1)?;
-        let index = self.instances.iter().position(Option::is_none).ok_or(StartError::Full)?;
-
-        // The capabilities move out of the window: the payer's account, then
-        // the passed ones.
+    /// A new composition for instance `caller`, paid from the account in
+    /// the window's first slot, with the capabilities after it passed:
+    /// they move out of the window. With `compositions`, a capability to
+    /// add to it too.
+    fn new_composed(&mut self, caller: usize, caps: usize, compositions: bool) -> Result<usize, StartError> {
+        let c = self.composed.iter().position(Option::is_none).ok_or(StartError::Full)?;
         let take = |i: usize| {
             let s = new_slot();
             slot(s).move_from(slot(self.window + i)).expect("init: take a capability");
@@ -191,83 +145,131 @@ impl Supervisor {
         };
         let payer = take(0);
         let passed = (1..caps).map(take).collect();
-        let mut dynamic =
-            Dynamic { caller, handle: 0, passed, payer, chunk: None, endpoints: Vec::new(), callers_caps: Vec::new(), ended: None, waiter: None };
-
-        // Its exports' endpoints, from a page of the payer's account.
-        let exports = component.get_exports().map_err(bad)?;
-        if !exports.is_empty() {
-            let chunk = new_slot();
-            match account::allocate(payer, 12, init_slot::CNODE, chunk) {
-                Ok(c) => dynamic.chunk = Some((c.id, chunk)),
-                Err(_) => {
-                    sap_rt::slots::free(chunk);
-                    release(&dynamic);
-                    return Err(StartError::OverLimit);
-                }
-            }
-            let root = SlotRef { root: init_slot::CNODE, index: 0, depth: 0 };
-            for export in exports {
-                let endpoint = new_slot();
-                untyped::retype(chunk, object::ENDPOINT, 0, root, endpoint, 1).expect("init: an export's endpoint");
-                dynamic.endpoints.push(endpoint);
-                self.exports.push(Export { component: name.clone(), name: text(export.get_name())?.into(), endpoint, interface: export.get_interface() });
-            }
-        }
-        let memory = match Self::new_account(payer, component.get_limits().map_err(bad)?) {
-            Ok(memory) => memory,
-            Err(error) => {
-                for export in self.exports.iter_mut().filter(|e| e.component == name) {
-                    export.endpoint = 0;
-                }
-                release(&dynamic);
-                return Err(error);
-            }
+        let mint = |badge: usize, rights: usize| {
+            let s = new_slot();
+            slot(s).mint_from(slot(self.endpoint), rights, badge).expect("init: badge");
+            s
         };
-        self.create(index, name.clone(), component, memory, Some(dynamic))?;
+        let handle = mint(HANDLE_BADGE + c, rights::WRITE | rights::GRANT_REPLY);
+        let compositions = if compositions { mint(COMPOSED_BADGE + c, CLIENT_RIGHTS & !rights::GRANT) } else { 0 };
+        let caller_name = self.instances[caller].as_ref().expect("init: no such caller").name.clone();
+        self.composed[c] = Some(Composed {
+            caller,
+            caller_name,
+            handle,
+            compositions,
+            passed,
+            payer,
+            chunk: None,
+            endpoints: Vec::new(),
+            callers_caps: Vec::new(),
+            members: Vec::new(),
+            pending: Vec::new(),
+            ended: None,
+            waiter: None,
+        });
+        Ok(c)
+    }
 
-        // The caller's handle, and a capability to call each export, named
-        // for the caller.
-        let handle = new_slot();
-        slot(handle).mint_from(slot(self.endpoint), rights::WRITE | rights::GRANT_REPLY, HANDLE_BADGE + index).expect("init: badge");
+    /// `Supervisor.start`: a composition of `component` alone, started at
+    /// once; the caller gets the handle and a capability to call each of
+    /// its exports, named for the caller.
+    fn start_for(&mut self, caller: usize, component: component::Reader, caps: usize) -> Result<Answer, StartError> {
+        let c = self.new_composed(caller, caps, false)?;
+        let started = self.add(Scope::Composed(c), component).and_then(|()| self.enact_pending(Scope::Composed(c)));
+        if let Err(error) = started {
+            self.end_composed(c, End::Stopped, false);
+            return Err(error);
+        }
+        let composed = self.composed[c].as_ref().expect("init: just started");
+        let (name, caller_name, handle) = (composed.member(text(component.get_name())?), composed.caller_name.clone(), composed.handle);
         let mut give = vec![Send::copy(handle)];
         let mut callers_caps = Vec::new();
-        for export in exports {
+        for export in component.get_exports().map_err(|_| StartError::BadComponent)? {
             let e = self.export(&name, text(export.get_name())?).ok_or(StartError::BadComponent)?;
             let (cap, client) = self.client_cap(e, &caller_name);
             self.clients.push(client);
             give.push(Send::copy(cap));
             callers_caps.push(cap);
         }
-        let dynamic = self.instances[index].as_mut().and_then(|i| i.dynamic.as_mut()).expect("init: just started");
-        dynamic.handle = handle;
-        dynamic.callers_caps = callers_caps;
+        self.composed[c].as_mut().expect("init: just started").callers_caps = callers_caps;
         Ok(Answer::Reply(Status::Ok as usize, Vec::new(), give))
     }
 
-    /// A call on the handle to instance `index`, with `reply` to answer it
-    /// on, now or when the instance ends.
-    pub(super) fn serve_handle(&mut self, index: usize, label: usize, reply: usize) -> Answer {
+    /// Composition `c` ended as `end`: stop its members that still run,
+    /// give back what it holds, and answer its waiter, or keep the end for
+    /// one if `keep` (not when its caller is gone); once answered, or if
+    /// not kept, its handle stops working.
+    pub(super) fn end_composed(&mut self, c: usize, end: End, keep: bool) {
+        let Some(mut composed) = self.composed[c].take() else { return };
+        if composed.ended.is_some() {
+            // It ended before: only its handle is left.
+            if keep {
+                self.composed[c] = Some(composed);
+            } else {
+                drop_original(composed.handle);
+            }
+            return;
+        }
+        for i in 0..self.instances.len() {
+            if self.instances[i].as_ref().is_some_and(|instance| instance.composed == Some(c)) {
+                self.stop_started_by(i);
+                let instance = self.instances[i].take().expect("init: a member");
+                self.destroy(instance);
+            }
+        }
+        // Its members' exports go: their endpoints were made from the
+        // payer's chunk, and every capability to them with them.
+        let gone: Vec<usize> = (0..self.exports.len()).filter(|&e| composed.members.contains(&self.exports[e].component)).collect();
+        for &e in &gone {
+            self.exports[e].endpoint = 0;
+        }
+        self.clients.retain(|client| !gone.contains(&client.export));
+        if let Some((id, chunk)) = composed.chunk {
+            let _ = account::release(composed.payer, id);
+            drop_slot(chunk);
+        }
+        for &s in composed.endpoints.iter().chain(&composed.callers_caps).chain(&composed.passed) {
+            drop_slot(s);
+        }
+        drop_slot(composed.payer);
+        if composed.compositions != 0 {
+            drop_original(composed.compositions);
+        }
+        if let Some(waiter) = composed.waiter.take() {
+            answer(waiter, end);
+            self.spare_replies.push(waiter);
+            drop_original(composed.handle);
+        } else if keep {
+            composed.ended = Some(end);
+            composed.pending.clear();
+            self.composed[c] = Some(composed);
+        } else {
+            drop_original(composed.handle);
+        }
+    }
+
+    /// A call on the handle to composition `c`, with `reply` to answer it
+    /// on, now or when the composition ends.
+    pub(super) fn serve_handle(&mut self, c: usize, label: usize, reply: usize) -> Answer {
         match label {
             methods::instance::WAIT => {
-                let dynamic = self.instances[index].as_mut().and_then(|i| i.dynamic.as_mut()).expect("init: a handle without an instance");
-                if dynamic.waiter.is_some() {
+                let composed = self.composed[c].as_mut().expect("init: a handle without a composition");
+                if composed.waiter.is_some() {
                     return refuse(Status::BadRequest);
                 }
-                let Some(end) = dynamic.ended else {
-                    dynamic.waiter = Some(reply);
+                let Some(end) = composed.ended else {
+                    composed.waiter = Some(reply);
                     return Answer::Later;
                 };
                 answer(reply, end);
                 // Answered: the handle stops working.
-                let instance = self.instances[index].take().expect("init: no such instance");
-                drop_original(instance.dynamic.expect("init: dynamic").handle);
+                let composed = self.composed[c].take().expect("init: no such composition");
+                drop_original(composed.handle);
                 Answer::Nothing
             }
             methods::instance::STOP => {
-                if self.running(index) {
-                    self.finish(index, End::Stopped, true);
-                }
+                self.end_composed(c, End::Stopped, true);
                 refuse(Status::Ok)
             }
             _ => refuse(Status::BadRequest),
@@ -275,4 +277,4 @@ impl Supervisor {
     }
 }
 
-const _: () = assert!(MAX_INSTANCES <= 0x100, "an index fits in a badge's low byte");
+const _: () = assert!(MAX_COMPOSED <= 0x100, "an index fits in a badge's low byte");

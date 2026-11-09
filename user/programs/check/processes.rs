@@ -2,11 +2,12 @@
 //! the Supervisor interface; the supervisor's exports as the log shows them; and
 //! restart.
 
-use sap_interfaces::methods::{instance, log, restartable, supervisor};
+use sap_interfaces::methods::{compositions, instance, log, restartable, supervisor};
 use sap_interfaces::restartable_capnp::restartable::count_results;
 use sap_interfaces::supervisor_capnp::instance::wait_results;
 use sap_interfaces::supervisor_capnp::supervisor::start_params;
-use sap_interfaces::supervisor_capnp::{end, OnEnd, Status};
+use sap_interfaces::supervisor_capnp::compositions::add_params;
+use sap_interfaces::supervisor_capnp::{component, end, OnEnd, Status};
 use sap_interfaces::words;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -16,6 +17,7 @@ use sap_rt::cnode::SlotRef;
 use sap_rt::sys::Error;
 use sap_rt::{account, endpoint, println, slots, tcb, untyped, vspace};
 use capnp::message::{Builder, SingleSegmentAllocator};
+use crate::components::counter_capnp::counter_bootstrap;
 use crate::components::peer_capnp::peer_bootstrap;
 use sap_loader::{self as loader, Give, Launch, LoadError, Parent, Slots, LAUNCH};
 use sap_ring::as_bytes_mut;
@@ -207,14 +209,8 @@ impl<'a> Component<'a> {
     }
 }
 
-/// `Supervisor.start` with `component`, paid from check's account, with
-/// `passed` (copied); the handle's slot and the first of its exports'
-/// capabilities, or the reply's label.
-fn start(info: &Env, component: &Component, passed: &[usize]) -> Result<(usize, usize), usize> {
-    let mut scratch = [0u64; 128];
-    let mut allocator = SingleSegmentAllocator::new(as_bytes_mut(&mut scratch));
-    let mut message = Builder::new(&mut allocator);
-    let mut c = message.init_root::<start_params::Builder>().init_component();
+/// Write `component` into `c`.
+fn fill(mut c: component::Builder, component: &Component) {
     c.set_name(component.name);
     c.set_program(component.program);
     c.set_bootstrap(component.bootstrap);
@@ -250,6 +246,16 @@ fn start(info: &Env, component: &Component, passed: &[usize]) -> Result<(usize, 
             To::Supervisor => route.set_supervisor(()),
         }
     }
+}
+
+/// `Supervisor.start` with `component`, paid from check's account, with
+/// `passed` (copied); the handle's slot and the first of its exports'
+/// capabilities, or the reply's label.
+fn start(info: &Env, component: &Component, passed: &[usize]) -> Result<(usize, usize), usize> {
+    let mut scratch = [0u64; 128];
+    let mut allocator = SingleSegmentAllocator::new(as_bytes_mut(&mut scratch));
+    let mut message = Builder::new(&mut allocator);
+    fill(message.init_root::<start_params::Builder>().init_component(), component);
     let mut words = [0usize; 120];
     let len = words::pack(&message, &mut words).expect("start: the request fits a message");
     let mut caps = [endpoint::Give::copy(info.account); 16];
@@ -313,6 +319,106 @@ fn stop(handle: usize) {
     assert_eq!(reply.info.label(), Status::Ok as usize, "stop");
 }
 
+/// `Supervisor.compose`, paid from check's account: the capability to add
+/// to the composition and its handle, or the reply's label.
+fn compose(info: &Env) -> Result<(usize, usize), usize> {
+    let back = slots::alloc_range(2).expect("slots");
+    endpoint::set_receive_window(process_slot::CNODE, back, 2);
+    let reply = endpoint::call(info.supervisor, supervisor::COMPOSE, &[], &[endpoint::Give::copy(info.account)], &mut []).expect("compose: call");
+    match reply.info.label() {
+        0 => Ok((back, back + 1)),
+        label => Err(label),
+    }
+}
+
+/// `Compositions.add` of `component` on `cap`: the reply's label.
+fn add(cap: usize, component: &Component) -> usize {
+    let mut scratch = [0u64; 128];
+    let mut allocator = SingleSegmentAllocator::new(as_bytes_mut(&mut scratch));
+    let mut message = Builder::new(&mut allocator);
+    fill(message.init_root::<add_params::Builder>().init_component(), component);
+    let mut words = [0usize; 120];
+    let len = words::pack(&message, &mut words).expect("add: the component fits a message");
+    endpoint::call(cap, compositions::ADD, &words[..len], &[], &mut []).expect("add: call").info.label()
+}
+
+/// `Compositions.enact` on `cap`: the reply's label.
+fn enact(cap: usize) -> usize {
+    endpoint::call(cap, compositions::ENACT, &[], &[], &mut []).expect("enact: call").info.label()
+}
+
+/// A counter's bootstrap message and its length: imports `service` then
+/// `log`.
+fn counter(calls: u32) -> ([u8; 128], usize) {
+    let mut scratch = [0u64; 16];
+    let mut allocator = SingleSegmentAllocator::new(as_bytes_mut(&mut scratch));
+    let mut message = Builder::new(&mut allocator);
+    let mut bootstrap = message.init_root::<counter_bootstrap::Builder>();
+    bootstrap.set_service(0);
+    bootstrap.set_log(1);
+    bootstrap.set_calls(calls);
+    let segments = message.get_segments_for_output();
+    // Copied out: the allocator zeroes its buffer when the message goes.
+    let mut bytes = [0; 128];
+    bytes[..segments[0].len()].copy_from_slice(segments[0]);
+    (bytes, segments[0].len())
+}
+
+/// Compositions made at runtime (`Supervisor.compose`): members routed to
+/// each other by name and to the caller's own imports, ended by the member
+/// whose end ends it, with what still runs stopped and the memory back;
+/// and the refusals.
+pub fn check_compose(info: &Env) {
+    let used = || account::usage(info.account).expect("check's account").used;
+    let before = used();
+    let (cap, handle) = compose(info).expect("compose");
+    let (server_bootstrap, server_len) = peer_bootstrap(Mode::Restartable, 0);
+    let server = Component {
+        routes: &[To::Serve("service")],
+        exports: &["service"],
+        on_end: OnEnd::Restart,
+        ..Component::new("server", &info.peer_hash, &server_bootstrap[..server_len])
+    };
+    let ok = Status::Ok as usize;
+    assert_eq!(add(cap, &server), ok, "a server");
+    let (client_bootstrap, client_len) = counter(2);
+    let client = Component {
+        routes: &[To::Client("server", "service"), To::Client("log", "log")],
+        on_end: OnEnd::EndComposition,
+        ..Component::new("client", &info.counter_hash, &client_bootstrap[..client_len])
+    };
+    let bad = Status::BadRequest as usize;
+    assert_eq!(add(cap, &Component { routes: &[To::Held("asidPool")], ..client }), bad, "what the supervisor holds");
+    assert_eq!(add(cap, &client), ok, "a client of the server and of the caller's log");
+    assert_eq!(add(cap, &client), bad, "a name in use");
+    assert_eq!(enact(cap), ok, "enact");
+    assert_eq!(wait(handle), Ok(Ended::Exited(0)), "the client's end ends the composition");
+    assert!(slot(cap).identify().is_err(), "an ended composition takes no more members");
+    assert_eq!(used(), before, "the server is stopped and the memory comes back");
+
+    // Routes are checked when it starts, as a client may come before its
+    // server: nothing starts if one names an export that isn't a member's
+    // or the caller's.
+    for (component, export) in [("nobody", "service"), ("memory", "account")] {
+        let (cap, handle) = compose(info).expect("compose");
+        let orphan = Component { routes: &[To::Client(component, export), To::Client("log", "log")], ..client };
+        assert_eq!(add(cap, &orphan), ok, "a client added before its server");
+        assert_eq!(enact(cap), bad, "an export that isn't a member's or the caller's");
+        stop(handle);
+        assert_eq!(wait(handle), Ok(Ended::Stopped));
+    }
+    assert_eq!(used(), before, "refused compositions cost nothing");
+
+    // Stopped before it ends.
+    let (cap, handle) = compose(info).expect("compose");
+    assert_eq!(add(cap, &server), ok, "a server");
+    assert_eq!(enact(cap), ok, "enact");
+    stop(handle);
+    assert_eq!(wait(handle), Ok(Ended::Stopped));
+    assert_eq!(used(), before, "a stopped composition's memory comes back");
+    println!("compositions made at runtime route their members to each other and to the caller's imports, end with the member that ends them, and give the memory back");
+}
+
 /// The Supervisor interface: start `peer` from init's boot pack, paid from check's
 /// account; hear how it ended (an exit code, a fault, a stop) and see the
 /// memory come back; each kind of route; restart behind an export of its
@@ -368,6 +474,12 @@ pub fn check_instances(info: &Env) {
     let (handle, _) = start(info, &imports, &[]).expect("start with the caller's exports");
     assert_eq!(wait(handle), Ok(Ended::Exited(0)));
 
+    // Ending its composition, which is its own: not the boot.
+    let (bootstrap5, len5) = peer_bootstrap(Mode::Exit(5), 0);
+    let ends = Component { on_end: OnEnd::EndComposition, ..Component::new("ends", &peer, &bootstrap5[..len5]) };
+    let (handle, _) = start(info, &ends, &[]).expect("start one that ends its composition");
+    assert_eq!(wait(handle), Ok(Ended::Exited(5)));
+
     // Refusals.
     let refused = |component: &Component, passed: &[usize]| start(info, component, passed).err();
     let bad = Some(Status::BadRequest as usize);
@@ -379,7 +491,6 @@ pub fn check_instances(info: &Env) {
     assert_eq!(refused(&Component { routes: &[To::Passed(0)], ..base }, &[]), bad, "a capability not passed");
     assert_eq!(refused(&Component { routes: &[To::Serve("nothing")], ..base }, &[]), bad, "an export it doesn't declare");
     assert_eq!(refused(&Component { untyped: true, ..base }, &[]), bad, "untyped memory");
-    assert_eq!(refused(&Component { on_end: OnEnd::EndBoot, ..base }, &[]), bad, "ending the boot");
     assert_eq!(refused(&Component { reservation: 1 << 30, ..base }, &[]), Some(Status::OverLimit as usize), "more than the caller has");
     let no_account = endpoint::call(info.supervisor, supervisor::START, &[], &[], &mut []).expect("start: call");
     assert_eq!(no_account.info.label(), Status::BadRequest as usize, "no account");

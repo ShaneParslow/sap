@@ -15,9 +15,10 @@
 # component the receive side and each client a capability badged for that
 # client. The endpoint outlives the server's instance.
 #
-# Components also start at runtime, through the Supervisor interface
-# (`Supervisor.start`), for a caller that pays for them; such an instance
-# is named after its caller ("check/helper") and ends with it.
+# Components also start at runtime, through the Supervisor interface, for
+# a caller that pays for them: one (`Supervisor.start`) or a whole
+# composition (`Supervisor.compose`), which the resolver can fill. Such an
+# instance is named after its caller ("check/helper") and ends with it.
 # TODO: lazy start (M7).
 
 using Memory = import "memory.capnp";
@@ -90,9 +91,11 @@ struct ExportRef {
 enum OnEnd {
   # Destroy the instance and forget it.
   forget @0;
-  # End the boot: with success if the instance exited with 0, else with
-  # failure. For the root supervisor's test program.
-  endBoot @1;
+  # End the composition it belongs to, as it ended: every other member is
+  # stopped, and whoever waits for the composition hears this member's end.
+  # For the root supervisor's own composition this ends the boot, with
+  # success if the instance exited with 0, and needs a grant.
+  endComposition @1;
   # If it failed (faulted, or exited with a code other than 0), start it
   # again in the same memory, emptied, serving the same exports; if it
   # exited with 0, forget it. Not after failing more than a few times in a
@@ -120,6 +123,21 @@ interface Supervisor {
   # `loadFailed`.
   start @0 (component :Component, account :Memory.MemoryAccount, passed :List(Cap))
       -> (instance :Instance, exports :List(Cap));
+
+  # A new, empty composition of the caller's, to add components to through
+  # `compositions` and start with its `enact`; `instance` is the whole
+  # composition. Its members are named "caller/name", paid from children of
+  # `account`, and may have the routes `start` allows, and also each
+  # other's exports (an `ExportRef` naming a member by its name in the
+  # composition); never what the supervisor holds. It ends when a member
+  # whose end is `endComposition` ends, when every member has ended for
+  # good, by `Instance.stop`, or with its caller; what still runs is
+  # stopped.
+  # Capabilities in: `account`, then the passed capabilities, in order.
+  # Out on `ok`: `compositions`, `instance`.
+  # Status: `badRequest`, `full`.
+  compose @1 (account :Memory.MemoryAccount, passed :List(Cap))
+      -> (compositions :Compositions, instance :Instance);
 }
 
 # One capability of a list (capnpc-rust has no `List(Capability)`).
@@ -127,8 +145,9 @@ struct Cap {
   capability @0 :Capability;
 }
 
+# An instance started by `start`, or a composition made by `compose`.
 interface Instance {
-  # Wait for the instance to end for good (a restart isn't an end). Once
+  # Wait for it to end for good (a restart isn't an end). Once
   # answered, the handle stops working. One waiter at a time: a second
   # `wait` while one is pending is `badRequest`.
   wait @0 () -> (end :End);
@@ -158,15 +177,21 @@ enum Status {
   loadFailed @5;
 }
 
-# Adding components to a supervisor's own composition at runtime: the
-# resolver's capability. Components are added one call each (a call
-# carries at most 120 words), each one's exports made as it is added, and
-# started together by `enact`, so a client added before its server still
-# reaches it. They are the supervisor's own: paid from its account, named
-# as given. A route to something the supervisor holds (or `supervisor`)
-# needs a grant for that component, which the supervisor's own trusted
-# configuration gives, never the caller. Calls follow `README.md`; the
-# reply's label is a `Status`.
+# Adding components to a composition at runtime. Components are added one
+# call each (a call carries at most 120 words), each one's exports made as
+# it is added, and started together by `enact`, so a client added before
+# its server still reaches it.
+#
+# The supervisor's own composition has one, which init gives the
+# resolver: its components are the supervisor's, paid from its account
+# and named as given, and a route to something the supervisor holds (or
+# `supervisor`, or the end `endComposition`) needs a grant for that
+# component, which the supervisor's own trusted configuration gives, never
+# the caller. A composition made by `Supervisor.compose` has its own, with
+# its caller's authority instead (`compose`).
+#
+# Calls follow `README.md`; the reply's label is a `Status`.
+# TODO: capabilities to call the members' exports, for whoever adds them.
 # TODO: reconcile: stop and replace what a new composition drops or
 # changes (design/processes.md).
 interface Compositions {

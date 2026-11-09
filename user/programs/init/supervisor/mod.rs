@@ -18,18 +18,19 @@
 //! clients' capabilities keep working: a call it died in gets no reply
 //! (`NO_REPLY`), and calls after wait for the new process.
 //!
-//! Components also start at runtime, through the Supervisor interface (`api`), and
-//! join the supervisor's own composition through `Compositions` (`compose`),
-//! which the resolver uses.
+//! Components also join the supervisor's own composition at runtime, through
+//! `Compositions` (`compose`), which the resolver uses; and compositions
+//! start at runtime for a caller that pays for them, through the Supervisor
+//! interface (`api`).
 //!
-//! Every capability the supervisor gives an instance names init's endpoint,
-//! told apart by badge: its parent capability and fault handler
-//! (`INSTANCE_BADGE`),
-//! its capability to the Supervisor interface (`API_BADGE`), and, for one started
-//! through the API, its caller's handle to it (`HANDLE_BADGE`), each plus
-//! the instance's index. The supervisor keeps the original of each and
-//! hands out copies, so revoking the original cuts off every holder before
-//! the index is used again.
+//! Every capability the supervisor gives out names init's endpoint, told
+//! apart by badge: an instance's parent capability and fault handler
+//! (`INSTANCE_BADGE`) and its capability to the Supervisor interface
+//! (`API_BADGE`), plus the instance's index; a runtime composition's handle
+//! (`HANDLE_BADGE`) and capability to add to it (`COMPOSED_BADGE`), plus
+//! its index. The supervisor keeps the original of each and hands out
+//! copies, so revoking the original cuts off every holder before the index
+//! is used again.
 //! TODO: lazy start (design/processes.md in sap-docs).
 
 mod api;
@@ -55,15 +56,19 @@ use sap_rt::{account, print, println, slots, tcb, untyped};
 use crate::pack;
 
 /// Badges on instances' capabilities, each plus the instance's index: its
-/// parent capability, its capability to the Supervisor interface, and the handle its
-/// caller holds.
+/// parent capability and its capability to the Supervisor interface.
 const INSTANCE_BADGE: usize = 0x300;
 const API_BADGE: usize = 0x400;
+/// Badges on a runtime composition's capabilities, each plus its index:
+/// its caller's handle, and the capability to add to it.
 const HANDLE_BADGE: usize = 0x500;
-/// The badge on the capability to `Compositions`.
+const COMPOSED_BADGE: usize = 0x700;
+/// The badge on the capability to the supervisor's own `Compositions`.
 const COMPOSITIONS_BADGE: usize = 0x600;
-/// How many instances the supervisor runs at once.
+/// How many instances the supervisor runs at once, and how many runtime
+/// compositions it keeps.
 const MAX_INSTANCES: usize = 16;
+const MAX_COMPOSED: usize = 16;
 /// Slots in init's CNode for each instance's objects, while the loader
 /// builds it.
 const OBJECT_SLOTS: usize = 256;
@@ -156,15 +161,8 @@ struct Instance {
     /// within a second of starting.
     started: u64,
     rapid: u32,
-    /// For an instance started through the Supervisor interface.
-    dynamic: Option<api::Dynamic>,
-}
-
-impl Instance {
-    /// Whether it ended and only waits to be waited for.
-    fn ended(&self) -> bool {
-        self.dynamic.as_ref().is_some_and(|d| d.ended.is_some())
-    }
+    /// The runtime composition it is a member of, by index.
+    composed: Option<usize>,
 }
 
 /// An endpoint a component serves; `endpoint` 0 once it is gone.
@@ -209,8 +207,11 @@ pub struct Supervisor {
     /// Routes to what it holds that components added through
     /// `Compositions` may have: (component, held name).
     grants: Vec<(String, String)>,
-    /// Components added through `Compositions`, kept until `enact`.
+    /// Components added through its own `Compositions`, kept until
+    /// `enact`.
     pending: Vec<Vec<usize>>,
+    /// Compositions started at runtime, `MAX_COMPOSED` entries.
+    composed: Vec<Option<api::Composed>>,
     /// Reply objects not in use, for when one is kept by a waiter.
     spare_replies: Vec<usize>,
 }
@@ -232,6 +233,7 @@ impl Supervisor {
             instances: (0..MAX_INSTANCES).map(|_| None).collect(),
             grants: Vec::new(),
             pending: Vec::new(),
+            composed: (0..MAX_COMPOSED).map(|_| None).collect(),
             spare_replies: Vec::new(),
         }
     }
@@ -260,7 +262,7 @@ impl Supervisor {
     }
 
     fn running(&self, index: usize) -> bool {
-        index < MAX_INSTANCES && self.instances[index].as_ref().is_some_and(|i| !i.ended())
+        index < MAX_INSTANCES && self.instances[index].is_some()
     }
 
     /// A reply object for the next receive, after the last one was kept.
@@ -280,9 +282,10 @@ impl Supervisor {
         }
     }
 
-    /// Let component `component`, added through `Compositions`, have a route
-    /// to what the supervisor holds as `held` (or the Supervisor interface, as
-    /// "supervisor").
+    /// Let component `component`, added through the supervisor's own
+    /// `Compositions`, have a route to what the supervisor holds as `held`
+    /// (or the Supervisor interface, as "supervisor", or the end
+    /// "endComposition").
     pub fn grant(&mut self, component: &str, held: &str) {
         self.grants.push((component.into(), held.into()));
     }
@@ -378,8 +381,9 @@ impl Supervisor {
     }
 
     /// Make an instance at `index` of `component`, named `name`, in
-    /// `memory`, and start it.
-    fn create(&mut self, index: usize, name: String, component: component::Reader, memory: Memory, dynamic: Option<api::Dynamic>) -> Result<(), StartError> {
+    /// `memory`, a member of runtime composition `composed` if any, and
+    /// start it.
+    fn create(&mut self, index: usize, name: String, component: component::Reader, memory: Memory, composed: Option<usize>) -> Result<(), StartError> {
         let on_end = component.get_on_end().map_err(|_| StartError::BadComponent)?;
         let (parent_cap, api) = (new_slot(), new_slot());
         let ep = slot(self.endpoint);
@@ -394,16 +398,10 @@ impl Supervisor {
                 }
                 slots::free_range(objects, OBJECT_SLOTS);
                 Self::end_memory(&memory);
-                if let Some(dynamic) = &dynamic {
-                    for export in self.exports.iter_mut().filter(|e| e.component == name) {
-                        export.endpoint = 0;
-                    }
-                    api::release(dynamic);
-                }
                 return Err(error);
             }
         };
-        let instance = Instance { name, component: kept, memory, objects, parent_cap, api, on_end, started: time(), rapid: 0, dynamic };
+        let instance = Instance { name, component: kept, memory, objects, parent_cap, api, on_end, started: time(), rapid: 0, composed };
         if let Err(error) = self.launch(component, &instance) {
             self.destroy(instance);
             return Err(error);
@@ -463,7 +461,18 @@ impl Supervisor {
                 }
                 route::Client(to) => {
                     let to = to.map_err(bad)?;
-                    let export = self.export(text(to.get_component())?, text(to.get_name())?).ok_or(StartError::BadComponent)?;
+                    let (component, export) = (text(to.get_component())?, text(to.get_name())?);
+                    // In a runtime composition, another member's, else one the
+                    // caller imports itself; else as named.
+                    let export = match instance.composed {
+                        Some(c) => match self.member_export(c, component, export) {
+                            Some(e) => Some(e),
+                            None if self.caller_imports(c, component, export)? => self.export(component, export),
+                            None => None,
+                        },
+                        None => self.export(component, export),
+                    };
+                    let export = export.ok_or(StartError::BadComponent)?;
                     // The interface the importer expects must be the one served.
                     let (expected, served) = (to.get_interface(), self.exports[export].interface);
                     if expected != 0 && served != 0 && expected != served {
@@ -473,7 +482,7 @@ impl Supervisor {
                 }
                 route::Serve(export) => Source::Copy(self.exports[self.export(name, text(export)?).ok_or(StartError::BadComponent)?].endpoint),
                 route::Passed(i) => {
-                    let passed = instance.dynamic.as_ref().map_or(&[][..], |d| &d.passed[..]);
+                    let passed = instance.composed.and_then(|c| self.composed[c].as_ref()).map_or(&[][..], |c| &c.passed[..]);
                     Source::Copy(*passed.get(i as usize).ok_or(StartError::BadComponent)?)
                 }
                 route::Supervisor(()) => Source::Copy(instance.api),
@@ -601,7 +610,7 @@ impl Supervisor {
         if instance.rapid > MAX_RAPID {
             println!("init: {} keeps failing; not restarting it", instance.name);
             self.instances[index] = Some(instance);
-            self.finish(index, end, true);
+            self.finish(index, end);
             return;
         }
         println!("init: restarting {}", instance.name);
@@ -615,61 +624,47 @@ impl Supervisor {
         self.instances[index] = Some(instance);
         if let Err(error) = result {
             println!("init: restarting instance {index} failed: {error:?}");
-            self.finish(index, end, true);
+            self.finish(index, end);
         }
     }
 
-    /// Stop every instance instance `index` started through the API, and
-    /// forget those that ended.
+    /// End every composition instance `index` started, and forget those
+    /// that ended: nobody is left to wait for them.
     fn stop_started_by(&mut self, index: usize) {
-        for child in 0..MAX_INSTANCES {
-            let started_by = self.instances[child].as_ref().and_then(|i| i.dynamic.as_ref()).is_some_and(|d| d.caller == index);
-            if child != index && started_by {
-                self.finish(child, End::Stopped, false);
+        for c in 0..MAX_COMPOSED {
+            if self.composed[c].as_ref().is_some_and(|c| c.caller == index) {
+                self.end_composed(c, End::Stopped, false);
             }
         }
     }
 
-    /// Instance `index` ended for good, as `end`: stop what it started,
-    /// destroy it, and answer its waiter, or keep the end for one if `keep`
-    /// (not when its caller is gone).
-    fn finish(&mut self, index: usize, end: End, keep: bool) {
+    /// Instance `index` ended for good, as `end`: destroy it, with what it
+    /// started. If it belongs to a runtime composition, that ends too when
+    /// the instance's end says so or it was the last member running.
+    fn finish(&mut self, index: usize, end: End) {
         self.stop_started_by(index);
         let Some(instance) = self.instances[index].take() else { return };
-        let dynamic = if instance.ended() { instance.dynamic } else { self.destroy(instance) };
-        let Some(mut dynamic) = dynamic else { return };
-        let end = dynamic.ended.unwrap_or(end);
-        if let Some(waiter) = dynamic.waiter.take() {
-            api::answer(waiter, end);
-            self.spare_replies.push(waiter);
-        } else if keep {
-            dynamic.ended = Some(end);
-            self.instances[index] = Some(api::ended(dynamic));
-            return;
+        let (composed, ends_it) = (instance.composed, instance.on_end == OnEnd::EndComposition);
+        self.destroy(instance);
+        if let Some(c) = composed {
+            let running = self.instances.iter().flatten().any(|i| i.composed == Some(c));
+            let pending = self.composed[c].as_ref().is_some_and(|c| !c.pending.is_empty());
+            if ends_it || (!running && !pending) {
+                self.end_composed(c, end, true);
+            }
         }
-        drop_original(dynamic.handle);
     }
 
     /// Destroy an instance: revoking its memory deletes every object made
     /// from it, then the memory itself goes back; with it go its originals
-    /// and, for one started through the API, what that call gave it, whose
-    /// handle and waiter are left for the caller.
-    fn destroy(&mut self, instance: Instance) -> Option<api::Dynamic> {
+    /// and the capabilities made for its routes.
+    fn destroy(&mut self, instance: Instance) {
         Self::end_memory(&instance.memory);
         for original in [instance.parent_cap, instance.api] {
             drop_original(original);
         }
         slots::free_range(instance.objects, OBJECT_SLOTS);
         self.clients.retain(|c| c.component != instance.name);
-        if let Some(dynamic) = &instance.dynamic {
-            // Its exports go: their endpoints were made from the caller's
-            // chunk, and their clients' capabilities with them.
-            for export in self.exports.iter_mut().filter(|e| e.component == instance.name) {
-                export.endpoint = 0;
-            }
-            api::release(dynamic);
-        }
-        instance.dynamic
     }
 
     /// Handle a message whose badge is one of the supervisor's, if it is:
@@ -685,8 +680,11 @@ impl Supervisor {
         match badge & !0xff {
             INSTANCE_BADGE if self.running(index) => {}
             API_BADGE if self.running(index) => return Some(self.serve_api(index, label, words, caps)),
-            HANDLE_BADGE if self.instances[index].as_ref().is_some_and(|i| i.dynamic.is_some()) => return Some(self.serve_handle(index, label, reply)),
-            COMPOSITIONS_BADGE if badge == COMPOSITIONS_BADGE => return Some(self.serve_compositions(label, words)),
+            HANDLE_BADGE if index < MAX_COMPOSED && self.composed[index].is_some() => return Some(self.serve_handle(index, label, reply)),
+            COMPOSED_BADGE if index < MAX_COMPOSED && self.composed[index].as_ref().is_some_and(|c| c.ended.is_none()) => {
+                return Some(self.serve_compositions(compose::Scope::Composed(index), label, words));
+            }
+            COMPOSITIONS_BADGE if badge == COMPOSITIONS_BADGE => return Some(self.serve_compositions(compose::Scope::Root, label, words)),
             _ => return None,
         }
         let (success, end) = match label {
@@ -711,13 +709,15 @@ impl Supervisor {
                 return Some(Answer::Nothing);
             }
         };
-        match self.instances[index].as_ref().unwrap().on_end {
+        let instance = self.instances[index].as_ref().unwrap();
+        match instance.on_end {
             OnEnd::Restart if !success => self.restart(index, end),
-            OnEnd::Forget | OnEnd::Restart => self.finish(index, end, true),
-            OnEnd::EndBoot => {
-                self.finish(index, end, true);
+            // The end of the supervisor's own composition: the boot's.
+            OnEnd::EndComposition if instance.composed.is_none() => {
+                self.finish(index, end);
                 print::halt(!success)
             }
+            OnEnd::Forget | OnEnd::Restart | OnEnd::EndComposition => self.finish(index, end),
         }
         Some(Answer::Nothing)
     }

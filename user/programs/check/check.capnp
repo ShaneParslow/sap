@@ -21,4 +21,6 @@ struct CheckBootstrap $Component.program("check")
   log @3 :UInt32 $Component.interface("system/log.capnp:Log");
   # A service its supervisor restarts when it fails.
   restartable @4 :UInt32 $Component.interface("test/restartable.capnp:Restartable");
+  # The hash of `counter`, for composing with it.
+  counterHash @5 :Data $Component.programHash("counter");
 }
