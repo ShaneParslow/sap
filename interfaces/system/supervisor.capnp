@@ -57,11 +57,11 @@ struct Route {
     held @0 :Held;
     # A capability to call another component's export, badged for this
     # component: the server can ask the supervisor which component a
-    # badge is (`sap_process::launcher::CLIENT`).
+    # badge is (`sap_process::parent::CLIENT`).
     client @1 :ExportRef;
     # One of this component's own exports, by name: a capability with all
     # rights, to receive on and to mint capabilities to it from, with
-    # badges below `sap_process::launcher::ROUTE_BADGES`.
+    # badges below `sap_process::parent::ROUTE_BADGES`.
     serve @2 :Text;
     # For a component started through `Supervisor.start`: the capability
     # passed in that call with this index.

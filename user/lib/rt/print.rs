@@ -1,10 +1,12 @@
 //! Text output and the halt call. `print!` and `println!` write to the log
-//! (`interfaces/system/log.capnp`) once the program has one (`set_log`), and to
-//! the kernel's debug console before that or if the log fails.
+//! (`interfaces/system/log.capnp`) once the program has one (`set_log`),
+//! and to the kernel's debug console before that or if the log fails.
 //!
-//! TODO: programs without a log (the root task, processes the factory
-//! starts) still use the debug syscalls; make those debug-build only once
-//! every program gets a log (I6).
+//! TODO: programs without a log (init, the memory manager and the
+//! resolver, which start before it, and processes started by hand) still
+//! use the debug syscalls, and the log itself writes with them; make those
+//! debug-build only once every program gets a log and the log owns the
+//! UART by capability (I6).
 
 use core::fmt::{self, Write};
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -13,7 +15,7 @@ use capnp::message::{Builder, SingleSegmentAllocator};
 use sap_interfaces::log_capnp::log::write_params;
 use sap_interfaces::{methods, words};
 use sap_sys::abi::syscall::{DEBUG_HALT, DEBUG_PUTCHAR};
-use sap_sys::ipc;
+use sap_sys::endpoint;
 use sap_sys::sys::syscall1;
 
 /// The capability to the log; 0 (the null slot) for none.
@@ -73,7 +75,7 @@ impl Log {
         message.init_root::<write_params::Builder>().set_text(text);
         let mut buffer = [0usize; PARAMS_WORDS];
         let Some(n) = words::pack(&message, &mut buffer) else { return false };
-        matches!(ipc::call(log, methods::log::WRITE, &buffer[..n], &[], &mut []), Ok(reply) if reply.info.label() == 0)
+        matches!(endpoint::call(log, methods::log::WRITE, &buffer[..n], &[], &mut []), Ok(reply) if reply.info.label() == 0)
     }
 }
 
@@ -111,11 +113,11 @@ pub fn _print(args: fmt::Arguments) {
 
 #[macro_export]
 macro_rules! print {
-    ($($arg:tt)*) => { $crate::debug::_print(format_args!($($arg)*)) };
+    ($($arg:tt)*) => { $crate::print::_print(format_args!($($arg)*)) };
 }
 
 #[macro_export]
 macro_rules! println {
     () => { $crate::print!("\n") };
-    ($($arg:tt)*) => { $crate::debug::_print(format_args!("{}\n", format_args!($($arg)*))) };
+    ($($arg:tt)*) => { $crate::print::_print(format_args!("{}\n", format_args!($($arg)*))) };
 }

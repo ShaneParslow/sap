@@ -1,9 +1,9 @@
-//! The process ABI: what a launcher gives a process it starts, other than
+//! The process ABI: what a parent gives a process it starts, other than
 //! the root task, which the kernel starts with its boot information
 //! (`sap_abi::BootInfo`). A startup record and the bootstrap message, in
 //! read-only pages whose address arrives in `a0`; fixed slots for the
 //! process's own objects, then its imports; and the calls a process makes
-//! on its launcher. The kernel knows none of it: launchers and the runtime
+//! on its parent. The kernel knows none of it: parents and the runtime
 //! agree on it between themselves, so it is userspace's, like seL4's
 //! `sel4runtime` conventions.
 
@@ -11,7 +11,7 @@
 
 use sap_abi::SlotRange;
 
-/// Slots of every process's CNode that its launcher fills, other than the
+/// Slots of every process's CNode that its parent fills, other than the
 /// root task's (`sap_abi::init_slot`). The process's imports follow, in
 /// `Startup::imports`.
 pub mod process_slot {
@@ -22,26 +22,28 @@ pub mod process_slot {
     /// addresses.
     pub const CNODE: usize = 2;
     pub const VSPACE: usize = 3;
-    /// Untyped memory: the process's memory budget. Empty if it has none.
+    /// Spare untyped memory, the process's own to make objects from. Empty
+    /// if it has none.
     pub const UNTYPED: usize = 4;
-    /// An endpoint to whoever launched the process, which it calls to
-    /// report its exit (`launcher`). Empty if nobody listens.
-    pub const LAUNCHER: usize = 5;
+    /// An endpoint to the process's parent, whoever started it: it reports
+    /// its exit there and asks which component a client is (`parent`).
+    /// Empty if nobody listens.
+    pub const PARENT: usize = 5;
     /// The frame of the main thread's IPC buffer, as the root task has it.
     pub const IPC_BUFFER: usize = 6;
     /// The capability to the process's memory account
-    /// (`interfaces/system/memory.capnp`), if its launcher gives it one; empty
+    /// (`interfaces/system/memory.capnp`), if its parent gives it one; empty
     /// otherwise.
     pub const ACCOUNT: usize = 7;
     /// The first slot of the process's imports.
     pub const FIRST_IMPORT: usize = 8;
 }
 
-/// Labels of the calls a process makes on its `process_slot::LAUNCHER`
-/// endpoint. A launcher is normally also the process's fault handler, on
+/// Labels of the calls a process makes on its `process_slot::PARENT`
+/// endpoint. A parent is normally also the process's fault handler, on
 /// the same endpoint, so fault labels (`sap_abi::fault`) arrive there too; these
 /// don't collide with them.
-pub mod launcher {
+pub mod parent {
     /// The process is done: word 0 is its exit code, 0 for success. No
     /// reply comes.
     pub const EXIT: usize = 0x100;
@@ -73,7 +75,7 @@ pub struct AddressRange {
     pub end: usize,
 }
 
-/// What a process's launcher tells it at startup, in a read-only page whose
+/// What a process's parent tells it at startup, in a read-only page whose
 /// address arrives in its first argument register. The bootstrap message
 /// follows the record, `BOOTSTRAP_OFFSET` bytes in, continuing into as many
 /// read-only pages after it as it needs (`MAX_STARTUP_PAGES` in all).

@@ -47,7 +47,7 @@ use sap_rt::abi::{SlotRange, UntypedDesc, MAX_BOOT_UNTYPED};
 use sap_rt::cnode::SlotRef;
 use sap_rt::sys::Error;
 use sap_rt::runtime::{self, Memory, Resources};
-use sap_rt::{account, println, process};
+use sap_rt::{account, println, startup};
 use capnp::message::{Reader, ReaderOptions, SegmentArray};
 use components::check_capnp::check_bootstrap;
 use accounts::check_accounts;
@@ -77,7 +77,7 @@ struct Env {
     /// Free slots.
     empty: SlotRange,
     asid_pool: usize,
-    /// The instance API, and the hash of the peer in the boot pack.
+    /// The Supervisor interface, and the hash of the peer in the boot pack.
     supervisor: usize,
     peer_hash: [u8; 32],
     /// Whether user mode may use CHERI capabilities.
@@ -100,10 +100,10 @@ const CHUNKS: [u8; 4] = [16, 18, 20, 22];
 
 /// Read the bootstrap message into an `Env`, and take the chunks.
 fn env(startup: &'static Startup) -> Result<Env, capnp::Error> {
-    let segments = [process::bootstrap(startup)];
+    let segments = [startup::bootstrap(startup)];
     let reader = Reader::new(SegmentArray::new(&segments), ReaderOptions::new());
     let imports = reader.get_root::<check_bootstrap::Reader>()?;
-    let import = |index: u32| process::import(startup, index).expect("check: no such import");
+    let import = |index: u32| startup::import(startup, index).expect("check: no such import");
     let first = startup.free.start;
     let mut untyped_list = [UntypedDesc { paddr: 0, size_bits: 0, is_device: 0, _pad: [0; 6] }; MAX_BOOT_UNTYPED];
     for (i, &bits) in CHUNKS.iter().enumerate() {
@@ -146,10 +146,10 @@ fn untyped_at_least(info: &Env, bits: u8) -> usize {
 #[unsafe(no_mangle)]
 fn sap_main(a0: usize, _: usize, _: usize) -> ! {
     // SAFETY: the loader started this process with its startup record.
-    let startup = unsafe { process::startup(a0) };
+    let startup = unsafe { startup::record(a0) };
     let env = env(startup).expect("check: bootstrap message");
     let info = &env;
-    sap_rt::debug::set_log(info.log);
+    sap_rt::print::set_log(info.log);
     runtime::start(Resources {
         cnode: process_slot::CNODE,
         slots: info.empty.start + CHECK_SLOTS..info.empty.end,
@@ -178,7 +178,7 @@ fn sap_main(a0: usize, _: usize, _: usize) -> ! {
     check_accounts(info);
     check_cheri(info);
     println!("all checks passed");
-    process::exit(0)
+    sap_rt::exit(0)
 }
 
 fn expect(what: &str, result: Result<(), Error>, wanted: Result<(), usize>) {

@@ -6,7 +6,7 @@ use capnp::message::{Builder, SingleSegmentAllocator};
 use sap_interfaces::memory_capnp::memory_account::{allocate_params, allocate_results, child_params, release_params, usage_results};
 use sap_interfaces::memory_capnp::account_control::set_limit_params;
 use sap_interfaces::{methods, words};
-use sap_sys::ipc;
+use sap_sys::endpoint;
 use sap_sys::sys::ipc_buffer;
 
 pub use sap_interfaces::memory_capnp::Status;
@@ -65,10 +65,10 @@ fn message<T: capnp::traits::Owned>(build: impl FnOnce(T::Builder<'_>)) -> ([usi
 fn call(cap: usize, label: usize, words: &[usize], receive: (usize, usize, usize)) -> Result<([usize; WORDS], usize), Error> {
     let buffer = ipc_buffer();
     let saved = (buffer.receive_cnode, buffer.receive_index, buffer.receive_count);
-    ipc::set_receive_window(receive.0, receive.1, receive.2);
+    endpoint::set_receive_window(receive.0, receive.1, receive.2);
     let mut out = [0; WORDS];
-    let reply = ipc::call(cap, label, words, &[], &mut out);
-    ipc::set_receive_window(saved.0, saved.1, saved.2);
+    let reply = endpoint::call(cap, label, words, &[], &mut out);
+    endpoint::set_receive_window(saved.0, saved.1, saved.2);
     let reply = reply.map_err(Error::Call)?;
     match reply.info.label() {
         0 if reply.info.extra_caps() == receive.2 => Ok((out, reply.info.length().min(WORDS))),

@@ -11,8 +11,8 @@
 //! Every thread starts with `sp` at the top of its stack, `tp` pointing at
 //! its IPC buffer, and up to three arguments in `a0`..`a2`. For the root
 //! task, `a0` is the address of the kernel's boot-info page; for a process
-//! started by a launcher, it is the address of its startup record
-//! (`process::startup`).
+//! started by a parent, it is the address of its startup record
+//! (`startup::record`).
 
 #![no_std]
 #![feature(strict_provenance_lints)]
@@ -21,15 +21,16 @@
 
 mod arch;
 pub mod account;
-pub mod debug;
+pub mod print;
 #[cfg(feature = "heap")]
 pub mod heap;
-pub mod process;
+pub mod startup;
 pub mod runtime;
 pub mod slots;
 pub mod sync;
 
-pub use sap_sys::{abi, address, cnode, ipc, notification, sys, tcb, untyped, vspace};
+pub use sap_sys::{abi, address, cnode, endpoint, notification, sys, tcb, untyped, vspace};
+pub use startup::exit;
 
 use core::panic::PanicInfo;
 
@@ -47,5 +48,5 @@ extern "C" fn sap_start(a0: usize, a1: usize, a2: usize) -> ! {
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     println!("panic: {info}");
-    debug::halt(true)
+    print::halt(true)
 }

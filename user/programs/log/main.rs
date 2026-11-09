@@ -2,7 +2,7 @@
 //! (`interfaces/system/log.capnp`) to the kernel's debug console, each line after
 //! the name of the component that wrote it. A call's badge says which
 //! client it is; the supervisor, which made each client's capability for
-//! its route, says which component a badge is (`launcher::CLIENT`). The
+//! its route, says which component a badge is (`parent::CLIENT`). The
 //! service asks once per client and remembers.
 //!
 //! It runs without a heap.
@@ -30,11 +30,11 @@ use capnp::message::{Reader, ReaderOptions, SegmentArray};
 use components::log_capnp::log_bootstrap;
 use sap_interfaces::log_capnp::log::write_params;
 use sap_interfaces::{methods, words};
-use sap_process::{launcher, process_slot, Startup};
+use sap_process::{parent, process_slot, Startup};
 use sap_rt::abi::{object, MAX_MESSAGE_LENGTH};
 use sap_rt::cnode::SlotRef;
-use sap_rt::debug::Console;
-use sap_rt::{account, ipc, process, untyped};
+use sap_rt::print::Console;
+use sap_rt::{account, endpoint, startup, untyped};
 
 /// How many clients the service remembers the names of; later ones are
 /// asked about on every call.
@@ -46,7 +46,7 @@ const BAD_REQUEST: usize = 1;
 
 struct Client {
     badge: usize,
-    name: [u8; launcher::MAX_NAME],
+    name: [u8; parent::MAX_NAME],
     len: usize,
     /// Whether its next character starts a line.
     at_line_start: bool,
@@ -56,13 +56,13 @@ impl Client {
     /// Ask the supervisor which component `badge` is; `None` if it says
     /// none.
     fn ask(badge: usize) -> Option<Self> {
-        let mut out = [0usize; 1 + launcher::MAX_NAME / 8];
-        let reply = ipc::call(process_slot::LAUNCHER, launcher::CLIENT, &[badge], &[], &mut out).ok()?;
+        let mut out = [0usize; 1 + parent::MAX_NAME / 8];
+        let reply = endpoint::call(process_slot::PARENT, parent::CLIENT, &[badge], &[], &mut out).ok()?;
         if reply.info.label() != 0 {
             return None;
         }
-        let len = out[0].min(launcher::MAX_NAME).min((reply.info.length().saturating_sub(1)) * 8);
-        let mut name = [0; launcher::MAX_NAME];
+        let len = out[0].min(parent::MAX_NAME).min((reply.info.length().saturating_sub(1)) * 8);
+        let mut name = [0; parent::MAX_NAME];
         for (i, byte) in name.iter_mut().enumerate().take(len) {
             *byte = (out[1 + i / 8] >> (8 * (i % 8))) as u8;
         }
@@ -87,16 +87,16 @@ impl Client {
 
 /// The receive side of the log's endpoint, from the bootstrap message.
 fn endpoint(startup: &'static Startup) -> Result<usize, capnp::Error> {
-    let segments = [process::bootstrap(startup)];
+    let segments = [startup::bootstrap(startup)];
     let reader = Reader::new(SegmentArray::new(&segments), ReaderOptions::new());
     let imports = reader.get_root::<log_bootstrap::Reader>()?;
-    Ok(process::import(startup, imports.get_endpoint()).expect("log: no such import"))
+    Ok(startup::import(startup, imports.get_endpoint()).expect("log: no such import"))
 }
 
 #[unsafe(no_mangle)]
 fn sap_main(a0: usize, _: usize, _: usize) -> ! {
     // SAFETY: the loader started this process with its startup record.
-    let startup = unsafe { process::startup(a0) };
+    let startup = unsafe { startup::record(a0) };
     let endpoint = endpoint(startup).expect("log: bootstrap message");
     // A reply object, from a page of the service's account.
     let (page, reply) = (startup.free.start, startup.free.start + 1);
@@ -107,10 +107,10 @@ fn sap_main(a0: usize, _: usize, _: usize) -> ! {
     let mut clients: [Option<Client>; MAX_CLIENTS] = [const { None }; MAX_CLIENTS];
     let mut words = [0usize; MAX_MESSAGE_LENGTH];
     loop {
-        let message = ipc::recv(endpoint, reply, &mut words).expect("log: receive");
+        let message = endpoint::recv(endpoint, reply, &mut words).expect("log: receive");
         let words = &words[..message.info.length()];
         let label = if message.info.label() == methods::log::WRITE { write(&mut clients, message.badge, words) } else { BAD_REQUEST };
-        let _ = ipc::reply(reply, label, &[], &[]);
+        let _ = endpoint::reply(reply, label, &[], &[]);
     }
 }
 

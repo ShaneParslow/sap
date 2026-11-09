@@ -32,7 +32,7 @@
 //! lost between "check" and "sleep".
 //!
 //! Messages larger than half the ring travel as transferred pages instead
-//! (`transfer`).
+//! (`pages`).
 
 #![no_std]
 #![feature(strict_provenance_lints)]
@@ -44,7 +44,7 @@ use core::sync::atomic::{fence, AtomicUsize, Ordering};
 use sap_sys::address::mapped;
 use sap_sys::notification;
 
-pub mod transfer;
+pub mod pages;
 
 pub const PAGE: usize = 4096;
 const WORD: usize = size_of::<u64>();

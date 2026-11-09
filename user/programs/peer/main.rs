@@ -41,13 +41,13 @@ use sap_interfaces::restartable_capnp::restartable::count_results;
 use components::peer_capnp::peer_bootstrap;
 use components::peer_capnp::peer_bootstrap::mode::Which as Mode;
 use sap_interfaces::words;
-use sap_ring::transfer::{Frames, Receiver, TransferError};
+use sap_ring::pages::{Frames, Receiver, TransferError};
 use sap_ring::{as_bytes, as_bytes_mut, Consumer, Layout, Producer, RingError, PAGE};
 use sap_process::{process_slot, Startup};
 use sap_rt::address::mapped;
 use sap_rt::abi::object;
 use sap_rt::cnode::SlotRef;
-use sap_rt::{account, ipc, notification, println, process, tcb, untyped};
+use sap_rt::{account, endpoint, notification, println, startup, tcb, untyped};
 
 /// An address mapped only in the root task's address space.
 const PARENT_ONLY: usize = 0x38_0000_0000;
@@ -93,10 +93,10 @@ impl From<capnp::NotInSchema> for BadBootstrap {
 
 /// Read the bootstrap message: the mode and its capabilities.
 fn bootstrap(startup: &'static Startup) -> Result<(Mode, Peer), BadBootstrap> {
-    let segments = [process::bootstrap(startup)];
+    let segments = [startup::bootstrap(startup)];
     let reader = Reader::new(SegmentArray::new(&segments), ReaderOptions::new());
     let bootstrap = reader.get_root::<peer_bootstrap::Reader>()?;
-    let import = |index: u32| process::import(startup, index).ok_or(BadBootstrap::NoImport(index));
+    let import = |index: u32| startup::import(startup, index).ok_or(BadBootstrap::NoImport(index));
     let mode = bootstrap.get_mode().which()?;
     let nothing = Peer { endpoint: 0, data_pages: 0, notification: 0, doorbell: 0, reply: 0, free: 0 };
     let channel = bootstrap.get_channel();
@@ -118,7 +118,7 @@ fn bootstrap(startup: &'static Startup) -> Result<(Mode, Peer), BadBootstrap> {
 #[unsafe(no_mangle)]
 fn sap_main(a0: usize, _: usize, _: usize) -> ! {
     // SAFETY: the loader started this process with its startup record.
-    let startup = unsafe { process::startup(a0) };
+    let startup = unsafe { startup::record(a0) };
     let (mode, peer) = bootstrap(startup).expect("peer: bootstrap message");
     match mode {
         Mode::Call(()) => call_parent(peer.endpoint),
@@ -126,7 +126,7 @@ fn sap_main(a0: usize, _: usize, _: usize) -> ! {
         Mode::ServeEcho(()) => serve_echo(peer, channel(peer)),
         Mode::Misbehave(()) => misbehave(peer, channel(peer)),
         Mode::SumBytes(()) => sum_bytes(peer, channel(peer)),
-        Mode::Exit(code) => process::exit(code as usize),
+        Mode::Exit(code) => sap_rt::exit(code as usize),
         Mode::Crash(()) => crash(),
         Mode::Restartable(()) => restartable(peer),
     }
@@ -150,7 +150,7 @@ fn restartable(peer: Peer) {
     untyped::retype(page, object::REPLY, 0, root, answer, 1).expect("peer: reply object");
     let mut answered = 0;
     loop {
-        let message = ipc::recv(peer.endpoint, answer, &mut []).expect("peer: receive");
+        let message = endpoint::recv(peer.endpoint, answer, &mut []).expect("peer: receive");
         match message.info.label() {
             restartable::COUNT => {
                 answered += 1;
@@ -160,11 +160,11 @@ fn restartable(peer: Peer) {
                 results.init_root::<count_results::Builder>().set_calls(answered);
                 let mut out = [0usize; 4];
                 let n = words::pack(&results, &mut out).expect("peer: count results fit");
-                let _ = ipc::reply(answer, 0, &out[..n], &[]);
+                let _ = endpoint::reply(answer, 0, &out[..n], &[]);
             }
             restartable::CRASH => crash(),
             _ => {
-                let _ = ipc::reply(answer, 1, &[], &[]);
+                let _ = endpoint::reply(answer, 1, &[], &[]);
             }
         }
     }
@@ -175,9 +175,9 @@ fn restartable(peer: Peer) {
 fn call_parent(ep: usize) {
     println!("peer: running in its own address space");
     let mut out = [0usize; 6];
-    let reply = ipc::call(ep, 1, &[1, 2, 3, 4, 5, 6], &[], &mut out).expect("peer: call");
+    let reply = endpoint::call(ep, 1, &[1, 2, 3, 4, 5, 6], &[], &mut out).expect("peer: call");
     let sum: usize = out[..reply.info.length()].iter().sum();
-    ipc::call(ep, 2, &[sum], &[], &mut []).expect("peer: report");
+    endpoint::call(ep, 2, &[sum], &[], &mut []).expect("peer: report");
     // SAFETY: deliberately touches an address this process can't reach.
     let _ = unsafe { core::ptr::read_volatile(mapped::<usize>(PARENT_ONLY)) };
     println!("peer: read the parent's memory (isolation broken)");
@@ -228,7 +228,7 @@ fn transfer_receiver(peer: Peer) -> Receiver {
 /// its message to `read`, and give the frames back.
 fn take_transfer<R>(peer: Peer, receiver: &Receiver, id: u64, read: impl FnOnce(&[u8]) -> R) -> Result<R, TransferError> {
     let mut words = [0usize; 2];
-    let call = ipc::recv(peer.endpoint, peer.reply, &mut words).map_err(TransferError::Sys)?;
+    let call = endpoint::recv(peer.endpoint, peer.reply, &mut words).map_err(TransferError::Sys)?;
     let (len, sent_id) = Receiver::header(&words);
     let count = call.info.extra_caps();
     let result = if call.info.length() == 2 && sent_id == id { receiver.read(count, len, read) } else { Err(TransferError::BadHeader) };

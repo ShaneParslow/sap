@@ -30,7 +30,7 @@
 use sap_sys::abi::{attr, object, rights, MAX_EXTRA_CAPS};
 use sap_sys::address::mapped;
 use sap_sys::cnode::SlotRef;
-use sap_sys::ipc::{self, Give, Received};
+use sap_sys::endpoint::{self, Give, Received};
 use sap_sys::sys::Error;
 use sap_sys::vspace;
 
@@ -134,12 +134,12 @@ impl Sender {
         bytes[len..].fill(0);
         f.unmap(pages);
 
-        ipc::set_receive_window(f.cnode, f.first, pages);
+        endpoint::set_receive_window(f.cnode, f.first, pages);
         let mut gives = [Give::moved(0); MAX_PAGES];
         for (i, give) in gives.iter_mut().enumerate().take(pages) {
             *give = Give::moved(f.first + i);
         }
-        let reply = ipc::call(ep, label, &[len, id as usize], &gives[..pages], out).map_err(TransferError::Sys)?;
+        let reply = endpoint::call(ep, label, &[len, id as usize], &gives[..pages], out).map_err(TransferError::Sys)?;
         // The receiver could hand back something other than the frames; a
         // capability of another type would do something else when mapped.
         if reply.info.extra_caps() != pages || (0..pages).any(|i| f.check(i).is_err()) {
@@ -168,7 +168,7 @@ impl Receiver {
     /// Make this thread's receive window the receiver's slots. Do this
     /// before receiving a transfer.
     pub fn arm(&self) {
-        ipc::set_receive_window(self.frames.cnode, self.frames.first, MAX_PAGES);
+        endpoint::set_receive_window(self.frames.cnode, self.frames.first, MAX_PAGES);
     }
 
     /// The length and id of the transfer `message` (its first two words, as
@@ -216,7 +216,7 @@ impl Receiver {
         for (i, give) in gives.iter_mut().enumerate().take(count) {
             *give = Give::moved(self.frames.first + i);
         }
-        ipc::reply(reply, 0, &[], &gives[..count])
+        endpoint::reply(reply, 0, &[], &gives[..count])
     }
 
     /// Delete whatever is left in the receive window: frames a caller

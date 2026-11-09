@@ -49,14 +49,14 @@ use sap_interfaces::{methods, words};
 use sap_process::process_slot;
 use sap_rt::abi::{identify, object, rights, MAX_MESSAGE_LENGTH};
 use sap_rt::cnode::SlotRef;
-use sap_rt::ipc::{self, Give};
+use sap_rt::endpoint::{self, Give};
 use sap_rt::runtime::{self, Memory, Resources};
-use sap_rt::{println, process, slots, untyped};
+use sap_rt::{println, startup, slots, untyped};
 
 /// The smallest and largest chunks.
 const MIN_BITS: u8 = 12;
 const MAX_BITS: u8 = 40;
-/// Where the manager's heap grows, from its own budget.
+/// Where the manager's heap grows, from its spare untyped.
 const HEAP: core::ops::Range<usize> = 0x08_0000_0000..0x08_4000_0000;
 const HOLDER_RIGHTS: usize = rights::WRITE | rights::GRANT_REPLY;
 const CONTROLLER_RIGHTS: usize = rights::WRITE;
@@ -380,10 +380,10 @@ fn encode<T: capnp::traits::Owned>(out: &mut [usize], build: impl FnOnce(T::Buil
 /// The manager's endpoint from its bootstrap message, and its RAM: the
 /// imports from `ram` to the end, each described by identifying it.
 fn manager(startup: &'static sap_process::Startup) -> core::result::Result<Manager, capnp::Error> {
-    let segments = [process::bootstrap(startup)];
+    let segments = [startup::bootstrap(startup)];
     let reader = Reader::new(SegmentArray::new(&segments), ReaderOptions::new());
     let imports = reader.get_root::<memory_bootstrap::Reader>()?;
-    let import = |index: u32| process::import(startup, index).expect("memory: no such import");
+    let import = |index: u32| startup::import(startup, index).expect("memory: no such import");
     let mut blocks = Vec::new();
     for cap in import(imports.get_ram())..startup.imports.end {
         let region = slot(cap).identify().expect("memory: a RAM import");
@@ -398,7 +398,7 @@ fn manager(startup: &'static sap_process::Startup) -> core::result::Result<Manag
 #[unsafe(no_mangle)]
 fn sap_main(a0: usize, _: usize, _: usize) -> ! {
     // SAFETY: the loader started this process with its startup record.
-    let startup = unsafe { process::startup(a0) };
+    let startup = unsafe { startup::record(a0) };
     let free = startup.free;
     let reply = free.start;
     let root = SlotRef { root: process_slot::CNODE, index: 0, depth: 0 };
@@ -410,9 +410,9 @@ fn sap_main(a0: usize, _: usize, _: usize) -> ! {
     let mut words = [0usize; MAX_MESSAGE_LENGTH];
     let mut out = [0usize; 16];
     // Nothing sends the manager capabilities.
-    ipc::set_receive_window(process_slot::CNODE, 0, 0);
+    endpoint::set_receive_window(process_slot::CNODE, 0, 0);
     loop {
-        let message = ipc::recv(manager.endpoint, reply, &mut words).expect("memory: receive");
+        let message = endpoint::recv(manager.endpoint, reply, &mut words).expect("memory: receive");
         let words = &words[..message.info.length()];
         // Badge (index + 1) * 2, + 1 for the control: the root's are
         // `ROOT_ACCOUNT` and `ROOT_CONTROL`.
@@ -435,6 +435,6 @@ fn sap_main(a0: usize, _: usize, _: usize) -> ! {
             }
             None => &[],
         };
-        let _ = ipc::reply(reply, status as usize, &out[..n], caps);
+        let _ = endpoint::reply(reply, status as usize, &out[..n], caps);
     }
 }

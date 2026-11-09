@@ -1,4 +1,4 @@
-//! The instance API (`Supervisor` and `Instance` in
+//! The Supervisor interface (`Supervisor` and `Instance` in
 //! `interfaces/system/supervisor.capnp`): components started at runtime, for a
 //! caller that pays for them. Calls arrive as `interfaces/README.md`
 //! describes.
@@ -8,7 +8,7 @@
 //! its exports' endpoints, so the caller can spend only its own memory. Its
 //! routes may be capabilities passed in the call (kept, for restarts),
 //! exports the caller imports itself (re-badged for it), its own exports
-//! and the instance API; nothing the supervisor holds. It ends with its
+//! and the Supervisor interface; nothing the supervisor holds. It ends with its
 //! caller. Its handle doesn't own it: dropping the handle leaves it running
 //! (the kernel can't tell the supervisor), but it is still bounded by its
 //! caller's account and lifetime.
@@ -25,7 +25,7 @@ use sap_interfaces::supervisor_capnp::{component, route, OnEnd, Status};
 use sap_interfaces::words;
 use sap_rt::abi::{init_slot, object, rights, MAX_EXTRA_CAPS};
 use sap_rt::cnode::SlotRef;
-use sap_rt::ipc::{self, Give as Send};
+use sap_rt::endpoint::{self, Give as Send};
 use sap_rt::{account, untyped};
 
 use super::{
@@ -90,7 +90,7 @@ pub(super) fn ended(dynamic: Dynamic) -> Instance {
         component: Vec::new(),
         memory: Memory::Untyped(0),
         objects: 0,
-        launcher: 0,
+        parent_cap: 0,
         api: 0,
         on_end: OnEnd::Forget,
         started: 0,
@@ -112,11 +112,11 @@ pub(super) fn answer(reply: usize, end: End) {
     }
     let mut out = [0usize; 8];
     let n = words::pack(&message, &mut out).expect("init: a wait reply fits");
-    let _ = ipc::reply(reply, Status::Ok as usize, &out[..n], &[]);
+    let _ = endpoint::reply(reply, Status::Ok as usize, &out[..n], &[]);
 }
 
 impl Supervisor {
-    /// A call on the instance API from instance `caller`, with `caps`
+    /// A call on the Supervisor interface from instance `caller`, with `caps`
     /// capabilities in the window.
     pub(super) fn serve_api(&mut self, caller: usize, label: usize, words: &[usize], caps: usize) -> Answer {
         if label != methods::supervisor::START || caps == 0 {

@@ -45,7 +45,7 @@ use sap_rt::abi::{init_slot, object, BootInfo, UntypedDesc, MAX_EXTRA_CAPS, MAX_
 use sap_rt::address::mapped;
 use sap_rt::cnode::SlotRef;
 use sap_rt::runtime::{self, Memory, Resources};
-use sap_rt::{ipc, println, slots, untyped};
+use sap_rt::{endpoint, println, slots, untyped};
 use supervisor::{Answer, Supervisor};
 
 /// Where init's heap grows.
@@ -62,7 +62,7 @@ fn sap_main(boot_info: usize, _: usize, _: usize) -> ! {
     runtime::start(Resources { cnode: init_slot::CNODE, slots: info.empty.start..info.empty.end, memory: Memory::Untyped(own), vspace: init_slot::VSPACE, heap: HEAP });
 
     // One endpoint for everything: the supervisor's instances report their
-    // exits and faults here, and call the instance API and their handles,
+    // exits and faults here, and call the Supervisor interface and their handles,
     // each through a capability with its own badge.
     let parent = Parent {
         cnode: init_slot::CNODE,
@@ -82,19 +82,19 @@ fn sap_main(boot_info: usize, _: usize, _: usize) -> ! {
 
     let mut words = [0usize; MAX_MESSAGE_LENGTH];
     loop {
-        ipc::set_receive_window(init_slot::CNODE, supervisor.window, MAX_EXTRA_CAPS);
-        let message = ipc::recv(ep, reply, &mut words).expect("init: receive");
+        endpoint::set_receive_window(init_slot::CNODE, supervisor.window, MAX_EXTRA_CAPS);
+        let message = endpoint::recv(ep, reply, &mut words).expect("init: receive");
         let (badge, label) = (message.badge, message.info.label());
         let words = &words[..message.info.length()];
         match supervisor.handle(badge, label, words, message.info.extra_caps(), reply) {
             Some(Answer::Reply(label, words, caps)) => {
-                let _ = ipc::reply(reply, label, &words, &caps);
+                let _ = endpoint::reply(reply, label, &words, &caps);
             }
             Some(Answer::Later) => reply = supervisor.fresh_reply(),
             Some(Answer::Nothing) => {}
             None => {
                 println!("init: ignored a message with badge {badge:#x}, label {label}");
-                let _ = ipc::reply(reply, Status::BadRequest as usize, &[], &[]);
+                let _ = endpoint::reply(reply, Status::BadRequest as usize, &[], &[]);
             }
         }
         supervisor.clear_window();

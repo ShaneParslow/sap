@@ -14,7 +14,7 @@
 pub mod address;
 mod arch;
 pub mod cnode;
-pub mod ipc;
+pub mod endpoint;
 pub mod notification;
 pub mod sys;
 pub mod tcb;

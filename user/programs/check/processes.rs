@@ -1,5 +1,5 @@
 //! Processes: a second program in its own address space, built by hand;
-//! the instance API; the supervisor's exports as the log shows them; and
+//! the Supervisor interface; the supervisor's exports as the log shows them; and
 //! restart.
 
 use sap_interfaces::methods::{instance, log, restartable, supervisor};
@@ -10,11 +10,11 @@ use sap_interfaces::supervisor_capnp::{end, OnEnd, Status};
 use sap_interfaces::words;
 use alloc::vec;
 use alloc::vec::Vec;
-use sap_process::{launcher, process_slot, MAX_BOOTSTRAP};
+use sap_process::{parent, process_slot, MAX_BOOTSTRAP};
 use sap_rt::abi::{attr, error, fault, object, rights};
 use sap_rt::cnode::SlotRef;
 use sap_rt::sys::Error;
-use sap_rt::{account, ipc, println, slots, tcb, untyped, vspace};
+use sap_rt::{account, endpoint, println, slots, tcb, untyped, vspace};
 use capnp::message::{Builder, SingleSegmentAllocator};
 use crate::components::peer_capnp::peer_bootstrap;
 use sap_loader::{self as loader, Give, Launch, LoadError, Parent, Slots, LAUNCH};
@@ -98,7 +98,7 @@ pub fn check_process(info: &Env) {
     let mut slots = Slots { next: base + 3, end: base + 200 };
     let (bootstrap, len) = peer_bootstrap(Mode::Call, 0);
     let imports = [(badged, Give::Copy(rights::WRITE | rights::GRANT))];
-    let launch = Launch { priority: 255, budget_bits: Some(16), imports: &imports, bootstrap: &bootstrap[..len], ..LAUNCH };
+    let launch = Launch { priority: 255, spare_bits: Some(16), imports: &imports, bootstrap: &bootstrap[..len], ..LAUNCH };
 
     // Refused loads: errors, not panics, since a process manager loads on
     // others' behalf.
@@ -116,7 +116,7 @@ pub fn check_process(info: &Env) {
     expect("clean up the partial process", slot(small).revoke(), Ok(()));
 
     let peer = loader::load(PEER, &parent, &mut slots, &launch).expect("load the peer");
-    // The process ABI's slots: its own objects, its budget, its import.
+    // The process ABI's slots: its own objects, its spare untyped, its import.
     let theirs = |index| peer.slot(index).identify().map(|id| id.object_type).map_err(|e| e.0);
     for (index, wanted) in [
         (process_slot::TCB, object::TCB),
@@ -138,15 +138,15 @@ pub fn check_process(info: &Env) {
     peer.start().expect("start the peer");
 
     let mut words = [0usize; 8];
-    let first = ipc::recv(ep, reply, &mut words).expect("receive the peer's call");
+    let first = endpoint::recv(ep, reply, &mut words).expect("receive the peer's call");
     assert_eq!((first.badge, first.info.label(), first.info.length()), (0x9ee, 1, 6), "the peer's call");
     assert_eq!(words[..6], [1, 2, 3, 4, 5, 6], "the peer's words");
     let doubled = [2, 4, 6, 8, 10, 12];
-    let second = ipc::reply_recv(ep, reply, 0, &doubled, &[], &mut words).expect("receive the peer's report");
+    let second = endpoint::reply_recv(ep, reply, 0, &doubled, &[], &mut words).expect("receive the peer's report");
     assert_eq!((second.info.label(), words[0]), (2, 42), "the peer should report the sum of the reply");
-    let fault_msg = ipc::reply_recv(ep, reply, 0, &[], &[], &mut words).expect("receive the peer's fault");
+    let fault_msg = endpoint::reply_recv(ep, reply, 0, &[], &[], &mut words).expect("receive the peer's fault");
     assert_eq!((fault_msg.info.label(), words[fault::ADDRESS]), (fault::VM, scratch), "the peer's read should fault");
-    expect("leave it suspended", ipc::reply(reply, 1, &[], &[]), Ok(()));
+    expect("leave it suspended", endpoint::reply(reply, 1, &[], &[]), Ok(()));
 
     expect("unmap scratch", vspace::unmap_frame(marker), Ok(()));
 
@@ -165,10 +165,10 @@ pub fn check_process(info: &Env) {
     message[0] += (SKIP as u64) << 2;
     message.splice(1..1, core::iter::repeat_n(0, SKIP));
     let far: Vec<u8> = message.iter().flat_map(|w| w.to_le_bytes()).collect();
-    let long = Launch { priority: 255, launcher: Some(badged), bootstrap: &far, ..LAUNCH };
+    let long = Launch { priority: 255, parent_endpoint: Some(badged), bootstrap: &far, ..LAUNCH };
     loader::load(PEER, &parent, &mut slots, &long).and_then(|p| Ok(p.start()?)).expect("load with a long bootstrap");
-    let exit = ipc::recv(ep, reply, &mut words).expect("the peer's exit");
-    assert_eq!((exit.info.label(), words[0]), (launcher::EXIT, 9), "the peer read its bootstrap past its first page");
+    let exit = endpoint::recv(ep, reply, &mut words).expect("the peer's exit");
+    assert_eq!((exit.info.label(), words[0]), (parent::EXIT, 9), "the peer read its bootstrap past its first page");
     let too_long = vec![0u8; MAX_BOOTSTRAP + 1];
     let refused_long = refused(loader::load(PEER, &parent, &mut slots, &Launch { bootstrap: &too_long, ..long }));
     assert_eq!(refused_long, Some(LoadError::BadLaunch("bootstrap message too long")));
@@ -176,7 +176,7 @@ pub fn check_process(info: &Env) {
     println!("a second process, calls between address spaces, isolation and a bootstrap of several pages behave");
 }
 
-/// A route of a component started through the instance API.
+/// A route of a component started through the Supervisor interface.
 #[derive(Clone, Copy)]
 enum To<'a> {
     Passed(u32),
@@ -186,7 +186,7 @@ enum To<'a> {
     Supervisor,
 }
 
-/// A component to start through the instance API: `program` in a 2 MiB
+/// A component to start through the Supervisor interface: `program` in a 2 MiB
 /// account, built from 1 MiB of it.
 struct Component<'a> {
     name: &'a str,
@@ -252,13 +252,13 @@ fn start(info: &Env, component: &Component, passed: &[usize]) -> Result<(usize, 
     }
     let mut words = [0usize; 120];
     let len = words::pack(&message, &mut words).expect("start: the request fits a message");
-    let mut caps = [ipc::Give::copy(info.account); 16];
+    let mut caps = [endpoint::Give::copy(info.account); 16];
     for (i, &cap) in passed.iter().enumerate() {
-        caps[1 + i] = ipc::Give::copy(cap);
+        caps[1 + i] = endpoint::Give::copy(cap);
     }
     let back = slots::alloc_range(1 + component.exports.len()).expect("slots");
-    ipc::set_receive_window(process_slot::CNODE, back, 1 + component.exports.len());
-    let reply = ipc::call(info.supervisor, supervisor::START, &words[..len], &caps[..1 + passed.len()], &mut []).expect("start: call");
+    endpoint::set_receive_window(process_slot::CNODE, back, 1 + component.exports.len());
+    let reply = endpoint::call(info.supervisor, supervisor::START, &words[..len], &caps[..1 + passed.len()], &mut []).expect("start: call");
     match reply.info.label() {
         0 => Ok((back, back + 1)),
         label => Err(label),
@@ -269,7 +269,7 @@ fn start(info: &Env, component: &Component, passed: &[usize]) -> Result<(usize, 
 /// answered; or the call's error.
 fn count(cap: usize) -> Result<u64, usize> {
     let mut out = [0usize; 4];
-    let reply = ipc::call(cap, restartable::COUNT, &[], &[], &mut out).map_err(|e| e.0)?;
+    let reply = endpoint::call(cap, restartable::COUNT, &[], &[], &mut out).map_err(|e| e.0)?;
     assert_eq!(reply.info.label(), 0, "count");
     let segment = [words::bytes(&out[..reply.info.length()])];
     let message = words::reader(&segment);
@@ -278,7 +278,7 @@ fn count(cap: usize) -> Result<u64, usize> {
 
 /// `Restartable.crash` on `cap`: the call's error, as it never returns.
 fn crash(cap: usize) -> Result<(), usize> {
-    ipc::call(cap, restartable::CRASH, &[], &[], &mut []).map(drop).map_err(|e| e.0)
+    endpoint::call(cap, restartable::CRASH, &[], &[], &mut []).map(drop).map_err(|e| e.0)
 }
 
 /// How an instance ended, as `wait` reports it.
@@ -294,7 +294,7 @@ enum Ended {
 /// label `FAILED_LOOKUP`.
 fn wait(handle: usize) -> Result<Ended, usize> {
     let mut out = [0usize; 8];
-    let reply = ipc::call(handle, instance::WAIT, &[], &[], &mut out).expect("wait: call");
+    let reply = endpoint::call(handle, instance::WAIT, &[], &[], &mut out).expect("wait: call");
     if reply.info.label() != Status::Ok as usize {
         return Err(reply.info.label());
     }
@@ -309,11 +309,11 @@ fn wait(handle: usize) -> Result<Ended, usize> {
 }
 
 fn stop(handle: usize) {
-    let reply = ipc::call(handle, instance::STOP, &[], &[], &mut []).expect("stop: call");
+    let reply = endpoint::call(handle, instance::STOP, &[], &[], &mut []).expect("stop: call");
     assert_eq!(reply.info.label(), Status::Ok as usize, "stop");
 }
 
-/// The instance API: start `peer` from init's boot pack, paid from check's
+/// The Supervisor interface: start `peer` from init's boot pack, paid from check's
 /// account; hear how it ended (an exit code, a fault, a stop) and see the
 /// memory come back; each kind of route; restart behind an export of its
 /// own; and the refusals.
@@ -362,7 +362,7 @@ pub fn check_instances(info: &Env) {
     assert!(slot(service).identify().is_err(), "a stopped instance's exports go");
     assert_eq!(used(), before, "its exports' memory comes back");
 
-    // Exports the caller imports itself, re-badged; the instance API.
+    // Exports the caller imports itself, re-badged; the Supervisor interface.
     let (bootstrap, len) = peer_bootstrap(Mode::Exit(0), 0);
     let imports = Component { routes: &[To::Client("log", "log"), To::Client("restartable", "service"), To::Supervisor], ..Component::new("imports", &peer, &bootstrap[..len]) };
     let (handle, _) = start(info, &imports, &[]).expect("start with the caller's exports");
@@ -381,16 +381,16 @@ pub fn check_instances(info: &Env) {
     assert_eq!(refused(&Component { untyped: true, ..base }, &[]), bad, "untyped memory");
     assert_eq!(refused(&Component { on_end: OnEnd::EndBoot, ..base }, &[]), bad, "ending the boot");
     assert_eq!(refused(&Component { reservation: 1 << 30, ..base }, &[]), Some(Status::OverLimit as usize), "more than the caller has");
-    let no_account = ipc::call(info.supervisor, supervisor::START, &[], &[], &mut []).expect("start: call");
+    let no_account = endpoint::call(info.supervisor, supervisor::START, &[], &[], &mut []).expect("start: call");
     assert_eq!(no_account.info.label(), Status::BadRequest as usize, "no account");
     // Not a message: a root pointer to a struct far past the words.
     let broken = [(1000 << 2) | (1 << 32)];
-    let reply = ipc::call(info.supervisor, supervisor::START, &broken, &[ipc::Give::copy(info.account)], &mut []).expect("start: call");
+    let reply = endpoint::call(info.supervisor, supervisor::START, &broken, &[endpoint::Give::copy(info.account)], &mut []).expect("start: call");
     assert_eq!(reply.info.label(), Status::BadRequest as usize, "a malformed request");
     assert_eq!(used(), before, "refusals cost nothing");
 
     expect("revoke", slot(region).revoke(), Ok(()));
-    println!("the instance API starts components with the caller's memory and capabilities, restarts them behind their exports, reports exits, faults and stops, and gives the memory back");
+    println!("the Supervisor interface starts components with the caller's memory and capabilities, restarts them behind their exports, reports exits, faults and stops, and gives the memory back");
 }
 
 /// The log, an export of the supervisor's: it refuses an unknown method
@@ -399,13 +399,13 @@ pub fn check_instances(info: &Env) {
 /// nobody's name.
 pub fn check_log(info: &Env) {
     let mut out = [0usize; 8];
-    let label = |r: Result<ipc::Received, Error>| r.expect("a call").info.label();
-    assert_eq!(label(ipc::call(info.log, 7, &[], &[], &mut out)), 1, "the log should refuse an unknown method");
+    let label = |r: Result<endpoint::Received, Error>| r.expect("a call").info.label();
+    assert_eq!(label(endpoint::call(info.log, 7, &[], &[], &mut out)), 1, "the log should refuse an unknown method");
     // A struct whose text pointer runs far past the message.
     let malformed = [1 << 48, 1 | (2 << 32) | (1000 << 35)];
-    assert_eq!(label(ipc::call(info.log, log::WRITE, &malformed, &[], &mut out)), 1, "the log should refuse malformed text");
-    let asked = ipc::call(process_slot::LAUNCHER, launcher::CLIENT, &[1], &[], &mut out);
-    assert_eq!(label(asked), launcher::NO_SUCH_CLIENT, "the supervisor should name clients only to their server");
+    assert_eq!(label(endpoint::call(info.log, log::WRITE, &malformed, &[], &mut out)), 1, "the log should refuse malformed text");
+    let asked = endpoint::call(process_slot::PARENT, parent::CLIENT, &[1], &[], &mut out);
+    assert_eq!(label(asked), parent::NO_SUCH_CLIENT, "the supervisor should name clients only to their server");
     println!("the log refuses unknown methods and malformed text; the supervisor names a client only to its server");
 }
 

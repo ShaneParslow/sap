@@ -11,20 +11,21 @@
 //! enacts a composition, from its own memory, so the endpoint outlives the
 //! server's instances. The server gets the receive side; each route to an
 //! export gets a capability with a badge of its own, and the server asks
-//! which component a badge is (`launcher::CLIENT`).
+//! which component a badge is (`parent::CLIENT`).
 //!
 //! An instance whose component says `restart` is started again when it
 //! fails, in the same memory, emptied, and with the same exports, so its
 //! clients' capabilities keep working: a call it died in gets no reply
 //! (`NO_REPLY`), and calls after wait for the new process.
 //!
-//! Components also start at runtime, through the instance API (`api`), and
+//! Components also start at runtime, through the Supervisor interface (`api`), and
 //! join the supervisor's own composition through `Compositions` (`compose`),
 //! which the resolver uses.
 //!
 //! Every capability the supervisor gives an instance names init's endpoint,
-//! told apart by badge: its launcher and fault handler (`INSTANCE_BADGE`),
-//! its capability to the instance API (`API_BADGE`), and, for one started
+//! told apart by badge: its parent capability and fault handler
+//! (`INSTANCE_BADGE`),
+//! its capability to the Supervisor interface (`API_BADGE`), and, for one started
 //! through the API, its caller's handle to it (`HANDLE_BADGE`), each plus
 //! the instance's index. The supervisor keeps the original of each and
 //! hands out copies, so revoking the original cuts off every holder before
@@ -44,17 +45,17 @@ use sap_interfaces::component_capnp::limits;
 use sap_interfaces::supervisor_capnp::{component, composition, route, OnEnd};
 use sap_interfaces::words;
 use sap_loader::{self as loader, Give, Launch, Parent, Slots};
-use sap_process::launcher;
+use sap_process::parent;
 use sap_rt::abi::{fault, init_slot, object, rights, MAX_EXTRA_CAPS};
 use sap_rt::cnode::SlotRef;
-use sap_rt::ipc::Give as Send;
+use sap_rt::endpoint::Give as Send;
 use sap_rt::sys::time;
-use sap_rt::{account, debug, println, slots, tcb, untyped};
+use sap_rt::{account, print, println, slots, tcb, untyped};
 
 use crate::pack;
 
 /// Badges on instances' capabilities, each plus the instance's index: its
-/// launcher, its capability to the instance API, and the handle its
+/// parent capability, its capability to the Supervisor interface, and the handle its
 /// caller holds.
 const INSTANCE_BADGE: usize = 0x300;
 const API_BADGE: usize = 0x400;
@@ -146,16 +147,16 @@ struct Instance {
     component: Vec<usize>,
     memory: Memory,
     objects: usize,
-    /// The originals of its launcher and fault handler, and of its
-    /// capability to the instance API.
-    launcher: usize,
+    /// The originals of its parent capability and fault handler, and of its
+    /// capability to the Supervisor interface.
+    parent_cap: usize,
     api: usize,
     on_end: OnEnd,
     /// When its process started, and how many times in a row it failed
     /// within a second of starting.
     started: u64,
     rapid: u32,
-    /// For an instance started through the instance API.
+    /// For an instance started through the Supervisor interface.
     dynamic: Option<api::Dynamic>,
 }
 
@@ -227,7 +228,7 @@ impl Supervisor {
             groups: Vec::new(),
             exports: Vec::new(),
             clients: Vec::new(),
-            next_badge: launcher::ROUTE_BADGES,
+            next_badge: parent::ROUTE_BADGES,
             instances: (0..MAX_INSTANCES).map(|_| None).collect(),
             grants: Vec::new(),
             pending: Vec::new(),
@@ -280,7 +281,7 @@ impl Supervisor {
     }
 
     /// Let component `component`, added through `Compositions`, have a route
-    /// to what the supervisor holds as `held` (or the instance API, as
+    /// to what the supervisor holds as `held` (or the Supervisor interface, as
     /// "supervisor").
     pub fn grant(&mut self, component: &str, held: &str) {
         self.grants.push((component.into(), held.into()));
@@ -380,15 +381,15 @@ impl Supervisor {
     /// `memory`, and start it.
     fn create(&mut self, index: usize, name: String, component: component::Reader, memory: Memory, dynamic: Option<api::Dynamic>) -> Result<(), StartError> {
         let on_end = component.get_on_end().map_err(|_| StartError::BadComponent)?;
-        let (launcher_cap, api) = (new_slot(), new_slot());
+        let (parent_cap, api) = (new_slot(), new_slot());
         let ep = slot(self.endpoint);
-        slot(launcher_cap).mint_from(ep, rights::WRITE | rights::GRANT, INSTANCE_BADGE + index).expect("init: badge");
+        slot(parent_cap).mint_from(ep, rights::WRITE | rights::GRANT, INSTANCE_BADGE + index).expect("init: badge");
         slot(api).mint_from(ep, CLIENT_RIGHTS, API_BADGE + index).expect("init: badge");
         let objects = slots::alloc_range(OBJECT_SLOTS).expect("init: slots for an instance");
         let kept = match keep(component) {
             Ok(kept) => kept,
             Err(error) => {
-                for s in [launcher_cap, api] {
+                for s in [parent_cap, api] {
                     drop_original(s);
                 }
                 slots::free_range(objects, OBJECT_SLOTS);
@@ -402,7 +403,7 @@ impl Supervisor {
                 return Err(error);
             }
         };
-        let instance = Instance { name, component: kept, memory, objects, launcher: launcher_cap, api, on_end, started: time(), rapid: 0, dynamic };
+        let instance = Instance { name, component: kept, memory, objects, parent_cap, api, on_end, started: time(), rapid: 0, dynamic };
         if let Err(error) = self.launch(component, &instance) {
             self.destroy(instance);
             return Err(error);
@@ -430,7 +431,7 @@ impl Supervisor {
     }
 
     /// Build and start a process of `component` for `instance`, from its
-    /// memory, with its launcher.
+    /// memory, with its parent capability.
     fn launch(&mut self, component: component::Reader, instance: &Instance) -> Result<(), StartError> {
         let bad = |_| StartError::BadComponent;
         let name = &instance.name;
@@ -516,8 +517,8 @@ impl Supervisor {
             max_priority: limits.get_max_priority() as usize,
             cnode_radix: limits.get_cnode_bits() as usize,
             stack_pages: limits.get_stack_pages() as usize,
-            budget_bits: (spare_bits > 0).then_some(spare_bits as usize),
-            launcher: Some(instance.launcher),
+            spare_bits: (spare_bits > 0).then_some(spare_bits as usize),
+            parent_endpoint: Some(instance.parent_cap),
             account,
             imports: &imports,
             bootstrap,
@@ -525,7 +526,7 @@ impl Supervisor {
         let parent = Parent { untyped, ..self.parent };
         let mut slots = Slots { next: instance.objects, end: instance.objects + OBJECT_SLOTS };
         let started = loader::load(image, &parent, &mut slots, &launch).and_then(|p| {
-            tcb::set_fault_handler(p.tcb, Some(instance.launcher))?;
+            tcb::set_fault_handler(p.tcb, Some(instance.parent_cap))?;
             Ok(p.start()?)
         });
         // Moved capabilities are gone from the table either way, and the
@@ -562,7 +563,7 @@ impl Supervisor {
 
     /// Destroy everything instance `instance` was built from, keeping its
     /// memory (empty, with the account's reservation and the composition's
-    /// limit), its launcher and its exports, for a new process.
+    /// limit), its parent capability and its exports, for a new process.
     fn reset(&mut self, instance: &Instance) -> Result<(), StartError> {
         match instance.memory {
             Memory::Untyped(memory) => {
@@ -576,7 +577,7 @@ impl Supervisor {
                 account::set_limit(control, limit).map_err(|_| StartError::OverLimit)?;
             }
         }
-        for original in [instance.launcher, instance.api] {
+        for original in [instance.parent_cap, instance.api] {
             let _ = slot(original).revoke();
         }
         for object in instance.objects..instance.objects + OBJECT_SLOTS {
@@ -655,7 +656,7 @@ impl Supervisor {
     /// handle and waiter are left for the caller.
     fn destroy(&mut self, instance: Instance) -> Option<api::Dynamic> {
         Self::end_memory(&instance.memory);
-        for original in [instance.launcher, instance.api] {
+        for original in [instance.parent_cap, instance.api] {
             drop_original(original);
         }
         slots::free_range(instance.objects, OBJECT_SLOTS);
@@ -672,9 +673,9 @@ impl Supervisor {
     }
 
     /// Handle a message whose badge is one of the supervisor's, if it is:
-    /// from an instance's launcher capability (an exit or a fault ends the
+    /// from an instance's parent capability (an exit or a fault ends the
     /// instance, and restarts it if it failed and its component says so;
-    /// `CLIENT` asks about a client of its exports), on the instance API, or
+    /// `CLIENT` asks about a client of its exports), on the Supervisor interface, or
     /// on a handle.
     pub fn handle(&mut self, badge: usize, label: usize, words: &[usize], caps: usize, reply: usize) -> Option<Answer> {
         let index = badge & 0xff;
@@ -689,8 +690,8 @@ impl Supervisor {
             _ => return None,
         }
         let (success, end) = match label {
-            launcher::CLIENT => return Some(self.client(index, words.first().copied().unwrap_or(0))),
-            launcher::EXIT => {
+            parent::CLIENT => return Some(self.client(index, words.first().copied().unwrap_or(0))),
+            parent::EXIT => {
                 let code = words.first().copied().unwrap_or(0);
                 let name = &self.instances[index].as_ref().unwrap().name;
                 if code == 0 {
@@ -715,7 +716,7 @@ impl Supervisor {
             OnEnd::Forget | OnEnd::Restart => self.finish(index, end, true),
             OnEnd::EndBoot => {
                 self.finish(index, end, true);
-                debug::halt(!success)
+                print::halt(!success)
             }
         }
         Some(Answer::Nothing)
@@ -726,8 +727,8 @@ impl Supervisor {
     fn client(&self, index: usize, badge: usize) -> Answer {
         let asker = &self.instances[index].as_ref().unwrap().name;
         let client = self.clients.iter().find(|c| c.badge == badge && self.exports[c.export].component == *asker);
-        let Some(client) = client else { return Answer::Reply(launcher::NO_SUCH_CLIENT, Vec::new(), Vec::new()) };
-        let name = &client.component.as_bytes()[..client.component.len().min(launcher::MAX_NAME)];
+        let Some(client) = client else { return Answer::Reply(parent::NO_SUCH_CLIENT, Vec::new(), Vec::new()) };
+        let name = &client.component.as_bytes()[..client.component.len().min(parent::MAX_NAME)];
         let mut words = vec![0usize; 1 + name.len().div_ceil(8)];
         words[0] = name.len();
         for (i, &byte) in name.iter().enumerate() {

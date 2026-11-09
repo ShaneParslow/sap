@@ -7,12 +7,12 @@ use sap_process::process_slot;
 use sap_rt::abi::{attr, object, rights};
 use sap_rt::address::mapped;
 use sap_rt::cnode::SlotRef;
-use sap_rt::{ipc, println, slots, sys, untyped, vspace};
+use sap_rt::{endpoint, println, slots, sys, untyped, vspace};
 use capnp::message::{Builder, Reader, ReaderOptions, SegmentArray, SingleSegmentAllocator};
 use sap_interfaces::echo;
 use sap_interfaces::echo_capnp::{echo_reply as reply, echo_request as request};
 use sap_loader::{self as loader, Give, Launch, Parent, Slots, LAUNCH};
-use sap_ring::transfer::{Frames, Sender, TransferError, MAX_LEN, MAX_PAGES};
+use sap_ring::pages::{Frames, Sender, TransferError, MAX_LEN, MAX_PAGES};
 use sap_ring::{as_bytes, as_bytes_mut, Consumer, Layout as RingLayout, Producer, RingError, PAGE};
 use crate::{Env, expect, slot, untyped_at_least};
 use crate::processes::{Mode, PEER, peer_bootstrap};
@@ -246,27 +246,27 @@ pub fn check_echo_service(info: &Env) {
     // a 100-byte message and gets it back with an error record.
     let spare = slots.next;
     slots.next += 1;
-    let mut lie = |id: u64, cap: ipc::Give, window: usize, why: &str| {
+    let mut lie = |id: u64, cap: endpoint::Give, window: usize, why: &str| {
         out.send(echo::TRANSFER, id, &[]);
-        ipc::set_receive_window(process_slot::CNODE, window, 1);
-        let returned = ipc::call(ep, echo::TRANSFER as usize, &[100, id as usize], &[cap], &mut []).expect("call");
+        endpoint::set_receive_window(process_slot::CNODE, window, 1);
+        let returned = endpoint::call(ep, echo::TRANSFER as usize, &[100, id as usize], &[cap], &mut []).expect("call");
         assert_eq!(returned.info.extra_caps(), 1, "the capability comes back: {why}");
         assert_eq!(back.recv(&mut reply_words).map(|r| (r.kind, r.id)), Ok((echo::ERROR, id)), "{why}");
     };
     // Keeping a copy of a frame would let the sender change the message
     // while the peer reads it.
     expect("keep a copy", slot(spare).copy_from(slot(first), rights::ALL), Ok(()));
-    lie(3000, ipc::Give::moved(first), first, "a frame the sender shares");
+    lie(3000, endpoint::Give::moved(first), first, "a frame the sender shares");
     expect("drop the copy", slot(spare).delete(), Ok(()));
 
     // A frame still mapped by the sender (moving a capability keeps its
     // mapping), which the sender could write through.
     expect("map a frame here", vspace::map_frame(first, process_slot::VSPACE, TRANSFER_HERE, rights::READ | rights::WRITE, attr::EXECUTE_NEVER), Ok(()));
-    lie(3001, ipc::Give::moved(first), first, "a frame the sender maps");
+    lie(3001, endpoint::Give::moved(first), first, "a frame the sender maps");
     expect("unmap it", vspace::unmap_frame(first), Ok(()));
     // Not a frame: an endpoint, which the peer would call if it invoked it
     // to map it.
-    lie(3002, ipc::Give::copy(ep), spare, "a capability that isn't a frame");
+    lie(3002, endpoint::Give::copy(ep), spare, "a capability that isn't a frame");
     expect("drop it", slot(spare).delete(), Ok(()));
 
     // Then requests of up to 60 KiB go through.

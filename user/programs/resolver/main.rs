@@ -45,7 +45,7 @@ use sap_interfaces::words;
 use sap_process::process_slot;
 use sap_rt::abi::MAX_MESSAGE_LENGTH;
 use sap_rt::runtime::{self, Memory, Resources};
-use sap_rt::{ipc, println, process};
+use sap_rt::{endpoint, println, startup};
 
 /// Where the heap grows.
 const HEAP: core::ops::Range<usize> = 0x08_0000_0000..0x08_4000_0000;
@@ -268,18 +268,18 @@ fn add(compositions_cap: usize, planned: &[Planned], index: usize, programs: &[c
     }
     let mut out = [0usize; MAX_MESSAGE_LENGTH];
     let n = words::pack(&message, &mut out).unwrap_or_else(|| panic!("resolver: {} is too large for one call", p.name));
-    let reply = ipc::call(compositions_cap, compositions::ADD, &out[..n], &[], &mut []).expect("resolver: add");
+    let reply = endpoint::call(compositions_cap, compositions::ADD, &out[..n], &[], &mut []).expect("resolver: add");
     u16::try_from(reply.info.label()).ok().and_then(|l| Status::try_from(l).ok()).unwrap_or(Status::BadRequest)
 }
 
 #[unsafe(no_mangle)]
 fn sap_main(a0: usize, _: usize, _: usize) -> ! {
     // SAFETY: the loader started this process with its startup record.
-    let startup = unsafe { process::startup(a0) };
+    let startup = unsafe { startup::record(a0) };
     let free = startup.free;
     runtime::start(Resources { cnode: process_slot::CNODE, slots: free.start..free.end, memory: Memory::Account(process_slot::ACCOUNT), vspace: process_slot::VSPACE, heap: HEAP });
     // The bootstrap message, copied to the heap: aligned words to read.
-    let bytes = process::bootstrap(startup);
+    let bytes = startup::bootstrap(startup);
     let mut copy = vec![0u64; bytes.len().div_ceil(8)];
     for (i, &byte) in bytes.iter().enumerate() {
         copy[i / 8] |= (byte as u64) << (8 * (i % 8));
@@ -290,7 +290,7 @@ fn sap_main(a0: usize, _: usize, _: usize) -> ! {
     options.traversal_limit_in_words(Some(1 << 20));
     let reader = Reader::new(SegmentArray::new(&segment), options);
     let imports = reader.get_root::<resolver_bootstrap::Reader>().expect("resolver: bootstrap message");
-    let compositions_cap = process::import(startup, imports.get_compositions()).expect("resolver: no compositions import");
+    let compositions_cap = startup::import(startup, imports.get_compositions()).expect("resolver: no compositions import");
     let programs: Vec<catalog_entry::Reader> = imports.get_programs().expect("resolver: programs").iter().collect();
     let request = imports.get_request().expect("resolver: request");
 
@@ -309,7 +309,7 @@ fn sap_main(a0: usize, _: usize, _: usize) -> ! {
         let status = add(compositions_cap, &planned, i, &programs);
         assert!(status == Status::Ok, "resolver: the supervisor refused {}: {status:?}", p.name);
     }
-    let reply = ipc::call(compositions_cap, compositions::ENACT, &[], &[], &mut []).expect("resolver: enact");
+    let reply = endpoint::call(compositions_cap, compositions::ENACT, &[], &[], &mut []).expect("resolver: enact");
     assert_eq!(reply.info.label(), Status::Ok as usize, "resolver: enacting failed");
-    process::exit(0)
+    sap_rt::exit(0)
 }

@@ -1,22 +1,23 @@
-//! What a process started by a launcher receives: its startup record and
-//! bootstrap message (the process ABI, `sap_process`).
+//! What a process started by a parent receives: its startup record and
+//! bootstrap message, and how it reports its end (the process ABI,
+//! `sap_process`).
 
-use sap_process::{launcher, process_slot, Startup, BOOTSTRAP_OFFSET, MAX_BOOTSTRAP};
+use sap_process::{parent, process_slot, Startup, BOOTSTRAP_OFFSET, MAX_BOOTSTRAP};
 use sap_sys::address::mapped;
 
-/// The startup record whose address the launcher passed in `a0`.
+/// The startup record whose address the parent passed in `a0`.
 ///
 /// # Safety
 ///
-/// `a0` must be the first argument the launcher started this process's
+/// `a0` must be the first argument the parent started this process's
 /// main thread with, and the page must stay mapped, as the loader leaves it.
-pub unsafe fn startup(a0: usize) -> &'static Startup {
-    // SAFETY: the launcher mapped the record read-only at `a0`, and nobody
+pub unsafe fn record(a0: usize) -> &'static Startup {
+    // SAFETY: the parent mapped the record read-only at `a0`, and nobody
     // writes it after the process starts.
     unsafe { &*mapped::<Startup>(a0) }
 }
 
-/// The bootstrap message that follows `startup` in its pages, in the flat
+/// The bootstrap message that follows the startup record in its pages, in the flat
 /// Cap'n Proto encoding.
 pub fn bootstrap(startup: &'static Startup) -> &'static [u8] {
     let len = startup.bootstrap_len.min(MAX_BOOTSTRAP);
@@ -33,11 +34,11 @@ pub fn import(startup: &Startup, index: u32) -> Option<usize> {
     (slot < startup.imports.end).then_some(slot)
 }
 
-/// Report exit with `code` (0 for success) to the launcher, then stop. The
-/// launcher normally destroys the process when it hears; if nobody
+/// Report exit with `code` (0 for success) to the parent, then stop. The
+/// parent normally destroys the process when it hears; if nobody
 /// listens, the thread suspends itself.
 pub fn exit(code: usize) -> ! {
-    let _ = sap_sys::ipc::send(process_slot::LAUNCHER, launcher::EXIT, &[code], &[]);
+    let _ = sap_sys::endpoint::send(process_slot::PARENT, parent::EXIT, &[code], &[]);
     loop {
         let _ = sap_sys::tcb::suspend(process_slot::TCB);
     }

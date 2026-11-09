@@ -33,7 +33,7 @@ pub mod echo {
     pub const STOP: u32 = 5;
     /// An `echo_capnp::EchoRequest` too large for the ring follows by page
     /// transfer, as a call on the peer's endpoint with this label (the
-    /// `sap_ring::transfer` protocol); no body. Its reply comes as a record.
+    /// `sap_ring::pages` protocol); no body. Its reply comes as a record.
     pub const TRANSFER: u32 = 6;
     /// Bytes to sum (the measurement peer); a `SUM` record answers.
     pub const BYTES: u32 = 7;

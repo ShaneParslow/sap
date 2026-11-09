@@ -73,12 +73,13 @@ pub struct Launch<'a> {
     pub cnode_radix: usize,
     /// Size of the main thread's stack, in pages.
     pub stack_pages: usize,
-    /// log2 of the size of the untyped memory the process gets as its
-    /// budget, made from the caller's; none if `None`.
-    pub budget_bits: Option<usize>,
+    /// log2 of the size of the spare untyped memory the process gets as
+    /// its own (`process_slot::UNTYPED`), made from the caller's; none if
+    /// `None`.
+    pub spare_bits: Option<usize>,
     /// The caller's endpoint capability to copy into the process's
-    /// launcher slot (normally badged, so the caller knows who calls).
-    pub launcher: Option<usize>,
+    /// parent slot (normally badged, so the caller knows who calls).
+    pub parent_endpoint: Option<usize>,
     /// The caller's capability to the process's memory account, to copy
     /// into its account slot.
     pub account: Option<usize>,
@@ -98,15 +99,15 @@ pub enum Give {
     Move,
 }
 
-/// The defaults: no budget, no launcher, no imports, a 64-slot CNode, a
+/// The defaults: no spare untyped, no parent, no imports, a 64-slot CNode, a
 /// 16 KiB stack and no right to raise priorities.
 pub const LAUNCH: Launch<'static> = Launch {
     priority: 0,
     max_priority: 0,
     cnode_radix: DEFAULT_CNODE_RADIX,
     stack_pages: DEFAULT_STACK_PAGES,
-    budget_bits: None,
-    launcher: None,
+    spare_bits: None,
+    parent_endpoint: None,
     account: None,
     imports: &[],
     bootstrap: &[],
@@ -405,12 +406,12 @@ pub fn load(image: &[u8], parent: &Parent, slots: &mut Slots, launch: &Launch) -
     process.give(parent, process_slot::CNODE, guarded, rights::ALL)?;
     process.give(parent, process_slot::VSPACE, space, rights::ALL)?;
     process.give_away(parent, process_slot::IPC_BUFFER, buffer)?;
-    if let Some(bits) = launch.budget_bits {
-        let budget = retype(parent, slots, object::UNTYPED, bits)?;
-        process.give_away(parent, process_slot::UNTYPED, budget)?;
+    if let Some(bits) = launch.spare_bits {
+        let spare = retype(parent, slots, object::UNTYPED, bits)?;
+        process.give_away(parent, process_slot::UNTYPED, spare)?;
     }
-    if let Some(launcher) = launch.launcher {
-        process.give(parent, process_slot::LAUNCHER, launcher, rights::ALL)?;
+    if let Some(endpoint) = launch.parent_endpoint {
+        process.give(parent, process_slot::PARENT, endpoint, rights::ALL)?;
     }
     if let Some(account) = launch.account {
         process.give(parent, process_slot::ACCOUNT, account, rights::ALL)?;
