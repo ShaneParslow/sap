@@ -1,5 +1,5 @@
 //! Text output and the halt call. `print!` and `println!` write to the log
-//! (`interfaces/log.capnp`) once the program has one (`set_log`), and to
+//! (`interfaces/system/log.capnp`) once the program has one (`set_log`), and to
 //! the kernel's debug console before that or if the log fails.
 //!
 //! TODO: programs without a log (the root task, processes the factory

@@ -1,9 +1,10 @@
 //! The supervisor: starts the components of a composition
-//! (`interfaces/supervisor.capnp`) and enforces their limits. It holds a
+//! (`interfaces/system/supervisor.capnp`) and enforces their limits. It holds a
 //! table of named capabilities that compositions route from. An instance's
-//! memory is a memory account (`interfaces/memory.capnp`), a child of the
+//! memory is a memory account (`interfaces/system/memory.capnp`), a child of the
 //! supervisor's, which the instance is built from a chunk of; or, for the
-//! memory manager only, a region the supervisor carves from its own pool.
+//! memory manager only, untyped memory the supervisor carves from its own
+//! pool.
 //! Either way, ending an instance is one revoke.
 //!
 //! It owns the components' exports: it makes each export's endpoint when it
@@ -38,8 +39,9 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use capnp::message::{Builder, SingleSegmentAllocator};
-use sap_interfaces::memory_capnp::{ROOT_CONTROLLER, ROOT_HOLDER};
-use sap_interfaces::supervisor_capnp::{component, composition, limits, route, OnEnd};
+use sap_interfaces::memory_capnp::{ROOT_ACCOUNT, ROOT_CONTROL};
+use sap_interfaces::component_capnp::limits;
+use sap_interfaces::supervisor_capnp::{component, composition, route, OnEnd};
 use sap_interfaces::words;
 use sap_loader::{self as loader, Give, Launch, Parent, Slots};
 use sap_process::launcher;
@@ -68,8 +70,8 @@ const OBJECT_SLOTS: usize = 256;
 /// starting before the supervisor stops restarting it.
 const MAX_RAPID: u32 = 3;
 /// The groups a supervisor may hold: names standing for a set of
-/// capabilities whose size depends on the machine. `ram`: the RAM untyped
-/// regions, for the memory manager.
+/// capabilities whose number depends on the machine. `ram`: the RAM, as
+/// untyped memory, for the memory manager.
 pub const GROUPS: &[&str] = &["ram"];
 /// The rights of a client's capability to an export: call, and pass
 /// capabilities both ways.
@@ -123,11 +125,11 @@ pub enum StartError {
 
 /// Where an instance's objects come from.
 enum Memory {
-    /// An untyped region carved from the pool.
-    Region(usize),
-    /// A memory account: the capabilities of its holder and controller,
+    /// Untyped memory carved from the pool.
+    Untyped(usize),
+    /// A memory account: its own capability and its control,
     /// and the chunk the instance is built from.
-    Account { holder: usize, controller: usize, chunk: usize },
+    Account { account: usize, control: usize, chunk: usize },
 }
 
 /// How an instance ended for good: the schema's `End`.
@@ -188,10 +190,10 @@ pub struct Supervisor {
     /// Where received capabilities arrive: `MAX_EXTRA_CAPS` slots.
     pub window: usize,
     parent: Parent,
-    /// The untyped region regions are carved from.
+    /// The untyped memory instances' `untyped` limits are carved from.
     pool: usize,
-    /// The holder's capability to the supervisor's account, once the
-    /// memory manager runs, and the controller's.
+    /// The capability to the supervisor's account, once the memory
+    /// manager runs, and its control.
     account: Option<(usize, usize)>,
     held: Vec<(String, usize)>,
     /// The groups it holds, each a name of `GROUPS`.
@@ -318,11 +320,11 @@ impl Supervisor {
         if composition.has_accounts() {
             let accounts = composition.get_accounts().map_err(bad)?;
             let export = self.export(text(accounts.get_component())?, text(accounts.get_name())?).ok_or(StartError::BadComponent)?;
-            let (holder, controller) = (new_slot(), new_slot());
+            let (account, control) = (new_slot(), new_slot());
             let endpoint = slot(self.exports[export].endpoint);
-            slot(holder).mint_from(endpoint, CLIENT_RIGHTS, ROOT_HOLDER as usize).expect("init: badge");
-            slot(controller).mint_from(endpoint, rights::WRITE, ROOT_CONTROLLER as usize).expect("init: badge");
-            self.account = Some((holder, controller));
+            slot(account).mint_from(endpoint, CLIENT_RIGHTS, ROOT_ACCOUNT as usize).expect("init: badge");
+            slot(control).mint_from(endpoint, rights::WRITE, ROOT_CONTROL as usize).expect("init: badge");
+            self.account = Some((account, control));
         }
         for component in components {
             self.start(component)?;
@@ -338,22 +340,22 @@ impl Supervisor {
             slots::free_range(caps, 2);
             return Err(StartError::OverLimit);
         }
-        Ok(Memory::Account { holder: caps, controller: caps + 1, chunk: new_slot() })
+        Ok(Memory::Account { account: caps, control: caps + 1, chunk: new_slot() })
     }
 
-    /// The memory an instance with `limits` is built from: a region, or an
+    /// The memory an instance with `limits` is built from: untyped, or an
     /// account of the supervisor's (whose chunk `launch` takes).
     fn memory(&self, limits: limits::Reader) -> Result<Memory, StartError> {
         match limits.get_memory().which().map_err(|_| StartError::BadComponent)? {
-            limits::memory::Region(_) => {
-                let region = region_terms(limits)?;
+            limits::memory::Untyped(_) => {
+                let terms = untyped_terms(limits)?;
                 let memory = new_slot();
                 let root = SlotRef { root: init_slot::CNODE, index: 0, depth: 0 };
-                if untyped::retype(self.pool, object::UNTYPED, region.get_bits() as usize, root, memory, 1).is_err() {
+                if untyped::retype(self.pool, object::UNTYPED, terms.get_bits() as usize, root, memory, 1).is_err() {
                     slots::free(memory);
                     return Err(StartError::OverLimit);
                 }
-                Ok(Memory::Region(memory))
+                Ok(Memory::Untyped(memory))
             }
             limits::memory::Account(_) => Self::new_account(self.account.ok_or(StartError::BadComponent)?.0, limits),
         }
@@ -362,12 +364,12 @@ impl Supervisor {
     /// Destroy everything made from `memory`, and give it back.
     fn end_memory(memory: &Memory) {
         match *memory {
-            Memory::Region(region) => drop_original(region),
-            Memory::Account { holder, controller, chunk } => {
-                if let Err(error) = account::destroy(controller) {
+            Memory::Untyped(memory) => drop_original(memory),
+            Memory::Account { account, control, chunk } => {
+                if let Err(error) = sap_rt::account::destroy(control) {
                     println!("init: ending an account failed: {error:?}");
                 }
-                for cap in [holder, controller, chunk] {
+                for cap in [account, control, chunk] {
                     drop_slot(cap);
                 }
             }
@@ -458,7 +460,7 @@ impl Supervisor {
                         None => Source::Held(self.held(name).ok_or(StartError::BadComponent)?, held.get_move()),
                     }
                 }
-                route::Export(to) => {
+                route::Client(to) => {
                     let to = to.map_err(bad)?;
                     let export = self.export(text(to.get_component())?, text(to.get_name())?).ok_or(StartError::BadComponent)?;
                     // The interface the importer expects must be the one served.
@@ -477,14 +479,14 @@ impl Supervisor {
             });
         }
 
-        // What the process is built from: the region, or a chunk of the
+        // What the process is built from: its untyped, or a chunk of the
         // account.
-        let (untyped, budget_bits, account) = match instance.memory {
-            Memory::Region(region) => (region, region_terms(limits)?.get_budget_bits(), None),
-            Memory::Account { holder, chunk, .. } => {
+        let (untyped, spare_bits, account) = match instance.memory {
+            Memory::Untyped(memory) => (memory, untyped_terms(limits)?.get_spare_bits(), None),
+            Memory::Account { account, chunk, .. } => {
                 let bits = account_terms(limits)?.get_process_bits();
-                account::allocate(holder, bits, init_slot::CNODE, chunk).map_err(|_| StartError::OverLimit)?;
-                (chunk, 0, Some(holder))
+                sap_rt::account::allocate(account, bits, init_slot::CNODE, chunk).map_err(|_| StartError::OverLimit)?;
+                (chunk, 0, Some(account))
             }
         };
 
@@ -514,7 +516,7 @@ impl Supervisor {
             max_priority: limits.get_max_priority() as usize,
             cnode_radix: limits.get_cnode_bits() as usize,
             stack_pages: limits.get_stack_pages() as usize,
-            budget_bits: (budget_bits > 0).then_some(budget_bits as usize),
+            budget_bits: (spare_bits > 0).then_some(spare_bits as usize),
             launcher: Some(instance.launcher),
             account,
             imports: &imports,
@@ -544,7 +546,7 @@ impl Supervisor {
                 terms.get_reservation() >> 10,
                 terms.get_limit() >> 10
             ),
-            _ => println!("init: started {} ({} KiB image, in a region of the pool)", name, image.len() / 1024),
+            _ => println!("init: started {} ({} KiB image, in untyped memory from the pool)", name, image.len() / 1024),
         }
         Ok(())
     }
@@ -563,15 +565,15 @@ impl Supervisor {
     /// limit), its launcher and its exports, for a new process.
     fn reset(&mut self, instance: &Instance) -> Result<(), StartError> {
         match instance.memory {
-            Memory::Region(region) => {
-                let _ = slot(region).revoke();
+            Memory::Untyped(memory) => {
+                let _ = slot(memory).revoke();
             }
-            Memory::Account { controller, .. } => {
-                account::revoke(controller).map_err(|_| StartError::OverLimit)?;
+            Memory::Account { control, .. } => {
+                account::revoke(control).map_err(|_| StartError::OverLimit)?;
                 let limit = with_component(&instance.component, |component| {
                     Ok(account_terms(component.get_limits().map_err(|_| StartError::BadComponent)?)?.get_limit())
                 })?;
-                account::set_limit(controller, limit).map_err(|_| StartError::OverLimit)?;
+                account::set_limit(control, limit).map_err(|_| StartError::OverLimit)?;
             }
         }
         for original in [instance.launcher, instance.api] {
@@ -761,14 +763,14 @@ fn with_component<T>(kept: &[usize], f: impl FnOnce(component::Reader) -> Result
     f(reader.get_root::<component::Reader>().map_err(|_| StartError::BadComponent)?)
 }
 
-fn region_terms(limits: limits::Reader<'_>) -> Result<sap_interfaces::supervisor_capnp::region::Reader<'_>, StartError> {
+fn untyped_terms(limits: limits::Reader<'_>) -> Result<sap_interfaces::component_capnp::untyped::Reader<'_>, StartError> {
     match limits.get_memory().which() {
-        Ok(limits::memory::Region(Ok(region))) => Ok(region),
+        Ok(limits::memory::Untyped(Ok(terms))) => Ok(terms),
         _ => Err(StartError::BadComponent),
     }
 }
 
-fn account_terms(limits: limits::Reader<'_>) -> Result<sap_interfaces::supervisor_capnp::account::Reader<'_>, StartError> {
+fn account_terms(limits: limits::Reader<'_>) -> Result<sap_interfaces::component_capnp::account::Reader<'_>, StartError> {
     match limits.get_memory().which() {
         Ok(limits::memory::Account(Ok(terms))) => Ok(terms),
         _ => Err(StartError::BadComponent),

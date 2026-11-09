@@ -16,7 +16,7 @@ pub enum Memory {
     /// One untyped region for the runtime's own objects and the heap,
     /// which stops growing when it is used up. Revoking it destroys them.
     Untyped(usize),
-    /// A memory account (`interfaces/memory.capnp`): the runtime takes
+    /// A memory account (`interfaces/system/memory.capnp`): the runtime takes
     /// chunks of it as the heap grows.
     Account(usize),
 }

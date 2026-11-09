@@ -1,5 +1,5 @@
 //! The log service: writes what components send to the log
-//! (`interfaces/log.capnp`) to the kernel's debug console, each line after
+//! (`interfaces/system/log.capnp`) to the kernel's debug console, each line after
 //! the name of the component that wrote it. A call's badge says which
 //! client it is; the supervisor, which made each client's capability for
 //! its route, says which component a badge is (`launcher::CLIENT`). The
@@ -15,11 +15,20 @@
 // Pointers come from `sap_sys::address::mapped`, never from integer casts.
 #![deny(implicit_provenance_casts, integer_to_ptr_transmutes)]
 
+/// Generated from the component schemas of `log`
+/// (`user/programs/<name>/<name>.capnp`).
+mod components {
+    #[allow(clippy::all, dead_code)]
+    pub mod log_capnp {
+        include!(concat!(env!("OUT_DIR"), "/log/log_capnp.rs"));
+    }
+}
+
 use core::fmt::Write;
 
 use capnp::message::{Reader, ReaderOptions, SegmentArray};
+use components::log_capnp::log_bootstrap;
 use sap_interfaces::log_capnp::log::write_params;
-use sap_interfaces::log_capnp::log_imports;
 use sap_interfaces::{methods, words};
 use sap_process::{launcher, process_slot, Startup};
 use sap_rt::abi::{object, MAX_MESSAGE_LENGTH};
@@ -80,7 +89,7 @@ impl Client {
 fn endpoint(startup: &'static Startup) -> Result<usize, capnp::Error> {
     let segments = [process::bootstrap(startup)];
     let reader = Reader::new(SegmentArray::new(&segments), ReaderOptions::new());
-    let imports = reader.get_root::<log_imports::Reader>()?;
+    let imports = reader.get_root::<log_bootstrap::Reader>()?;
     Ok(process::import(startup, imports.get_endpoint()).expect("log: no such import"))
 }
 

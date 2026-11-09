@@ -1,6 +1,6 @@
 //! The kernel checks: the program the root supervisor starts at boot to
 //! check the kernel's features as they arrive, and the services' too. Its
-//! bootstrap message (`CheckImports` in `interfaces/check.capnp`) gives it
+//! bootstrap message (`CheckBootstrap` in `check.capnp`) gives it
 //! the ASID pool, which only the root task holds at boot; its untyped
 //! memory is chunks of its memory account. Its output
 //! goes to the log, which puts the component's name before each line. It
@@ -29,6 +29,19 @@ mod rt;
 mod channels;
 mod cheri;
 
+/// Generated from the component schemas of `check`, `peer`
+/// (`user/programs/<name>/<name>.capnp`).
+mod components {
+    #[allow(clippy::all, dead_code)]
+    pub mod check_capnp {
+        include!(concat!(env!("OUT_DIR"), "/check/check_capnp.rs"));
+    }
+    #[allow(clippy::all, dead_code)]
+    pub mod peer_capnp {
+        include!(concat!(env!("OUT_DIR"), "/peer/peer_capnp.rs"));
+    }
+}
+
 use sap_process::{process_slot, startup_flags, Startup};
 use sap_rt::abi::{SlotRange, UntypedDesc, MAX_BOOT_UNTYPED};
 use sap_rt::cnode::SlotRef;
@@ -36,7 +49,7 @@ use sap_rt::sys::Error;
 use sap_rt::runtime::{self, Memory, Resources};
 use sap_rt::{account, println, process};
 use capnp::message::{Reader, ReaderOptions, SegmentArray};
-use sap_interfaces::check_capnp::check_imports;
+use components::check_capnp::check_bootstrap;
 use accounts::check_accounts;
 use caps::{check_cnode_operations, check_retype};
 use channels::{check_capnp, check_echo_service, check_ring, measure_transfer};
@@ -89,7 +102,7 @@ const CHUNKS: [u8; 4] = [16, 18, 20, 22];
 fn env(startup: &'static Startup) -> Result<Env, capnp::Error> {
     let segments = [process::bootstrap(startup)];
     let reader = Reader::new(SegmentArray::new(&segments), ReaderOptions::new());
-    let imports = reader.get_root::<check_imports::Reader>()?;
+    let imports = reader.get_root::<check_bootstrap::Reader>()?;
     let import = |index: u32| process::import(startup, index).expect("check: no such import");
     let first = startup.free.start;
     let mut untyped_list = [UntypedDesc { paddr: 0, size_bits: 0, is_device: 0, _pad: [0; 6] }; MAX_BOOT_UNTYPED];

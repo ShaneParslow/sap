@@ -1,4 +1,4 @@
-//! Calls on memory accounts (`interfaces/memory.capnp`), laid out as
+//! Calls on memory accounts (`interfaces/system/memory.capnp`), laid out as
 //! `interfaces/README.md` describes. Messages are built on the stack: nothing here
 //! allocates, since the heap grows through an account.
 
@@ -99,8 +99,8 @@ pub fn release(account: usize, id: u64) -> Result<(), Error> {
     call(account, methods::memory_account::RELEASE, &params[..n], NONE).map(drop)
 }
 
-/// A child of `account` with `reservation` and `limit`: its holder's
-/// capability into slot `first` of the CNode at `cnode`, its controller's
+/// A child of `account` with `reservation` and `limit`: its own
+/// capability into slot `first` of the CNode at `cnode`, its control's
 /// into `first + 1`.
 pub fn child(account: usize, reservation: u64, limit: u64, cnode: usize, first: usize) -> Result<(), Error> {
     let (params, n) = message::<child_params::Owned>(|mut p| {

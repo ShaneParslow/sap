@@ -1,5 +1,5 @@
 //! The memory manager: holds the machine's RAM, as untyped regions from its
-//! supervisor (the `ram` group), and serves memory accounts (`interfaces/memory.capnp`) from
+//! supervisor (the `ram` group), and serves memory accounts (`interfaces/system/memory.capnp`) from
 //! it, as one pool.
 //!
 //! RAM is handed out in power-of-two chunks, split from the regions as a
@@ -10,9 +10,9 @@
 //!
 //! Each account's capabilities are badged copies of capabilities to the
 //! manager's endpoint it mints and keeps: badge (index + 1) * 2 for the
-//! holder's, + 1 for the controller's; ending an account revokes them. The
+//! account's own, + 1 for its control; ending an account revokes them. The
 //! root account's (index 0) are minted by the supervisor instead
-//! (`ROOT_HOLDER`, `ROOT_CONTROLLER`).
+//! (`ROOT_ACCOUNT`, `ROOT_CONTROL`).
 //!
 //! Its output goes to the debug console: it starts before the log.
 //! TODO: crash recovery: if the manager dies, its originals go, and the
@@ -26,15 +26,25 @@
 
 extern crate alloc;
 
+/// Generated from the component schemas of `memory`
+/// (`user/programs/<name>/<name>.capnp`).
+mod components {
+    #[allow(clippy::all, dead_code)]
+    pub mod memory_capnp {
+        include!(concat!(env!("OUT_DIR"), "/memory/memory_capnp.rs"));
+    }
+}
+
 use alloc::vec;
 use alloc::vec::Vec;
 
 use capnp::message::{Builder, Reader, ReaderOptions, SegmentArray, SingleSegmentAllocator};
+use components::memory_capnp::memory_bootstrap;
 use sap_interfaces::memory_capnp::account_control::set_limit_params;
 use sap_interfaces::memory_capnp::memory_account::{allocate_params, allocate_results, child_params, release_params, usage_results};
-use sap_interfaces::memory_capnp::{memory_imports, Status, ROOT_CONTROLLER, ROOT_HOLDER};
+use sap_interfaces::memory_capnp::{Status, ROOT_ACCOUNT, ROOT_CONTROL};
 
-const _: () = assert!(ROOT_HOLDER == 2 && ROOT_CONTROLLER == 3, "the root account is index 0");
+const _: () = assert!(ROOT_ACCOUNT == 2 && ROOT_CONTROL == 3, "the root account is index 0");
 use sap_interfaces::{methods, words};
 use sap_process::process_slot;
 use sap_rt::abi::{identify, object, rights, MAX_MESSAGE_LENGTH};
@@ -85,8 +95,8 @@ struct Account {
     /// What its children's reservations take of its own.
     reserved_by_children: u64,
     /// The manager's badged capabilities to it; 0 for the root's.
-    holder: usize,
-    controller: usize,
+    account_cap: usize,
+    control_cap: usize,
     alive: bool,
 }
 
@@ -235,7 +245,7 @@ impl Manager {
         let index = match self.accounts.iter().position(|x| !x.alive) {
             Some(index) => index,
             None => {
-                self.accounts.push(Account { parent: None, reservation: 0, limit: 0, own: 0, used: 0, reserved_by_children: 0, holder: 0, controller: 0, alive: false });
+                self.accounts.push(Account { parent: None, reservation: 0, limit: 0, own: 0, used: 0, reserved_by_children: 0, account_cap: 0, control_cap: 0, alive: false });
                 self.accounts.len() - 1
             }
         };
@@ -249,7 +259,7 @@ impl Manager {
         }
         self.accounts[a].reserved_by_children += reservation;
         self.accounts[index] =
-            Account { parent: Some(a), reservation, limit, own: 0, used: 0, reserved_by_children: 0, holder: caps, controller: caps + 1, alive: true };
+            Account { parent: Some(a), reservation, limit, own: 0, used: 0, reserved_by_children: 0, account_cap: caps, control_cap: caps + 1, alive: true };
         Ok(index)
     }
 
@@ -275,7 +285,7 @@ impl Manager {
         self.revoke(a);
         let account = &mut self.accounts[a];
         account.alive = false;
-        for cap in [account.holder, account.controller] {
+        for cap in [account.account_cap, account.control_cap] {
             let _ = slot(cap).revoke();
             let _ = slot(cap).delete();
             slots::free(cap);
@@ -299,13 +309,13 @@ impl Manager {
         Ok(())
     }
 
-    /// Serve one call from the holder (`controller` false) or the controller
-    /// of account `a`: the reply's label, words and capability.
-    fn serve(&mut self, a: usize, controller: bool, label: usize, words: &[usize], out: &mut [usize]) -> (Status, usize, Option<[usize; 2]>) {
+    /// Serve one call on account `a`'s own capability (`control` false) or
+    /// its control: the reply's label, words and capability.
+    fn serve(&mut self, a: usize, control: bool, label: usize, words: &[usize], out: &mut [usize]) -> (Status, usize, Option<[usize; 2]>) {
         let segment = [words::bytes(words)];
         let reader = words::reader(&segment);
         let refused = |status| (status, 0, None);
-        match (controller, label) {
+        match (control, label) {
             (false, methods::memory_account::ALLOCATE) => {
                 let Ok(params) = reader.get_root::<allocate_params::Reader>() else { return refused(Status::BadRequest) };
                 match self.allocate(a, params.get_size_bits()) {
@@ -328,7 +338,7 @@ impl Manager {
             (false, methods::memory_account::CHILD) => {
                 let Ok(params) = reader.get_root::<child_params::Reader>() else { return refused(Status::BadRequest) };
                 match self.child(a, params.get_reservation(), params.get_limit()) {
-                    Ok(c) => (Status::Ok, 0, Some([self.accounts[c].holder, self.accounts[c].controller])),
+                    Ok(c) => (Status::Ok, 0, Some([self.accounts[c].account_cap, self.accounts[c].control_cap])),
                     Err(status) => refused(status),
                 }
             }
@@ -372,7 +382,7 @@ fn encode<T: capnp::traits::Owned>(out: &mut [usize], build: impl FnOnce(T::Buil
 fn manager(startup: &'static sap_process::Startup) -> core::result::Result<Manager, capnp::Error> {
     let segments = [process::bootstrap(startup)];
     let reader = Reader::new(SegmentArray::new(&segments), ReaderOptions::new());
-    let imports = reader.get_root::<memory_imports::Reader>()?;
+    let imports = reader.get_root::<memory_bootstrap::Reader>()?;
     let import = |index: u32| process::import(startup, index).expect("memory: no such import");
     let mut blocks = Vec::new();
     for cap in import(imports.get_ram())..startup.imports.end {
@@ -381,7 +391,7 @@ fn manager(startup: &'static sap_process::Startup) -> core::result::Result<Manag
         blocks.push(Block { slot: cap, bits: region.size_bits as u8, paddr: region.paddr as u64, parent: None, state: State::Free });
     }
     let total = blocks.iter().map(|b| 1u64 << b.bits).sum();
-    let root = Account { parent: None, reservation: total, limit: total, own: 0, used: 0, reserved_by_children: 0, holder: 0, controller: 0, alive: true };
+    let root = Account { parent: None, reservation: total, limit: total, own: 0, used: 0, reserved_by_children: 0, account_cap: 0, control_cap: 0, alive: true };
     Ok(Manager { endpoint: import(imports.get_endpoint()), blocks, accounts: vec![root], next_id: 1, total, free: total })
 }
 
@@ -404,12 +414,12 @@ fn sap_main(a0: usize, _: usize, _: usize) -> ! {
     loop {
         let message = ipc::recv(manager.endpoint, reply, &mut words).expect("memory: receive");
         let words = &words[..message.info.length()];
-        // Badge (index + 1) * 2, + 1 for the controller: the root's are
-        // `ROOT_HOLDER` and `ROOT_CONTROLLER`.
+        // Badge (index + 1) * 2, + 1 for the control: the root's are
+        // `ROOT_ACCOUNT` and `ROOT_CONTROL`.
         let index = (message.badge / 2).wrapping_sub(1);
-        let controller = message.badge % 2 == 1;
+        let control = message.badge % 2 == 1;
         let (status, n, caps) = if index < manager.accounts.len() && manager.accounts[index].alive {
-            manager.serve(index, controller, message.info.label(), words, &mut out)
+            manager.serve(index, control, message.info.label(), words, &mut out)
         } else {
             (Status::BadRequest, 0, None)
         };

@@ -73,6 +73,7 @@ name = "check"
 version = "0.1.0"
 dependencies = [
  "capnp 0.27.2",
+ "capnpc",
  "sap-interfaces",
  "sap-loader",
  "sap-process",
@@ -163,6 +164,7 @@ name = "log"
 version = "0.1.0"
 dependencies = [
  "capnp 0.27.2",
+ "capnpc",
  "sap-interfaces",
  "sap-process",
  "sap-rt",
@@ -173,6 +175,7 @@ name = "memory"
 version = "0.1.0"
 dependencies = [
  "capnp 0.27.2",
+ "capnpc",
  "sap-interfaces",
  "sap-process",
  "sap-rt",
@@ -189,6 +192,7 @@ name = "peer"
 version = "0.1.0"
 dependencies = [
  "capnp 0.27.2",
+ "capnpc",
  "sap-interfaces",
  "sap-process",
  "sap-ring",
@@ -200,6 +204,7 @@ name = "resolver"
 version = "0.1.0"
 dependencies = [
  "capnp 0.27.2",
+ "capnpc",
  "sap-interfaces",
  "sap-process",
  "sap-rt",

@@ -7,10 +7,10 @@ sap ("sap is for sapabilities") is a capability-based operating system built aro
 - `kernel/` — kernel source (`kernel/arch/riscv/` first).
 - `abi/` — the kernel's binary interface, shared by the kernel and user code.
 - `user/` — userspace: runtime libraries in `user/lib/`, programs in `user/programs/`.
-- `interfaces/` — Cap'n Proto schemas.
+- `interfaces/` — Cap'n Proto schemas: `system/` (the system's interfaces, and `component.capnp`, how a program defines itself as a component) and `test/` (interfaces only the checks use). Each program's own schema, its bootstrap struct with its declarations, is `user/programs/<name>/<name>.capnp`.
 - `boot/` — boot requests: what the resolver runs, chosen with `SAP_BOOT=<name>` (a file here, or a program's name; `check` by default).
 - `tools/board/` — building and booting on real boards (`d1/`: the MangoPi MQ-Pro over USB).
-- `tools/manifests/` — host-only crate for init's build: reads programs' declarations (`interfaces/sap.capnp` annotations) into manifests for the boot pack, and the boot request into the resolver's bootstrap. Excluded from the workspace.
+- `tools/manifests/` — host-only crate for init's build: reads programs' declarations (`interfaces/system/component.capnp` annotations) into manifests for the boot pack, and the boot request into the resolver's bootstrap. Excluded from the workspace.
 - `toolchain/` — the CHERI toolchain and xfel as submodules, built by `toolchain/build.sh` into `toolchain/out/`.
 
 ## Notes and design

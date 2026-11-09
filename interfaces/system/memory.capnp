@@ -10,8 +10,8 @@
 # nothing is promised beyond the reservation (no overcommit). A child's
 # reservation is carved from its parent's.
 #
-# An account has two capabilities: the holder's, to allocate from it, and
-# the controller's, kept by whoever made it, to empty it, end it or set its
+# An account has two capabilities: the account itself, to allocate from,
+# and its control, kept by whoever made it, to empty it, end it or set its
 # limit. Destroying what a program built is one `revoke` of its account.
 #
 # Calls follow the convention in `README.md`; the reply's label is a
@@ -25,11 +25,11 @@ interface MemoryAccount {
   # to this account until released. `id` names it for `release`; `paddr`
   # is where it is, for DMA. Everything made from the chunk is destroyed
   # with it.
-  # Capabilities out: `memory`.
+  # Capabilities out: `untyped`.
   # Status: `badRequest` (size out of range), `overLimit` (this account or
   # one above it would exceed its limit), `outOfMemory` (no free chunk that
   # large outside others' reservations), `full` (the manager's tables).
-  allocate @0 (sizeBits :UInt8) -> (id :UInt64, paddr :UInt64, memory :Capability);
+  allocate @0 (sizeBits :UInt8) -> (id :UInt64, paddr :UInt64, untyped :Capability);
 
   # Give back chunk `id`: it and everything made from it are destroyed.
   # Status: `noSuchChunk` unless this account holds it.
@@ -37,10 +37,10 @@ interface MemoryAccount {
 
   # A child account with `reservation` carved from this one's unreserved
   # part and `limit` at most this one's (and at least the reservation).
-  # Capabilities out: `holder`, `controller`.
+  # Capabilities out: `account`, `control`.
   # Status: `overLimit` (reservation or limit too large), `badRequest`
   # (limit below reservation), `full`.
-  child @2 (reservation :UInt64, limit :UInt64) -> (holder :MemoryAccount, controller :AccountControl);
+  child @2 (reservation :UInt64, limit :UInt64) -> (account :MemoryAccount, control :AccountControl);
 
   # What the account holds, counting its children's, and its terms.
   usage @3 () -> (used :UInt64, reservation :UInt64, limit :UInt64);
@@ -75,20 +75,5 @@ enum Status {
 # The badges of the root account's capabilities, which the memory
 # manager's supervisor mints from the manager's export for itself. The
 # root account has all the RAM as its reservation and limit.
-const rootHolder :UInt64 = 2;
-const rootController :UInt64 = 3;
-
-using Sap = import "sap.capnp";
-
-# The bootstrap message of `memory`, the memory manager. A capability is
-# the index of one of its imports.
-struct MemoryImports $Sap.program("memory") $Sap.exports([(name = "account", interface = "memory.capnp:MemoryAccount")]) $Sap.limits((
-    memory = (region = (bits = 22, budgetBits = 20)), priority = 255, cnodeBits = 12, stackPages = 4)) {
-  # The receive side of its export, with all rights: it mints the
-  # accounts' capabilities from it.
-  endpoint @0 :UInt32 $Sap.serves("account");
-  # The first of the untyped regions of RAM it manages: the `ram` group,
-  # which runs to the end of its imports. Each one's size and address come
-  # from identifying it.
-  ram @1 :UInt32 $Sap.held("ram");
-}
+const rootAccount :UInt64 = 2;
+const rootControl :UInt64 = 3;

@@ -10,13 +10,12 @@ use sap_rt::cnode::SlotRef;
 use sap_rt::{ipc, println, slots, sys, untyped, vspace};
 use capnp::message::{Builder, Reader, ReaderOptions, SegmentArray, SingleSegmentAllocator};
 use sap_interfaces::echo;
-use sap_interfaces::echo_capnp::{reply, request};
-use sap_interfaces::peer_capnp::Mode;
+use sap_interfaces::echo_capnp::{echo_reply as reply, echo_request as request};
 use sap_loader::{self as loader, Give, Launch, Parent, Slots, LAUNCH};
 use sap_ring::transfer::{Frames, Sender, TransferError, MAX_LEN, MAX_PAGES};
 use sap_ring::{as_bytes, as_bytes_mut, Consumer, Layout as RingLayout, Producer, RingError, PAGE};
 use crate::{Env, expect, slot, untyped_at_least};
-use crate::processes::{PEER, peer_bootstrap};
+use crate::processes::{Mode, PEER, peer_bootstrap};
 
 /// Where a peer maps its channel (init maps each at an address of its own).
 const CHANNEL_THERE: usize = 0x20_0000_0000;

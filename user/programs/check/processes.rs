@@ -3,7 +3,7 @@
 //! restart.
 
 use sap_interfaces::methods::{instance, log, restartable, supervisor};
-use sap_interfaces::peer_capnp::restartable::count_results;
+use sap_interfaces::restartable_capnp::restartable::count_results;
 use sap_interfaces::supervisor_capnp::instance::wait_results;
 use sap_interfaces::supervisor_capnp::supervisor::start_params;
 use sap_interfaces::supervisor_capnp::{end, OnEnd, Status};
@@ -16,7 +16,7 @@ use sap_rt::cnode::SlotRef;
 use sap_rt::sys::Error;
 use sap_rt::{account, ipc, println, slots, tcb, untyped, vspace};
 use capnp::message::{Builder, SingleSegmentAllocator};
-use sap_interfaces::peer_capnp::{peer_imports, Mode};
+use crate::components::peer_capnp::peer_bootstrap;
 use sap_loader::{self as loader, Give, Launch, LoadError, Parent, Slots, LAUNCH};
 use sap_ring::as_bytes_mut;
 use crate::{Env, expect, slot, untyped_at_least};
@@ -24,26 +24,44 @@ use crate::{Env, expect, slot, untyped_at_least};
 /// The second program, built by this crate's build script.
 pub static PEER: &[u8] = include_bytes!(env!("PEER_ELF"));
 
-/// A peer's bootstrap message and its length, built in a buffer of its
-/// own: `mode`, then the indices of its
-/// imports in the order `connect_peer` and `check_process` give them.
-pub fn peer_bootstrap(mode: Mode, data_pages: usize) -> ([u8; 256], usize) {
-    peer_bootstrap_with(mode, data_pages, 0)
+/// What a peer does: `PeerBootstrap.mode`.
+#[derive(Clone, Copy)]
+pub enum Mode {
+    Call,
+    EchoWords,
+    ServeEcho,
+    Misbehave,
+    SumBytes,
+    Exit(u32),
+    Crash,
+    Restartable,
 }
 
-/// A peer's bootstrap message with an exit code, for `Mode::Exit`.
-fn peer_bootstrap_with(mode: Mode, data_pages: usize, exit_code: u32) -> ([u8; 256], usize) {
+/// A peer's bootstrap message and its length, built in a buffer of its
+/// own: `mode`, then the indices of its imports in the order `connect_peer`
+/// and `check_process` give them.
+pub fn peer_bootstrap(mode: Mode, data_pages: usize) -> ([u8; 256], usize) {
     let mut scratch = [0u64; 32];
     let mut allocator = SingleSegmentAllocator::new(as_bytes_mut(&mut scratch));
     let mut message = Builder::new(&mut allocator);
-    let mut imports = message.init_root::<peer_imports::Builder>();
-    imports.set_mode(mode);
-    imports.set_endpoint(0);
-    imports.set_data_pages(data_pages as u32);
-    imports.set_notification(1);
-    imports.set_doorbell(2);
-    imports.set_reply(3);
-    imports.set_exit_code(exit_code);
+    let mut bootstrap = message.init_root::<peer_bootstrap::Builder>();
+    bootstrap.set_endpoint(0);
+    let mut m = bootstrap.reborrow().init_mode();
+    match mode {
+        Mode::Call => m.set_call(()),
+        Mode::EchoWords => m.set_echo_words(()),
+        Mode::ServeEcho => m.set_serve_echo(()),
+        Mode::Misbehave => m.set_misbehave(()),
+        Mode::SumBytes => m.set_sum_bytes(()),
+        Mode::Exit(code) => m.set_exit(code),
+        Mode::Crash => m.set_crash(()),
+        Mode::Restartable => m.set_restartable(()),
+    }
+    let mut channel = bootstrap.init_channel();
+    channel.set_data_pages(data_pages as u32);
+    channel.set_notification(1);
+    channel.set_doorbell(2);
+    channel.set_reply(3);
     let segments = message.get_segments_for_output();
     assert_eq!(segments.len(), 1, "a bootstrap message is one segment");
     // Copied out: the allocator zeroes its buffer when the message goes.
@@ -135,7 +153,7 @@ pub fn check_process(info: &Env) {
     // A bootstrap message longer than a page: the struct three pages in,
     // past zeroed words its root pointer skips. The peer exits with the
     // code it reads there.
-    let (bootstrap, len) = peer_bootstrap_with(Mode::Exit, 0, 9);
+    let (bootstrap, len) = peer_bootstrap(Mode::Exit(9), 0);
     let mut message: Vec<u64> = bootstrap[..len].chunks(8).map(|c| {
         let mut word = [0u8; 8];
         word[..c.len()].copy_from_slice(c);
@@ -162,7 +180,7 @@ pub fn check_process(info: &Env) {
 #[derive(Clone, Copy)]
 enum To<'a> {
     Passed(u32),
-    Export(&'a str, &'a str),
+    Client(&'a str, &'a str),
     Serve(&'a str),
     Held(&'a str),
     Supervisor,
@@ -178,13 +196,14 @@ struct Component<'a> {
     exports: &'a [&'a str],
     on_end: OnEnd,
     reservation: u64,
-    /// A region of the pool instead of an account, which the API refuses.
-    region: bool,
+    /// Untyped memory from the pool instead of an account, which the API
+    /// refuses.
+    untyped: bool,
 }
 
 impl<'a> Component<'a> {
     fn new(name: &'a str, program: &'a [u8], bootstrap: &'a [u8]) -> Self {
-        Self { name, program, bootstrap, routes: &[], exports: &[], on_end: OnEnd::Forget, reservation: 2 << 20, region: false }
+        Self { name, program, bootstrap, routes: &[], exports: &[], on_end: OnEnd::Forget, reservation: 2 << 20, untyped: false }
     }
 }
 
@@ -205,8 +224,8 @@ fn start(info: &Env, component: &Component, passed: &[usize]) -> Result<(usize, 
         exports.reborrow().get(i as u32).set_name(name);
     }
     let mut limits = c.reborrow().init_limits();
-    if component.region {
-        limits.reborrow().init_memory().init_region().set_bits(20);
+    if component.untyped {
+        limits.reborrow().init_memory().init_untyped().set_bits(20);
     } else {
         let mut terms = limits.reborrow().init_memory().init_account();
         terms.set_reservation(component.reservation);
@@ -221,10 +240,10 @@ fn start(info: &Env, component: &Component, passed: &[usize]) -> Result<(usize, 
         let mut route = routes.reborrow().get(i as u32);
         match to {
             To::Passed(n) => route.set_passed(n),
-            To::Export(c, n) => {
-                let mut export = route.init_export();
-                export.set_component(c);
-                export.set_name(n);
+            To::Client(c, n) => {
+                let mut client = route.init_client();
+                client.set_component(c);
+                client.set_name(n);
             }
             To::Serve(n) => route.set_serve(n),
             To::Held(n) => route.init_held().set_name(n),
@@ -304,7 +323,7 @@ pub fn check_instances(info: &Env) {
     let before = used();
 
     // An exit code; the memory comes back; the handle goes.
-    let (bootstrap, len) = peer_bootstrap_with(Mode::Exit, 0, 7);
+    let (bootstrap, len) = peer_bootstrap(Mode::Exit(7), 0);
     let exits = Component::new("exits", &peer, &bootstrap[..len]);
     let (handle, _) = start(info, &exits, &[]).expect("start");
     assert_eq!(wait(handle), Ok(Ended::Exited(7)), "an exit");
@@ -344,8 +363,8 @@ pub fn check_instances(info: &Env) {
     assert_eq!(used(), before, "its exports' memory comes back");
 
     // Exports the caller imports itself, re-badged; the instance API.
-    let (bootstrap, len) = peer_bootstrap_with(Mode::Exit, 0, 0);
-    let imports = Component { routes: &[To::Export("log", "log"), To::Export("restartable", "service"), To::Supervisor], ..Component::new("imports", &peer, &bootstrap[..len]) };
+    let (bootstrap, len) = peer_bootstrap(Mode::Exit(0), 0);
+    let imports = Component { routes: &[To::Client("log", "log"), To::Client("restartable", "service"), To::Supervisor], ..Component::new("imports", &peer, &bootstrap[..len]) };
     let (handle, _) = start(info, &imports, &[]).expect("start with the caller's exports");
     assert_eq!(wait(handle), Ok(Ended::Exited(0)));
 
@@ -355,11 +374,11 @@ pub fn check_instances(info: &Env) {
     let base = Component::new("refused", &peer, &bootstrap[..len]);
     assert_eq!(refused(&Component { program: &[0; 32], ..base }, &[]), Some(Status::NoSuchProgram as usize), "an unknown program");
     assert_eq!(refused(&Component { program: &peer[..31], ..base }, &[]), bad, "a short hash");
-    assert_eq!(refused(&Component { routes: &[To::Export("memory", "account")], ..base }, &[]), bad, "an export the caller doesn't import");
+    assert_eq!(refused(&Component { routes: &[To::Client("memory", "account")], ..base }, &[]), bad, "an export the caller doesn't import");
     assert_eq!(refused(&Component { routes: &[To::Held("asidPool")], ..base }, &[]), bad, "what the supervisor holds");
     assert_eq!(refused(&Component { routes: &[To::Passed(0)], ..base }, &[]), bad, "a capability not passed");
     assert_eq!(refused(&Component { routes: &[To::Serve("nothing")], ..base }, &[]), bad, "an export it doesn't declare");
-    assert_eq!(refused(&Component { region: true, ..base }, &[]), bad, "a region");
+    assert_eq!(refused(&Component { untyped: true, ..base }, &[]), bad, "untyped memory");
     assert_eq!(refused(&Component { on_end: OnEnd::EndBoot, ..base }, &[]), bad, "ending the boot");
     assert_eq!(refused(&Component { reservation: 1 << 30, ..base }, &[]), Some(Status::OverLimit as usize), "more than the caller has");
     let no_account = ipc::call(info.supervisor, supervisor::START, &[], &[], &mut []).expect("start: call");

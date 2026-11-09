@@ -29,8 +29,8 @@ pub mod process_slot {
     pub const LAUNCHER: usize = 5;
     /// The frame of the main thread's IPC buffer, as the root task has it.
     pub const IPC_BUFFER: usize = 6;
-    /// The holder's capability to the process's memory account
-    /// (`interfaces/memory.capnp`), if its launcher gives it one; empty
+    /// The capability to the process's memory account
+    /// (`interfaces/system/memory.capnp`), if its launcher gives it one; empty
     /// otherwise.
     pub const ACCOUNT: usize = 7;
     /// The first slot of the process's imports.

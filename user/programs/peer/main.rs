@@ -1,9 +1,9 @@
-//! A second program, loaded by the root task into its own process, to check
-//! IPC between address spaces. Its bootstrap message (`PeerImports` in
-//! `interfaces/peer.capnp`) picks what it does:
+//! A second program, which `check` loads into processes of its own, to check
+//! IPC between address spaces. Its bootstrap message (`PeerBootstrap` in
+//! `peer.capnp`) picks what it does:
 //! - `call`: a call over an endpoint and an isolation check;
 //! - `echoWords`: echo word records over a channel of two rings;
-//! - `serveEcho`: serve the echo interface (`interfaces/echo.capnp`) over a
+//! - `serveEcho`: serve the echo interface (`interfaces/test/echo.capnp`) over a
 //!   channel;
 //! - `misbehave`: answer one request, then break the channel's rules;
 //! - `sumBytes`: sum the bytes of each record or page transfer (for
@@ -21,15 +21,25 @@
 // Pointers come from `sap_sys::address::mapped`, never from integer casts.
 #![deny(implicit_provenance_casts, integer_to_ptr_transmutes)]
 
+/// Generated from the component schemas of `peer`
+/// (`user/programs/<name>/<name>.capnp`).
+mod components {
+    #[allow(clippy::all, dead_code)]
+    pub mod peer_capnp {
+        include!(concat!(env!("OUT_DIR"), "/peer/peer_capnp.rs"));
+    }
+}
+
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use capnp::message::{Builder, Reader, ReaderOptions, SegmentArray, SingleSegmentAllocator};
 use sap_interfaces::echo::{BYTES, ERROR, REPLY, REQUEST, STOP, SUM, TRANSFER, WORDS};
-use sap_interfaces::echo_capnp::{reply, request};
+use sap_interfaces::echo_capnp::{echo_reply as reply, echo_request as request};
 use sap_interfaces::methods::restartable;
-use sap_interfaces::peer_capnp::restartable::count_results;
-use sap_interfaces::peer_capnp::{peer_imports, Mode};
+use sap_interfaces::restartable_capnp::restartable::count_results;
+use components::peer_capnp::peer_bootstrap;
+use components::peer_capnp::peer_bootstrap::mode::Which as Mode;
 use sap_interfaces::words;
 use sap_ring::transfer::{Frames, Receiver, TransferError};
 use sap_ring::{as_bytes, as_bytes_mut, Consumer, Layout, Producer, RingError, PAGE};
@@ -81,43 +91,44 @@ impl From<capnp::NotInSchema> for BadBootstrap {
     }
 }
 
-/// Read the bootstrap message: the mode, its capabilities and the exit code.
-fn imports(startup: &'static Startup) -> Result<(Mode, Peer, usize), BadBootstrap> {
+/// Read the bootstrap message: the mode and its capabilities.
+fn bootstrap(startup: &'static Startup) -> Result<(Mode, Peer), BadBootstrap> {
     let segments = [process::bootstrap(startup)];
     let reader = Reader::new(SegmentArray::new(&segments), ReaderOptions::new());
-    let imports = reader.get_root::<peer_imports::Reader>()?;
+    let bootstrap = reader.get_root::<peer_bootstrap::Reader>()?;
     let import = |index: u32| process::import(startup, index).ok_or(BadBootstrap::NoImport(index));
-    let mode = imports.get_mode()?;
+    let mode = bootstrap.get_mode().which()?;
     let nothing = Peer { endpoint: 0, data_pages: 0, notification: 0, doorbell: 0, reply: 0, free: 0 };
+    let channel = bootstrap.get_channel();
     let peer = match mode {
-        Mode::Exit | Mode::Crash => nothing,
-        Mode::Call | Mode::Restartable => Peer { endpoint: import(imports.get_endpoint())?, free: startup.free.start, ..nothing },
-        _ => Peer {
-            endpoint: import(imports.get_endpoint())?,
-            data_pages: imports.get_data_pages() as usize,
-            notification: import(imports.get_notification())?,
-            doorbell: import(imports.get_doorbell())?,
-            reply: import(imports.get_reply())?,
+        Mode::Exit(_) | Mode::Crash(()) => nothing,
+        Mode::Call(()) | Mode::Restartable(()) => Peer { endpoint: import(bootstrap.get_endpoint())?, free: startup.free.start, ..nothing },
+        Mode::EchoWords(()) | Mode::ServeEcho(()) | Mode::Misbehave(()) | Mode::SumBytes(()) => Peer {
+            endpoint: import(bootstrap.get_endpoint())?,
+            data_pages: channel.get_data_pages() as usize,
+            notification: import(channel.get_notification())?,
+            doorbell: import(channel.get_doorbell())?,
+            reply: import(channel.get_reply())?,
             free: startup.free.start,
         },
     };
-    Ok((mode, peer, imports.get_exit_code() as usize))
+    Ok((mode, peer))
 }
 
 #[unsafe(no_mangle)]
 fn sap_main(a0: usize, _: usize, _: usize) -> ! {
     // SAFETY: the loader started this process with its startup record.
     let startup = unsafe { process::startup(a0) };
-    let (mode, peer, code) = imports(startup).expect("peer: bootstrap message");
+    let (mode, peer) = bootstrap(startup).expect("peer: bootstrap message");
     match mode {
-        Mode::Call => call_parent(peer.endpoint),
-        Mode::EchoWords => echo_words(channel(peer)),
-        Mode::ServeEcho => serve_echo(peer, channel(peer)),
-        Mode::Misbehave => misbehave(peer, channel(peer)),
-        Mode::SumBytes => sum_bytes(peer, channel(peer)),
-        Mode::Exit => process::exit(code),
-        Mode::Crash => crash(),
-        Mode::Restartable => restartable(peer),
+        Mode::Call(()) => call_parent(peer.endpoint),
+        Mode::EchoWords(()) => echo_words(channel(peer)),
+        Mode::ServeEcho(()) => serve_echo(peer, channel(peer)),
+        Mode::Misbehave(()) => misbehave(peer, channel(peer)),
+        Mode::SumBytes(()) => sum_bytes(peer, channel(peer)),
+        Mode::Exit(code) => process::exit(code as usize),
+        Mode::Crash(()) => crash(),
+        Mode::Restartable(()) => restartable(peer),
     }
     loop {
         let _ = tcb::suspend(process_slot::TCB);

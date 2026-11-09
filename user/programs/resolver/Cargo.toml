@@ -14,3 +14,6 @@ sap-rt = { path = "../../lib/rt" }
 sap-process = { path = "../../lib/process" }
 capnp = { version = "0.27.2", default-features = false }
 sap-interfaces = { path = "../../lib/interfaces" }
+
+[build-dependencies]
+capnpc = "0.27.0"

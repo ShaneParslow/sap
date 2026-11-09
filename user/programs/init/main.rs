@@ -16,12 +16,26 @@ extern crate alloc;
 mod pack;
 mod supervisor;
 
+/// Generated from the component schemas of `memory`, `resolver`
+/// (`user/programs/<name>/<name>.capnp`).
+mod components {
+    #[allow(clippy::all, dead_code)]
+    pub mod memory_capnp {
+        include!(concat!(env!("OUT_DIR"), "/memory/memory_capnp.rs"));
+    }
+    #[allow(clippy::all, dead_code)]
+    pub mod resolver_capnp {
+        include!(concat!(env!("OUT_DIR"), "/resolver/resolver_capnp.rs"));
+    }
+}
+
 use alloc::vec;
 use alloc::vec::Vec;
 
 use capnp::message::{Builder, SingleSegmentAllocator};
-use sap_interfaces::memory_capnp::memory_imports;
-use sap_interfaces::sap_capnp::{manifest, resolver_imports};
+use components::memory_capnp::memory_bootstrap;
+use components::resolver_capnp::resolver_bootstrap;
+use sap_interfaces::component_capnp::manifest;
 use sap_interfaces::words;
 use sap_interfaces::supervisor_capnp::{composition, OnEnd, Status};
 use sap_loader::Parent;
@@ -122,8 +136,8 @@ fn own_untyped(info: &BootInfo) -> usize {
         .expect("init: no untyped region of 2 MiB")
 }
 
-/// The untyped region the supervisor carves regions from (the memory
-/// manager's): the smallest other of at least 4 MiB.
+/// The untyped region the supervisor carves instances' untyped memory
+/// from (the memory manager's): the smallest other of at least 4 MiB.
 fn pool_untyped(info: &BootInfo, own: usize) -> usize {
     (info.untyped.start..info.untyped.end)
         .zip(&info.untyped_list)
@@ -169,7 +183,7 @@ fn bootstrap<T: capnp::traits::Owned>(build: impl FnOnce(T::Builder<'_>)) -> Vec
 /// grants, which init gives the supervisor. Each one's limits and exports
 /// are its manifest's.
 fn boot(supervisor: &mut Supervisor) {
-    let memory = bootstrap::<memory_imports::Owned>(|mut root| {
+    let memory = bootstrap::<memory_bootstrap::Owned>(|mut root| {
         root.set_endpoint(0);
         root.set_ram(1);
     });
@@ -177,7 +191,7 @@ fn boot(supervisor: &mut Supervisor) {
     {
         let segment = [resolver];
         let message = capnp::message::Reader::new(capnp::message::SegmentArray::new(&segment), capnp::message::ReaderOptions::new());
-        let request = message.get_root::<resolver_imports::Reader>().and_then(|r| r.get_request()).expect("init: the boot request");
+        let request = message.get_root::<resolver_bootstrap::Reader>().and_then(|r| r.get_request()).expect("init: the boot request");
         for grant in request.get_grants().expect("init: the boot request's grants") {
             let (component, held) = (grant.get_component().ok().and_then(|t| t.to_str().ok()), grant.get_held().ok().and_then(|t| t.to_str().ok()));
             supervisor.grant(component.expect("init: a grant"), held.expect("init: a grant"));

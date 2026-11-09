@@ -1,4 +1,4 @@
-//! `Compositions` (`interfaces/supervisor.capnp`): components joining the
+//! `Compositions` (`interfaces/system/supervisor.capnp`): components joining the
 //! supervisor's own composition at runtime, added by the resolver. Each
 //! `add` checks the component, makes its exports and keeps it; `enact`
 //! starts what was added, in order. A route to what the supervisor holds
@@ -78,7 +78,7 @@ impl Supervisor {
                     !held.get_move() && (self.held(what).is_some() || GROUPS.contains(&what)) && self.granted(name, what)
                 }
                 route::Supervisor(()) => self.granted(name, "supervisor"),
-                route::Export(_) | route::Serve(_) => true,
+                route::Client(_) | route::Serve(_) => true,
                 route::Passed(_) => false,
             };
             if !allowed {

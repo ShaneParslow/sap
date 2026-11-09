@@ -18,7 +18,7 @@ pub struct Program {
     pub name: &'static str,
     pub hash: Hash,
     image: &'static [u8],
-    /// Its declarations (`sap_capnp::Manifest`): the words of a
+    /// Its declarations (`component_capnp::Manifest`): the words of a
     /// single-segment message.
     pub manifest: &'static [u64],
 }

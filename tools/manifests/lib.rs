@@ -1,6 +1,6 @@
 //! For init's build: manifests, what each program in the boot pack
-//! declares, read from the annotations of `interfaces/sap.capnp` on its
-//! bootstrap struct; and the resolver's bootstrap message, every program's
+//! declares, read from the annotations of `interfaces/system/component.capnp`
+//! on its bootstrap struct; and the resolver's bootstrap message, every program's
 //! manifest with the boot request. Declarations and the request are all
 //! this reads; which component serves which import is the resolver's, at
 //! runtime.
@@ -11,25 +11,41 @@ use std::path::Path;
 use capnp::message::ReaderSegments;
 use capnp::schema_capnp::{code_generator_request, field, node, type_, value};
 
-use crate::schemas::sap_capnp::{export, manifest, request, resolver_imports};
-use crate::schemas::supervisor_capnp::limits;
+use crate::component_capnp::{declared_export, limits, manifest};
+use crate::components::resolver_capnp::resolver_bootstrap;
+use crate::resolver_capnp::request;
 
-/// The schemas the manifests are written with.
+// The generated code of the resolver's schema names the system's schemas
+// as the crate `sap_interfaces`, where programs find them; here they are
+// this crate's.
+extern crate self as sap_interfaces;
+
+// The schemas the manifests are written with (`build.rs`).
 #[allow(dead_code, clippy::all)]
-mod schemas {
-    pub mod memory_capnp {
-        include!(concat!(env!("OUT_DIR"), "/memory_capnp.rs"));
-    }
-    pub mod sap_capnp {
-        include!(concat!(env!("OUT_DIR"), "/sap_capnp.rs"));
-    }
-    pub mod supervisor_capnp {
-        include!(concat!(env!("OUT_DIR"), "/supervisor_capnp.rs"));
+pub mod component_capnp {
+    include!(concat!(env!("OUT_DIR"), "/system/component_capnp.rs"));
+}
+#[allow(dead_code, clippy::all)]
+pub mod memory_capnp {
+    include!(concat!(env!("OUT_DIR"), "/system/memory_capnp.rs"));
+}
+#[allow(dead_code, clippy::all)]
+pub mod resolver_capnp {
+    include!(concat!(env!("OUT_DIR"), "/system/resolver_capnp.rs"));
+}
+#[allow(dead_code, clippy::all)]
+pub mod supervisor_capnp {
+    include!(concat!(env!("OUT_DIR"), "/system/supervisor_capnp.rs"));
+}
+#[allow(dead_code, clippy::all)]
+mod components {
+    pub mod resolver_capnp {
+        include!(concat!(env!("OUT_DIR"), "/resolver/resolver_capnp.rs"));
     }
 }
 
-/// The annotations of `sap.capnp`, by name.
-const ANNOTATIONS: [&str; 7] = ["program", "exports", "limits", "interface", "serves", "held", "programHash"];
+/// The annotations of `component.capnp`, by name.
+const ANNOTATIONS: [&str; 7] = ["program", "exports", "defaultLimits", "interface", "serves", "held", "programHash"];
 
 /// The manifest of every program that declares one in the schemas the
 /// code generator request at `request` describes, by crate name, as the
@@ -42,9 +58,9 @@ pub fn manifests(request: &Path) -> HashMap<String, Vec<u64>> {
     let request = message.get_root::<code_generator_request::Reader>().unwrap();
     let nodes: Vec<node::Reader> = request.get_nodes().unwrap().iter().collect();
     let by_name: HashMap<&str, u64> = nodes.iter().map(|n| (n.get_display_name().unwrap().to_str().unwrap(), n.get_id())).collect();
-    let annotation = |name: &str| by_name[format!("sap.capnp:{name}").as_str()];
+    let annotation = |name: &str| by_name[format!("system/component.capnp:{name}").as_str()];
     let ids: HashMap<u64, &str> = ANNOTATIONS.iter().map(|&name| (annotation(name), name)).collect();
-    // An interface's type id, by its name ("log.capnp:Log").
+    // An interface's type id, by its name ("system/log.capnp:Log").
     let interface = |name: &str| -> u64 {
         let id = *by_name.get(name).unwrap_or_else(|| panic!("no interface {name}"));
         let node = nodes.iter().find(|n| n.get_id() == id).unwrap();
@@ -67,16 +83,16 @@ pub fn manifests(request: &Path) -> HashMap<String, Vec<u64>> {
 
         let mut builder = capnp::message::Builder::new(capnp::message::HeapAllocator::new().first_segment_words(4096));
         let mut m = builder.init_root::<manifest::Builder>();
-        m.set_program(program.as_str());
+        m.set_name(program.as_str());
         m.set_data_words(structure.get_data_word_count());
         m.set_pointers(structure.get_pointer_count());
-        if let Some(&limits) = struct_annotations.get("limits") {
+        if let Some(&limits) = struct_annotations.get("defaultLimits") {
             let Ok(value::Struct(limits)) = limits.which() else { panic!("{display}: limits") };
             m.set_limits(limits.get_as::<limits::Reader>().unwrap()).unwrap();
         }
         if let Some(&exports) = struct_annotations.get("exports") {
             let Ok(value::List(exports)) = exports.which() else { panic!("{display}: exports") };
-            let exports = exports.get_as::<capnp::struct_list::Reader<export::Owned>>().unwrap();
+            let exports = exports.get_as::<capnp::struct_list::Reader<declared_export::Owned>>().unwrap();
             let mut list = m.reborrow().init_exports(exports.len());
             for (i, e) in exports.iter().enumerate() {
                 let mut out = list.reborrow().get(i as u32);
@@ -143,11 +159,15 @@ fn flat(segments: &[&[u8]], what: &str) -> Vec<u64> {
 }
 
 /// Evaluate `constant` in the schema file `file` with the schema compiler,
-/// as a single-segment message.
-fn evaluate(file: &Path, constant: &str, interfaces: &Path) -> Vec<u8> {
+/// as a single-segment message. Request files import the system's schemas
+/// from `interfaces` (`/system/...`) and programs' from `user`
+/// (`/programs/<name>/<name>.capnp`).
+fn evaluate(file: &Path, constant: &str, interfaces: &Path, user: &Path) -> Vec<u8> {
     let output = std::process::Command::new("capnp")
         .args(["eval", "-b", "-I"])
         .arg(interfaces)
+        .arg("-I")
+        .arg(user)
         .arg(file)
         .arg(constant)
         .output()
@@ -164,9 +184,9 @@ fn evaluate(file: &Path, constant: &str, interfaces: &Path) -> Vec<u8> {
 /// the boot request `boot`: a request file in `requests` (`<boot>.capnp`,
 /// whose constant `request` it is), or else a program's name, which then
 /// runs alone and ends the boot.
-pub fn resolver_bootstrap(boot: &str, requests: &Path, interfaces: &Path, programs: &[(String, [u8; 32], Vec<u64>)]) -> Vec<u64> {
+pub fn resolver_bootstrap(boot: &str, requests: &Path, interfaces: &Path, user: &Path, programs: &[(String, [u8; 32], Vec<u64>)]) -> Vec<u64> {
     let mut builder = capnp::message::Builder::new(capnp::message::HeapAllocator::new().first_segment_words(1 << 16));
-    let mut root = builder.init_root::<resolver_imports::Builder>();
+    let mut root = builder.init_root::<resolver_bootstrap::Builder>();
     root.set_compositions(0);
     let mut list = root.reborrow().init_programs(programs.len() as u32);
     for (i, (_, hash, manifest)) in programs.iter().enumerate() {
@@ -180,7 +200,7 @@ pub fn resolver_bootstrap(boot: &str, requests: &Path, interfaces: &Path, progra
     let file = requests.join(format!("{boot}.capnp"));
     let mut out = root.init_request();
     if file.exists() {
-        let bytes = evaluate(&file, "request", interfaces);
+        let bytes = evaluate(&file, "request", interfaces, user);
         let segments: [&[u8]; 1] = [&bytes];
         let message = capnp::message::Reader::new(capnp::message::SegmentArray::new(&segments), capnp::message::ReaderOptions::new());
         let request = message.get_root::<request::Reader>().unwrap();
@@ -194,7 +214,7 @@ pub fn resolver_bootstrap(boot: &str, requests: &Path, interfaces: &Path, progra
             component.set_on_end(w.get_on_end().unwrap());
             let constant = w.get_settings_constant().unwrap().to_str().unwrap();
             if !constant.is_empty() {
-                component.set_settings(&evaluate(&file, constant, interfaces));
+                component.set_settings(&evaluate(&file, constant, interfaces, user));
             }
         }
     } else {
@@ -202,7 +222,7 @@ pub fn resolver_bootstrap(boot: &str, requests: &Path, interfaces: &Path, progra
         let mut component = out.reborrow().init_components(1).get(0);
         component.set_name(boot);
         component.set_program(boot);
-        component.set_on_end(crate::schemas::supervisor_capnp::OnEnd::EndBoot);
+        component.set_on_end(crate::supervisor_capnp::OnEnd::EndBoot);
         let mut grant = out.init_grants(1).get(0);
         grant.set_component(boot);
         grant.set_held("endBoot");

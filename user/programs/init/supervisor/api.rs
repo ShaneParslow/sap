@@ -1,5 +1,5 @@
 //! The instance API (`Supervisor` and `Instance` in
-//! `interfaces/supervisor.capnp`): components started at runtime, for a
+//! `interfaces/system/supervisor.capnp`): components started at runtime, for a
 //! caller that pays for them. Calls arrive as `interfaces/README.md`
 //! describes.
 //!
@@ -88,7 +88,7 @@ pub(super) fn ended(dynamic: Dynamic) -> Instance {
     Instance {
         name: Default::default(),
         component: Vec::new(),
-        memory: Memory::Region(0),
+        memory: Memory::Untyped(0),
         objects: 0,
         launcher: 0,
         api: 0,
@@ -147,13 +147,13 @@ impl Supervisor {
         for route in component.get_imports().map_err(bad)? {
             let allowed = match route.which().map_err(|_| StartError::BadComponent)? {
                 route::Held(_) => false,
-                route::Export(to) => {
+                route::Client(to) => {
                     let to = to.map_err(bad)?;
                     let (c, n) = (text(to.get_component())?, text(to.get_name())?);
                     // Only an export the caller imports itself.
                     with_component(caller_component, |caller| {
                         Ok(caller.get_imports().map_err(bad)?.iter().any(|r| match r.which() {
-                            Ok(route::Export(Ok(t))) => text(t.get_component()) == Ok(c) && text(t.get_name()) == Ok(n),
+                            Ok(route::Client(Ok(t))) => text(t.get_component()) == Ok(c) && text(t.get_name()) == Ok(n),
                             _ => false,
                         }))
                     })?

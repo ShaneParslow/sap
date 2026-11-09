@@ -3,14 +3,14 @@
 # processes (roadmap M5). The peer answers each request with a reply that
 # summarises it, so both sides read and write every kind of field.
 
-struct Request {
+struct EchoRequest {
   id @0 :UInt64;
   text @1 :Text;
   numbers @2 :List(UInt32);
   blob @3 :Data;
 }
 
-struct Reply {
+struct EchoReply {
   id @0 :UInt64;
   # The request's text, reversed.
   text @1 :Text;

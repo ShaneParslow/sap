@@ -1,6 +1,6 @@
 //! The resolver: decides, at runtime, what serves what. From the programs
 //! it knows (each with its manifest: what its bootstrap struct declares,
-//! `interfaces/sap.capnp`) and a request naming the components wanted, it
+//! `interfaces/system/component.capnp`) and a request naming the components wanted, it
 //! finds a provider for every import a component declares by interface:
 //! an instance already planned that exports it, or else the one program
 //! that does, which it plans too, so dependencies pull themselves in. It
@@ -21,13 +21,24 @@
 
 extern crate alloc;
 
+/// Generated from the component schemas of `resolver`
+/// (`user/programs/<name>/<name>.capnp`).
+mod components {
+    #[allow(clippy::all, dead_code)]
+    pub mod resolver_capnp {
+        include!(concat!(env!("OUT_DIR"), "/resolver/resolver_capnp.rs"));
+    }
+}
+
 use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 
 use capnp::message::{Builder, Reader, ReaderOptions, SegmentArray, SingleSegmentAllocator};
 use sap_interfaces::methods::compositions;
-use sap_interfaces::sap_capnp::{available, import, manifest, resolver_imports, wanted};
+use components::resolver_capnp::resolver_bootstrap;
+use sap_interfaces::component_capnp::{import, manifest};
+use sap_interfaces::resolver_capnp::{catalog_entry, wanted};
 use sap_interfaces::supervisor_capnp::compositions::add_params;
 use sap_interfaces::supervisor_capnp::{OnEnd, Status};
 use sap_interfaces::words;
@@ -52,18 +63,18 @@ enum To {
 /// A component the resolver will add.
 struct Planned<'a> {
     name: String,
-    program: available::Reader<'a>,
+    program: catalog_entry::Reader<'a>,
     settings: &'a [u8],
     on_end: OnEnd,
     routes: Vec<To>,
 }
 
-fn manifest_of<'a>(program: available::Reader<'a>) -> manifest::Reader<'a> {
+fn manifest_of<'a>(program: catalog_entry::Reader<'a>) -> manifest::Reader<'a> {
     program.get_manifest().expect("resolver: a program without a manifest")
 }
 
-fn name_of<'a>(program: available::Reader<'a>) -> &'a str {
-    manifest_of(program).get_program().ok().and_then(|t| t.to_str().ok()).expect("resolver: a program without a name")
+fn name_of<'a>(program: catalog_entry::Reader<'a>) -> &'a str {
+    manifest_of(program).get_name().ok().and_then(|t| t.to_str().ok()).expect("resolver: a program without a name")
 }
 
 /// The instance of `planned` or program of `programs` that exports
@@ -73,8 +84,8 @@ enum Provider {
     Program(usize, String),
 }
 
-fn provider(planned: &[Planned], programs: &[available::Reader], interface: u64, asker: usize) -> Result<Provider, &'static str> {
-    let exported = |p: available::Reader| -> Option<String> {
+fn provider(planned: &[Planned], programs: &[catalog_entry::Reader], interface: u64, asker: usize) -> Result<Provider, &'static str> {
+    let exported = |p: catalog_entry::Reader| -> Option<String> {
         manifest_of(p).get_exports().ok()?.iter().find(|e| e.get_interface() == interface).and_then(|e| e.get_name().ok()?.to_str().ok().map(String::from))
     };
     let instances: Vec<(usize, String)> = planned.iter().enumerate().filter(|&(i, _)| i != asker).filter_map(|(i, p)| exported(p.program).map(|e| (i, e))).collect();
@@ -92,7 +103,7 @@ fn provider(planned: &[Planned], programs: &[available::Reader], interface: u64,
 }
 
 /// The plan: the wanted components and everything they need.
-fn plan<'a>(programs: &[available::Reader<'a>], wanted: capnp::struct_list::Reader<'a, wanted::Owned>) -> Vec<Planned<'a>> {
+fn plan<'a>(programs: &[catalog_entry::Reader<'a>], wanted: capnp::struct_list::Reader<'a, wanted::Owned>) -> Vec<Planned<'a>> {
     let find = |name: &str| programs.iter().copied().find(|&p| name_of(p) == name).unwrap_or_else(|| panic!("resolver: no program {name}"));
     let mut planned: Vec<Planned> = wanted
         .iter()
@@ -169,7 +180,7 @@ fn byte_list(message: &[u64], at: usize) -> Option<&[u8]> {
 /// The bootstrap message of `planned`: its settings, every import field set
 /// to the import's index, every program-hash field to the program's hash,
 /// as a flat message.
-fn bootstrap(planned: &Planned, programs: &[available::Reader]) -> Vec<u8> {
+fn bootstrap(planned: &Planned, programs: &[catalog_entry::Reader]) -> Vec<u8> {
     let manifest = manifest_of(planned.program);
     let (data, pointers) = (manifest.get_data_words() as usize, manifest.get_pointers() as usize);
     let mut out = vec![0u64; 1 + data + pointers];
@@ -220,7 +231,7 @@ fn bootstrap(planned: &Planned, programs: &[available::Reader]) -> Vec<u8> {
 }
 
 /// Add `planned[index]` to the supervisor's composition.
-fn add(compositions_cap: usize, planned: &[Planned], index: usize, programs: &[available::Reader]) -> Status {
+fn add(compositions_cap: usize, planned: &[Planned], index: usize, programs: &[catalog_entry::Reader]) -> Status {
     let p = &planned[index];
     let manifest = manifest_of(p.program);
     let bootstrap = bootstrap(p, programs);
@@ -245,7 +256,7 @@ fn add(compositions_cap: usize, planned: &[Planned], index: usize, programs: &[a
         let mut route = routes.reborrow().get(i as u32);
         match to {
             To::Export(provider, name, interface) => {
-                let mut export = route.init_export();
+                let mut export = route.init_client();
                 export.set_component(planned[*provider].name.as_str());
                 export.set_name(name.as_str());
                 export.set_interface(*interface);
@@ -278,9 +289,9 @@ fn sap_main(a0: usize, _: usize, _: usize) -> ! {
     let mut options = ReaderOptions::new();
     options.traversal_limit_in_words(Some(1 << 20));
     let reader = Reader::new(SegmentArray::new(&segment), options);
-    let imports = reader.get_root::<resolver_imports::Reader>().expect("resolver: bootstrap message");
+    let imports = reader.get_root::<resolver_bootstrap::Reader>().expect("resolver: bootstrap message");
     let compositions_cap = process::import(startup, imports.get_compositions()).expect("resolver: no compositions import");
-    let programs: Vec<available::Reader> = imports.get_programs().expect("resolver: programs").iter().collect();
+    let programs: Vec<catalog_entry::Reader> = imports.get_programs().expect("resolver: programs").iter().collect();
     let request = imports.get_request().expect("resolver: request");
 
     let planned = plan(&programs, request.get_components().expect("resolver: components"));
