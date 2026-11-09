@@ -11,5 +11,24 @@
         ]
       }
     ]
+  },
+  "env":{ 
+    "RUSTUP_HOME": "/home/sparsl/.local/share/rustup",
+    "CARGO_HOME": "/home/sparsl/.local/share/cargo"
+  },
+  "permissions": {
+    "additionalDirectories": [
+      "~/.local/share/cargo",
+      "~/src/sap-docs"
+    ]
+  },
+  "sandbox": {
+    "network": {
+      "allowedDomains": [
+        "index.crates.io",
+        "static.crates.io",
+        "github.com"
+      ]
+    }
   }
 }
