@@ -17,6 +17,7 @@ mod caps;
 mod cheri;
 mod endpoints;
 mod faults;
+mod hostile;
 mod memory;
 mod notifications;
 mod support;
@@ -41,6 +42,7 @@ fn sap_main(boot_info: usize, _: usize, _: usize) -> ! {
     transfer::capabilities(info);
     faults::delivery(info);
     cheri::registers(info);
+    hostile::arguments(info);
 
     println!("all kernel tests passed");
     sap_rt::print::halt(false)

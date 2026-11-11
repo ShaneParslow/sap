@@ -4,7 +4,7 @@ use sap_rt::abi::{BootInfo, error, object, rights};
 use sap_rt::cnode::SlotRef;
 use sap_rt::println;
 
-use crate::support::{CNODE, TCB, fails, ok, slot, try_retype, untyped_at_least};
+use crate::support::{TCB, fails, ok, slot, try_retype, untyped_at_least};
 
 /// Copy, move, delete and revoke capabilities, and check the errors for
 /// misuse.
