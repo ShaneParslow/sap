@@ -21,6 +21,7 @@ mod hostile;
 mod memory;
 mod notifications;
 mod support;
+mod teardown;
 mod threads;
 mod transfer;
 
@@ -43,6 +44,7 @@ fn sap_main(boot_info: usize, _: usize, _: usize) -> ! {
     faults::delivery(info);
     cheri::registers(info);
     hostile::arguments(info);
+    teardown::every_state(info);
 
     println!("all kernel tests passed");
     sap_rt::print::halt(false)
