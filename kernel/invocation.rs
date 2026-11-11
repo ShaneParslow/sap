@@ -363,11 +363,20 @@ fn tcb(target: *mut Tcb, m: &mut Message) -> Result {
 
 /// The capability a copy of `cap` (in `slot`) gets, following seL4's
 /// `deriveCap`: an untyped capability can only be copied while nothing has
-/// been retyped from it, and a copied frame capability starts unmapped.
+/// been retyped from it, a copied frame capability starts unmapped, and an
+/// unmapped page table can't be copied. Copies of a page table share its
+/// mapping, so if one were mapped (or made a root) while another still said
+/// unmapped, deleting them would leave the table mapped, or its ASID taken,
+/// after it is gone.
 pub(crate) fn derive(slot: *mut Slot, cap: Cap) -> Result<Cap> {
+    use crate::arch::{ArchCap, PtMapping};
+
     match cap {
         // SAFETY: slot is live.
         Cap::Untyped { .. } if unsafe { cspace::has_children(slot) } => Err(error::REVOKE_FIRST),
+        Cap::Arch(ArchCap::PageTable { mapping, .. }) if mapping == PtMapping::Unmapped => {
+            Err(error::ILLEGAL_OPERATION)
+        }
         Cap::Arch(crate::arch::ArchCap::Frame { pa, size_bits, rights, .. }) => {
             Ok(Cap::Arch(crate::arch::unmapped_frame(pa, size_bits, rights)))
         }

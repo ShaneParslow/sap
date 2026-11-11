@@ -89,6 +89,12 @@ pub fn invoke(slot: *mut Slot, cap: ArchCap, m: &mut Message) -> Result<usize, u
         }
         (ArchCap::PageTable { .. }, label::PAGE_TABLE_MAP) => Err(error::INVALID_CAPABILITY),
         (ArchCap::PageTable { pa, mapping: PtMapping::Mapped { asid, level, va } }, label::PAGE_TABLE_UNMAP) => {
+            // As in seL4, only the last capability to a table unmaps it:
+            // the others would still say it is mapped.
+            // SAFETY: slot is the live slot the capability was found in.
+            if !unsafe { crate::cspace::is_final(slot) } {
+                return Err(error::REVOKE_FIRST);
+            }
             unmap(asid, va, level as usize + 1, pa);
             paging::clear_table(pa);
             set_cap(slot, ArchCap::PageTable { pa, mapping: PtMapping::Unmapped });
