@@ -20,6 +20,7 @@ mod faults;
 mod hostile;
 mod memory;
 mod notifications;
+mod random;
 mod support;
 mod teardown;
 mod threads;
@@ -45,6 +46,7 @@ fn sap_main(boot_info: usize, _: usize, _: usize) -> ! {
     cheri::registers(info);
     hostile::arguments(info);
     teardown::every_state(info);
+    random::operations(info);
 
     println!("all kernel tests passed");
     sap_rt::print::halt(false)

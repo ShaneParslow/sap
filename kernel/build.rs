@@ -20,6 +20,8 @@ fn main() {
     // built in release mode: it is small, and its size is part of the kernel
     // image.
     println!("cargo:rerun-if-env-changed=SAP_ROOT");
+    // test-kernel's random operations read it (random.rs).
+    println!("cargo:rerun-if-env-changed=SAP_SEED");
     let root = std::env::var("SAP_ROOT").unwrap_or_else(|_| "init".into());
     let image = build_user_program(&dir.join("../user"), &root);
     println!("cargo:rustc-env=ROOT_TASK_ELF={}", image.display());
