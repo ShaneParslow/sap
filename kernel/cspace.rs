@@ -375,6 +375,132 @@ pub unsafe fn revoke(slot: *mut Slot) -> Result<(), DeleteError> {
     Ok(())
 }
 
+#[cfg(feature = "audit")]
+pub(crate) mod audit {
+    //! The audit's checks of slots and derivation lists (`crate::audit`).
+
+    use super::{Cap, Slot, slot_at};
+
+    /// Check every slot of the CNode at `ptr` with `radix` bits of slots,
+    /// passing each slot's capability to `found`.
+    ///
+    /// # Safety
+    /// The CNode must be live.
+    pub unsafe fn cnode(ptr: usize, radix: u8, mut found: impl FnMut(Cap)) {
+        for i in 0..1usize << radix {
+            // SAFETY: the slot is inside the live CNode.
+            found(unsafe { slot(slot_at(ptr, i)) });
+        }
+    }
+
+    /// Check `slot` and return its capability. An empty slot is on no list.
+    /// A full one is linked both ways with full neighbours, and if it heads
+    /// a list, the whole list is checked.
+    ///
+    /// # Safety
+    /// `slot` must be a live slot, and its neighbours live slots.
+    pub unsafe fn slot(slot: *mut Slot) -> Cap {
+        // SAFETY: per the caller's guarantee.
+        let s = unsafe { &*slot };
+
+        if s.cap.is_null() {
+            let linked = !s.prev.is_null() || !s.next.is_null();
+            assert!(!linked, "audit: empty slot {slot:p} is on a list");
+            let flagged = s.revocable || s.first_badged;
+            assert!(
+                !flagged,
+                "audit: empty slot {slot:p} keeps derivation flags"
+            );
+            return s.cap;
+        }
+
+        // Originals and untyped copies are revocable and first with their
+        // badge; other copies are neither (`insert_derived`).
+        let flags_agree = s.first_badged == s.revocable;
+        assert!(
+            flags_agree,
+            "audit: slot {slot:p} is first-badged but not revocable, or the reverse"
+        );
+        if matches!(s.cap, Cap::Untyped { .. }) {
+            assert!(
+                s.revocable,
+                "audit: untyped capability in {slot:p} isn't revocable"
+            );
+        }
+
+        // SAFETY: neighbours are live slots (caller's guarantee).
+        unsafe {
+            if !s.prev.is_null() {
+                assert!(
+                    (*s.prev).next == slot,
+                    "audit: {slot:p}'s previous slot doesn't link back"
+                );
+                assert!(
+                    !(*s.prev).cap.is_null(),
+                    "audit: {slot:p} follows an empty slot"
+                );
+            }
+            if !s.next.is_null() {
+                assert!(
+                    (*s.next).prev == slot,
+                    "audit: {slot:p}'s next slot doesn't link back"
+                );
+                assert!(
+                    !(*s.next).cap.is_null(),
+                    "audit: an empty slot follows {slot:p}"
+                );
+            }
+            if s.prev.is_null() {
+                list(slot);
+            }
+        }
+
+        s.cap
+    }
+
+    /// Walk the list headed by `head` to its end: every slot full and
+    /// linked back to the one before, and no cycle (Brent's algorithm, so
+    /// the walk needs no memory).
+    ///
+    /// # Safety
+    /// The list's slots must be live.
+    unsafe fn list(head: *mut Slot) {
+        let mut previous = head;
+        // SAFETY: per the caller's guarantee.
+        let mut current = unsafe { (*head).next };
+        let mut marker = head;
+        let mut power = 1usize;
+        let mut steps = 0usize;
+
+        while !current.is_null() {
+            // SAFETY: per the caller's guarantee.
+            let c = unsafe { &*current };
+            assert!(
+                c.prev == previous,
+                "audit: list from {head:p}: {current:p} doesn't link back"
+            );
+            assert!(
+                !c.cap.is_null(),
+                "audit: list from {head:p}: {current:p} is empty"
+            );
+            assert!(
+                current != marker,
+                "audit: list from {head:p} is a cycle through {current:p}"
+            );
+
+            steps += 1;
+            if steps == power {
+                marker = current;
+                power *= 2;
+                steps = 0;
+            }
+
+            previous = current;
+            current = c.next;
+        }
+    }
+}
+
 impl Slot {
     /// Delete the capabilities in the slots of the TCB-embedded array or
     /// CNode `slots` (used when finalising a thread).

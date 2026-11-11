@@ -192,6 +192,102 @@ fn enqueue(tcb: *mut Tcb) {
     s.bitmap[p / 64] |= 1 << (p % 64);
 }
 
+#[cfg(feature = "audit")]
+pub(crate) mod audit {
+    //! The audit's checks of the ready queues (`crate::audit`).
+
+    use core::ptr;
+
+    use super::{PRIORITIES, Tcb, ThreadState, sched};
+
+    /// The longest queue walked before calling it a cycle.
+    const MAX_QUEUE: usize = 1 << 16;
+
+    /// Check every ready queue: its bitmap bit set exactly when it has
+    /// threads, each of them runnable, at the queue's priority and linked
+    /// both ways, ending at the tail. Pass each thread to `found`.
+    pub fn queues(mut found: impl FnMut(*mut Tcb)) {
+        let s = sched();
+        for priority in 0..PRIORITIES {
+            let queue = s.queues[priority];
+            let marked = s.bitmap[priority / 64] & (1 << (priority % 64)) != 0;
+            let occupied = !queue.head.is_null();
+            assert!(
+                marked == occupied,
+                "audit: ready queue {priority}'s bitmap bit is wrong"
+            );
+
+            let mut previous = ptr::null_mut();
+            let mut thread = queue.head;
+            let mut length = 0;
+            while !thread.is_null() {
+                // SAFETY: queued threads are live TCBs.
+                let t = unsafe { &*thread };
+                let at = "audit: ready queue";
+                assert!(
+                    t.state == ThreadState::Running,
+                    "{at} {priority}: {thread:p} isn't runnable"
+                );
+                assert!(
+                    t.priority as usize == priority,
+                    "{at} {priority}: {thread:p}'s priority"
+                );
+                assert!(
+                    t.queue_prev == previous,
+                    "{at} {priority}: {thread:p} doesn't link back"
+                );
+
+                length += 1;
+                assert!(
+                    length <= MAX_QUEUE,
+                    "{at} {priority} is a cycle or too long"
+                );
+                found(thread);
+
+                previous = thread;
+                thread = t.queue_next;
+            }
+            assert!(
+                queue.tail == previous,
+                "audit: ready queue {priority}'s tail is wrong"
+            );
+        }
+    }
+
+    /// Check that `tcb` is in its ready queue exactly when it is runnable,
+    /// as far as the queue's ends show.
+    ///
+    /// # Safety
+    /// `tcb` must be a live TCB.
+    pub unsafe fn thread(tcb: *mut Tcb) {
+        // SAFETY: per the caller's guarantee.
+        let t = unsafe { &*tcb };
+        let queue = sched().queues[t.priority as usize];
+
+        if t.state == ThreadState::Running {
+            if t.queue_prev.is_null() {
+                assert!(
+                    queue.head == tcb,
+                    "audit: runnable {tcb:p} isn't in its ready queue"
+                );
+            }
+            if t.queue_next.is_null() {
+                assert!(
+                    queue.tail == tcb,
+                    "audit: runnable {tcb:p} isn't in its ready queue"
+                );
+            }
+        } else {
+            let linked = !t.queue_prev.is_null() || !t.queue_next.is_null();
+            let at_an_end = queue.head == tcb || queue.tail == tcb;
+            assert!(
+                !linked && !at_an_end,
+                "audit: {tcb:p} isn't runnable but is in a ready queue"
+            );
+        }
+    }
+}
+
 fn dequeue(tcb: *mut Tcb) {
     let s = sched();
     // SAFETY: tcb is live and in the queue of its priority.

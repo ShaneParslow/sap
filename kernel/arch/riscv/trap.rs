@@ -497,6 +497,10 @@ extern "C" fn user_trap(context: &mut UserContext) -> ! {
             unsafe { crate::fault::deliver(crate::sched::current(), fault) };
         }
     }
+
+    #[cfg(feature = "audit")]
+    crate::audit::run();
+
     crate::sched::run()
 }
 

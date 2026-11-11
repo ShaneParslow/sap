@@ -23,3 +23,6 @@ sbi-rt = { version = "0.0.4", features = ["legacy"] }
 # Needs firmware that turns CHERI on (menvcfg.Y), such as the OpenSBI
 # built by toolchain/build.sh on the cheri branch.
 cheri = []
+# The audit (audit.rs): check the kernel's own data structures before every
+# return to user mode, and panic at the first broken invariant. For tests.
+audit = []

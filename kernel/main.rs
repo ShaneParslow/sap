@@ -2,6 +2,8 @@
 #![no_main]
 
 mod arch;
+#[cfg(feature = "audit")]
+mod audit;
 mod boot;
 mod cap;
 mod console;

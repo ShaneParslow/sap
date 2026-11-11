@@ -26,7 +26,7 @@ pub const VSPACE_SLOT: usize = 1;
 pub const IPC_BUFFER_SLOT: usize = 2;
 /// The endpoint the thread's faults are delivered to.
 pub const FAULT_SLOT: usize = 3;
-const TCB_SLOTS: usize = 4;
+pub const TCB_SLOTS: usize = 4;
 
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -190,6 +190,67 @@ pub unsafe fn resume(tcb: *mut Tcb) {
     unsafe {
         if (*tcb).state == ThreadState::Inactive {
             crate::sched::make_runnable(tcb);
+        }
+    }
+}
+
+#[cfg(feature = "audit")]
+pub(crate) mod audit {
+    //! The audit's checks of a thread's blocking state (`crate::audit`).
+
+    use super::{Tcb, ThreadState};
+    use crate::audit::Object;
+
+    /// Check that `tcb`'s state agrees with where it is queued: in its ready
+    /// queue exactly when runnable, on the queue of the object it is
+    /// blocked on when waiting, and on none otherwise. Pass the objects it
+    /// is blocked on or bound to to `found`.
+    ///
+    /// # Safety
+    /// `tcb` must be a live TCB, and the objects it names live.
+    pub unsafe fn thread(tcb: *mut Tcb, mut found: impl FnMut(Object)) {
+        // SAFETY: per the caller's guarantee.
+        unsafe {
+            crate::sched::audit::thread(tcb);
+            let t = &*tcb;
+            let queued = !t.ipc_prev.is_null() || !t.ipc_next.is_null();
+
+            match t.state {
+                ThreadState::Inactive | ThreadState::Running => {
+                    let state = t.state;
+                    assert!(
+                        t.blocked_on == 0,
+                        "audit: {state:?} {tcb:p} is blocked on something"
+                    );
+                    assert!(!queued, "audit: {state:?} {tcb:p} is on a wait queue");
+                }
+
+                ThreadState::BlockedOnSend | ThreadState::BlockedOnReceive => {
+                    assert!(t.blocked_on != 0, "audit: {tcb:p} waits on no endpoint");
+                    let ep = t.blocked_on as *mut crate::endpoint::Endpoint;
+                    crate::endpoint::audit::member(ep, tcb);
+                    found(Object::Endpoint(ep));
+                }
+
+                ThreadState::BlockedOnNotification => {
+                    assert!(t.blocked_on != 0, "audit: {tcb:p} waits on no notification");
+                    let ntfn = t.blocked_on as *mut crate::notification::Notification;
+                    crate::notification::audit::member(ntfn, tcb);
+                    found(Object::Notification(ntfn));
+                }
+
+                ThreadState::BlockedOnReply => {
+                    assert!(t.blocked_on != 0, "audit: {tcb:p} waits on no reply object");
+                    assert!(
+                        !queued,
+                        "audit: {tcb:p} waits for a reply but is on a wait queue"
+                    );
+                }
+            }
+
+            if !t.bound_notification.is_null() {
+                found(Object::Notification(t.bound_notification));
+            }
         }
     }
 }

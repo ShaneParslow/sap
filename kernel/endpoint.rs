@@ -407,6 +407,103 @@ pub unsafe fn finalise_reply(reply: *mut Reply) {
     }
 }
 
+#[cfg(feature = "audit")]
+pub(crate) mod audit {
+    //! The audit's checks of endpoint queues (`crate::audit`).
+
+    use core::ptr;
+
+    use super::{Endpoint, Tcb, ThreadState};
+
+    /// The longest queue walked before calling it a cycle.
+    const MAX_QUEUE: usize = 1 << 16;
+
+    /// Check `ep`'s queue: its threads all sending or all receiving, each
+    /// blocked on `ep` and linked both ways, ending at the tail. Pass each
+    /// thread to `found`.
+    ///
+    /// # Safety
+    /// `ep` must be a live endpoint, and its queued threads live TCBs.
+    pub unsafe fn queue(ep: *mut Endpoint, mut found: impl FnMut(*mut Tcb)) {
+        // SAFETY: per the caller's guarantee.
+        unsafe {
+            let e = &*ep;
+            if e.head.is_null() {
+                assert!(
+                    e.tail.is_null(),
+                    "audit: endpoint {ep:p} has a tail but no head"
+                );
+                return;
+            }
+
+            let state = (*e.head).state;
+            let waiting = matches!(
+                state,
+                ThreadState::BlockedOnSend | ThreadState::BlockedOnReceive
+            );
+            assert!(
+                waiting,
+                "audit: endpoint {ep:p} queues a thread in state {state:?}"
+            );
+
+            let mut previous = ptr::null_mut();
+            let mut thread = e.head;
+            let mut length = 0;
+            while !thread.is_null() {
+                let t = &*thread;
+                let at = "audit: endpoint";
+                assert!(
+                    t.state == state,
+                    "{at} {ep:p} queues senders and receivers together"
+                );
+                assert!(
+                    t.blocked_on == ep as usize,
+                    "{at} {ep:p} queues {thread:p}, blocked elsewhere"
+                );
+                assert!(
+                    t.ipc_prev == previous,
+                    "{at} {ep:p}: {thread:p} doesn't link back"
+                );
+
+                length += 1;
+                assert!(
+                    length <= MAX_QUEUE,
+                    "{at} {ep:p}'s queue is a cycle or too long"
+                );
+                found(thread);
+
+                previous = thread;
+                thread = t.ipc_next;
+            }
+            assert!(e.tail == previous, "audit: endpoint {ep:p}'s tail is wrong");
+        }
+    }
+
+    /// Check that `tcb`, blocked on `ep`, is in its queue, as far as the
+    /// queue's ends show.
+    ///
+    /// # Safety
+    /// Both must be live.
+    pub unsafe fn member(ep: *mut Endpoint, tcb: *mut Tcb) {
+        // SAFETY: per the caller's guarantee.
+        unsafe {
+            let (e, t) = (&*ep, &*tcb);
+            if t.ipc_prev.is_null() {
+                assert!(
+                    e.head == tcb,
+                    "audit: {tcb:p} is blocked on {ep:p} but not queued"
+                );
+            }
+            if t.ipc_next.is_null() {
+                assert!(
+                    e.tail == tcb,
+                    "audit: {tcb:p} is blocked on {ep:p} but not queued"
+                );
+            }
+        }
+    }
+}
+
 fn enqueue(e: &mut Endpoint, tcb: *mut Tcb) {
     // SAFETY: tcb is live and in no queue; the tail is live.
     unsafe {

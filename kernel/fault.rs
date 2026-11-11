@@ -53,6 +53,12 @@ pub fn set_root(tcb: *mut Tcb) {
     ROOT.store(tcb as usize, Ordering::Relaxed);
 }
 
+/// The root task's thread.
+#[cfg(feature = "audit")]
+pub fn root() -> *mut Tcb {
+    ROOT.load(Ordering::Relaxed) as *mut Tcb
+}
+
 /// The running thread `tcb` faulted: deliver it to its handler, or suspend
 /// it if it has none.
 ///
