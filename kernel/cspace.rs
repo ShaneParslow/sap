@@ -85,7 +85,12 @@ pub fn cnode_slot(cnode: Cap, index: usize) -> Option<*mut Slot> {
 /// Resolve `depth` bits of `cptr` starting at CNode capability `root`.
 /// Returns the slot reached and the number of bits left unresolved, which
 /// is nonzero when the walk stopped at a capability that isn't a CNode.
+/// A depth beyond the word size resolves nothing, as in seL4.
 pub fn resolve(root: Cap, cptr: usize, depth: usize) -> Result<(*mut Slot, usize), LookupError> {
+    if depth > usize::BITS as usize {
+        return Err(LookupError::DepthMismatch);
+    }
+
     let mut node = root;
     let mut left = depth;
     loop {
