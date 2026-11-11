@@ -216,6 +216,9 @@ pub fn start(mut alloc: BootAllocator) {
         info.empty.len()
     );
 
+    #[cfg(feature = "audit")]
+    crate::audit::register_root_task(cnode_cap, tcb);
+
     // SAFETY: tcb was initialized above.
     unsafe {
         (*tcb).context = UserContext::new_user(entry, STACK_TOP, BOOT_INFO_VA);

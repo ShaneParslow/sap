@@ -156,100 +156,81 @@ pub(crate) mod audit {
 
     use core::ptr;
 
-    use super::{Notification, State, Tcb, ThreadState};
+    use sap_abi::object;
+
+    use super::{Notification, State, ThreadState};
+    use crate::audit::ledger::{Identity, Ledger};
 
     /// The longest queue walked before calling it a cycle.
     const MAX_QUEUE: usize = 1 << 16;
 
-    /// Check `ntfn`: its waiters each blocked on it and linked both ways,
-    /// ending at the tail, and its bound thread bound to it. Pass each
-    /// waiter and the bound thread to `found`.
+    /// Check `ntfn`: its bound thread live and bound to it, and its waiters
+    /// live threads, each blocked on it and linked both ways, ending at the
+    /// tail. Counts each waiter's queues.
     ///
     /// # Safety
-    /// `ntfn` must be a live notification, and its waiting and bound
-    /// threads live TCBs.
-    pub unsafe fn notification(ntfn: *mut Notification, mut found: impl FnMut(*mut Tcb)) {
+    /// `ntfn` must be a live notification.
+    pub unsafe fn notification(ntfn: *mut Notification, ledger: &mut Ledger) {
         // SAFETY: per the caller's guarantee.
-        unsafe {
-            let n = &*ntfn;
+        let n = unsafe { &*ntfn };
+        let at = "audit: notification";
 
-            if !n.bound.is_null() {
-                let bound = (*n.bound).bound_notification;
-                assert!(
-                    bound == ntfn,
-                    "audit: {ntfn:p}'s bound thread isn't bound to it"
-                );
-                found(n.bound);
-            }
-
-            let State::Waiting { head, tail } = n.state else {
-                return;
-            };
+        if !n.bound.is_null() {
+            let bound = n.bound;
+            let live = ledger
+                .live(Identity::at(bound as usize, object::TCB))
+                .is_some();
             assert!(
-                !head.is_null(),
-                "audit: notification {ntfn:p} is waited on by nobody"
+                live,
+                "{at} {ntfn:p} is bound to {bound:p}, which isn't a live thread"
             );
-
-            let mut previous = ptr::null_mut();
-            let mut thread = head;
-            let mut length = 0;
-            while !thread.is_null() {
-                let t = &*thread;
-                let at = "audit: notification";
-                let waiting = t.state == ThreadState::BlockedOnNotification;
-                assert!(
-                    waiting,
-                    "{at} {ntfn:p} queues {thread:p}, which isn't waiting"
-                );
-                assert!(
-                    t.blocked_on == ntfn as usize,
-                    "{at} {ntfn:p} queues {thread:p}, blocked elsewhere"
-                );
-                assert!(
-                    t.ipc_prev == previous,
-                    "{at} {ntfn:p}: {thread:p} doesn't link back"
-                );
-
-                length += 1;
-                assert!(
-                    length <= MAX_QUEUE,
-                    "{at} {ntfn:p}'s queue is a cycle or too long"
-                );
-                found(thread);
-
-                previous = thread;
-                thread = t.ipc_next;
-            }
+            // SAFETY: a live thread.
+            let back = unsafe { (*bound).bound_notification };
             assert!(
-                tail == previous,
-                "audit: notification {ntfn:p}'s tail is wrong"
+                back == ntfn,
+                "{at} {ntfn:p}'s bound thread isn't bound to it"
             );
         }
-    }
 
-    /// Check that `tcb`, blocked on `ntfn`, is in its queue, as far as the
-    /// queue's ends show.
-    ///
-    /// # Safety
-    /// Both must be live.
-    pub unsafe fn member(ntfn: *mut Notification, tcb: *mut Tcb) {
-        // SAFETY: per the caller's guarantee.
-        let (n, t) = unsafe { (&*ntfn, &*tcb) };
         let State::Waiting { head, tail } = n.state else {
-            panic!("audit: {tcb:p} is blocked on {ntfn:p}, which nobody waits on");
+            return;
         };
-        if t.ipc_prev.is_null() {
+        assert!(!head.is_null(), "{at} {ntfn:p} is waited on by nobody");
+
+        let mut previous = ptr::null_mut();
+        let mut thread = head;
+        let mut length = 0;
+        while !thread.is_null() {
+            let Some(index) = ledger.live(Identity::at(thread as usize, object::TCB)) else {
+                panic!("{at} {ntfn:p} queues {thread:p}, which isn't a live thread");
+            };
+            ledger.entries()[index].waits += 1;
+
+            // SAFETY: a live thread.
+            let t = unsafe { &*thread };
+            let waiting = t.state == ThreadState::BlockedOnNotification;
             assert!(
-                head == tcb,
-                "audit: {tcb:p} is blocked on {ntfn:p} but not queued"
+                waiting,
+                "{at} {ntfn:p} queues {thread:p}, which isn't waiting"
             );
-        }
-        if t.ipc_next.is_null() {
             assert!(
-                tail == tcb,
-                "audit: {tcb:p} is blocked on {ntfn:p} but not queued"
+                t.blocked_on == ntfn as usize,
+                "{at} {ntfn:p} queues {thread:p}, blocked elsewhere"
             );
+            assert!(
+                t.ipc_prev == previous,
+                "{at} {ntfn:p}: {thread:p} doesn't link back"
+            );
+
+            length += 1;
+            assert!(
+                length <= MAX_QUEUE,
+                "{at} {ntfn:p}'s queue is a cycle or too long"
+            );
+            previous = thread;
+            thread = t.ipc_next;
         }
+        assert!(tail == previous, "{at} {ntfn:p}'s tail is wrong");
     }
 }
 

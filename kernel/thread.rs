@@ -196,61 +196,168 @@ pub unsafe fn resume(tcb: *mut Tcb) {
 
 #[cfg(feature = "audit")]
 pub(crate) mod audit {
-    //! The audit's checks of a thread's blocking state (`crate::audit`).
+    //! The audit's checks of threads (`crate::audit`).
 
-    use super::{Tcb, ThreadState};
-    use crate::audit::Object;
+    use sap_abi::object;
 
-    /// Check that `tcb`'s state agrees with where it is queued: in its ready
-    /// queue exactly when runnable, on the queue of the object it is
-    /// blocked on when waiting, and on none otherwise. Pass the objects it
-    /// is blocked on or bound to to `found`.
+    use super::{CSPACE_SLOT, FAULT_SLOT, IPC_BUFFER_SLOT, Tcb, ThreadState, VSPACE_SLOT};
+    use crate::arch::ArchCap;
+    use crate::audit::ledger::{Entry, Identity, Ledger};
+    use crate::cap::Cap;
+
+    /// Check `tcb`, whose ledger entry is `entry`, after the ready queues
+    /// and wait queues have counted it: in a ready queue exactly when
+    /// runnable, in a wait queue exactly when waiting there, blocked on a
+    /// live object of the right type, linked back by the reply object and
+    /// notification it uses, and holding the right kinds of capability in
+    /// its slots.
     ///
     /// # Safety
-    /// `tcb` must be a live TCB, and the objects it names live.
-    pub unsafe fn thread(tcb: *mut Tcb, mut found: impl FnMut(Object)) {
+    /// `tcb` must be a live thread.
+    pub unsafe fn thread(tcb: *mut Tcb, entry: Entry, ledger: &Ledger) {
         // SAFETY: per the caller's guarantee.
-        unsafe {
-            crate::sched::audit::thread(tcb);
-            let t = &*tcb;
-            let queued = !t.ipc_prev.is_null() || !t.ipc_next.is_null();
+        let t = unsafe { &*tcb };
+        let state = t.state;
+        let at = "audit: thread";
 
-            match t.state {
-                ThreadState::Inactive | ThreadState::Running => {
-                    let state = t.state;
-                    assert!(
-                        t.blocked_on == 0,
-                        "audit: {state:?} {tcb:p} is blocked on something"
-                    );
-                    assert!(!queued, "audit: {state:?} {tcb:p} is on a wait queue");
-                }
+        let runnable = state == ThreadState::Running;
+        let queued = entry.queued;
+        assert!(
+            queued == runnable as u32,
+            "{at} {tcb:p} ({state:?}) is in {queued} ready queue(s)"
+        );
 
-                ThreadState::BlockedOnSend | ThreadState::BlockedOnReceive => {
-                    assert!(t.blocked_on != 0, "audit: {tcb:p} waits on no endpoint");
-                    let ep = t.blocked_on as *mut crate::endpoint::Endpoint;
-                    crate::endpoint::audit::member(ep, tcb);
-                    found(Object::Endpoint(ep));
-                }
+        let waiting = matches!(
+            state,
+            ThreadState::BlockedOnSend
+                | ThreadState::BlockedOnReceive
+                | ThreadState::BlockedOnNotification
+        );
+        let waits = entry.waits;
+        assert!(
+            waits == waiting as u32,
+            "{at} {tcb:p} ({state:?}) is in {waits} wait queue(s)"
+        );
 
-                ThreadState::BlockedOnNotification => {
-                    assert!(t.blocked_on != 0, "audit: {tcb:p} waits on no notification");
-                    let ntfn = t.blocked_on as *mut crate::notification::Notification;
-                    crate::notification::audit::member(ntfn, tcb);
-                    found(Object::Notification(ntfn));
-                }
+        let linked = !t.ipc_prev.is_null() || !t.ipc_next.is_null();
+        let blocked_on = t.blocked_on;
+        let blocked_on_live = |object_type| {
+            let identity = Identity::at(blocked_on, object_type);
+            blocked_on != 0 && ledger.live(identity).is_some()
+        };
 
-                ThreadState::BlockedOnReply => {
-                    assert!(t.blocked_on != 0, "audit: {tcb:p} waits on no reply object");
-                    assert!(
-                        !queued,
-                        "audit: {tcb:p} waits for a reply but is on a wait queue"
-                    );
-                }
+        match state {
+            ThreadState::Inactive | ThreadState::Running => {
+                assert!(
+                    blocked_on == 0,
+                    "{at} {tcb:p} ({state:?}) is blocked on something"
+                );
+                assert!(
+                    !linked,
+                    "{at} {tcb:p} ({state:?}) is linked into a wait queue"
+                );
             }
 
-            if !t.bound_notification.is_null() {
-                found(Object::Notification(t.bound_notification));
+            ThreadState::BlockedOnSend | ThreadState::BlockedOnReceive => {
+                let live = blocked_on_live(object::ENDPOINT);
+                assert!(
+                    live,
+                    "{at} {tcb:p} waits on {blocked_on:#x}, not a live endpoint"
+                );
             }
+
+            ThreadState::BlockedOnNotification => {
+                let live = blocked_on_live(object::NOTIFICATION);
+                assert!(
+                    live,
+                    "{at} {tcb:p} waits on {blocked_on:#x}, not a live notification"
+                );
+            }
+
+            ThreadState::BlockedOnReply => {
+                let live = blocked_on_live(object::REPLY);
+                assert!(
+                    live,
+                    "{at} {tcb:p} waits on {blocked_on:#x}, not a live reply object"
+                );
+                assert!(
+                    !linked,
+                    "{at} {tcb:p} waits for a reply but is linked into a wait queue"
+                );
+                // SAFETY: a live reply object.
+                let caller = unsafe { crate::endpoint::audit::caller(blocked_on as *mut _) };
+                assert!(
+                    caller == tcb,
+                    "{at} {tcb:p}'s reply object doesn't name it as caller"
+                );
+            }
+        }
+
+        let reply = t.ipc_reply;
+        if !reply.is_null() {
+            let receiving = state == ThreadState::BlockedOnReceive;
+            assert!(
+                receiving,
+                "{at} {tcb:p} holds a lent reply object but isn't receiving"
+            );
+            let live = ledger
+                .live(Identity::at(reply as usize, object::REPLY))
+                .is_some();
+            assert!(
+                live,
+                "{at} {tcb:p} holds {reply:p}, which isn't a live reply object"
+            );
+            // SAFETY: a live reply object.
+            let receiver = unsafe { crate::endpoint::audit::receiver(reply) };
+            assert!(
+                receiver == tcb,
+                "{at} {tcb:p}'s lent reply object is lent elsewhere"
+            );
+        }
+
+        let bound = t.bound_notification;
+        if !bound.is_null() {
+            let live = ledger
+                .live(Identity::at(bound as usize, object::NOTIFICATION))
+                .is_some();
+            assert!(
+                live,
+                "{at} {tcb:p} is bound to {bound:p}, which isn't a live notification"
+            );
+            // SAFETY: a live notification.
+            let back = unsafe { (*bound).bound };
+            assert!(back == tcb, "{at} {tcb:p}'s notification isn't bound to it");
+        }
+
+        let kinds = [
+            (
+                CSPACE_SLOT,
+                matches!(t.slots[CSPACE_SLOT].cap, Cap::Null | Cap::CNode { .. }),
+            ),
+            (
+                VSPACE_SLOT,
+                matches!(
+                    t.slots[VSPACE_SLOT].cap,
+                    Cap::Null | Cap::Arch(ArchCap::PageTable { .. })
+                ),
+            ),
+            (
+                IPC_BUFFER_SLOT,
+                matches!(
+                    t.slots[IPC_BUFFER_SLOT].cap,
+                    Cap::Null | Cap::Arch(ArchCap::Frame { .. })
+                ),
+            ),
+            (
+                FAULT_SLOT,
+                matches!(t.slots[FAULT_SLOT].cap, Cap::Null | Cap::Endpoint { .. }),
+            ),
+        ];
+        for (slot, right_kind) in kinds {
+            assert!(
+                right_kind,
+                "{at} {tcb:p}'s slot {slot} holds the wrong kind of capability"
+            );
         }
     }
 }

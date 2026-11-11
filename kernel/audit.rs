@@ -1,110 +1,41 @@
 //! The audit: a check of the kernel's own data structures, run before every
 //! return to user mode in kernels built with the `audit` feature
-//! (`cargo run --features audit`). A broken invariant panics, naming it, at
+//! (`cargo run --profile audit --features audit`: the `audit` profile is
+//! optimized, with debug assertions and overflow checks). A broken
+//! invariant panics, naming it, at
 //! the first return to user mode after the operation that broke it. Built
 //! without the feature, none of this exists.
 //!
-//! Each module checks its own structures, in an `audit` submodule beside
-//! them: the derivation lists (`cspace`), the ready queues (`sched`),
-//! threads' blocking state (`thread`), and the queues of threads waiting
-//! on endpoints and notifications (`endpoint`, `notification`). This module
-//! decides what to check: everything reachable from the root task's thread
-//! and the ready queues, following capabilities in reached slots, threads'
-//! blocking and binding, and waiting threads.
+//! The ledger (`ledger`) records every object, so the audit checks all of
+//! them, reachable or not, and checks each pointer it follows against the
+//! ledger before following it. Each module checks its own structures, in
+//! an `audit` submodule beside them: slots and derivation lists (`cspace`),
+//! the ready queues (`sched`), threads (`thread`), endpoint queues and reply
+//! objects (`endpoint`), notifications (`notification`), and address spaces
+//! (`arch`). This module runs them and checks what they counted:
+//! - every live object is named by at least one capability, and its
+//!   capabilities are adjacent on their derivation list;
+//! - every capability names a live object;
+//! - a page table is mapped in at most one place, and every page-table entry
+//!   that maps a frame has a frame capability recording it.
 //!
-//! It trusts that the pointers it follows name objects of the right type.
-//!
-//! An audit visits every slot of every reachable CNode, so it costs about
-//! as much as the CNodes are big: fine for `test-kernel`, slow for a full
-//! boot. `SAP_AUDIT_INTERVAL=N` at build time audits every Nth return to
-//! user mode instead, which is faster but reports a broken invariant up to
-//! N returns after the operation that broke it.
-//!
-//! TODO: objects nothing reachable names (a CNode whose only capability is
-//! inside itself) aren't checked; a ledger of every object retype creates
-//! would reach them, and would let the audit check pointers before following
-//! them (the next step of the audit).
+//! An audit visits every slot of every CNode, so it costs about as much as
+//! the CNodes are big: fine for `test-kernel` (1.3 s against 0.5 s without,
+//! QEMU, `audit` profile), too slow for a full boot.
+//! `SAP_AUDIT_INTERVAL=N` at build time audits every Nth return to user mode
+//! instead, which is faster but reports a broken invariant up to N returns
+//! after the operation that broke it.
+
+pub mod ledger;
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 
+use sap_abi::object;
+
 use crate::cap::Cap;
-use crate::endpoint::Endpoint;
-use crate::global::Global;
-use crate::notification::Notification;
-use crate::thread::Tcb;
-
-/// Most objects one audit reaches; reaching more panics.
-const MAX_REACHED: usize = 8192;
-
-/// An object the audit checks.
-#[derive(Clone, Copy)]
-pub enum Object {
-    CNode { ptr: usize, radix: u8 },
-    Thread(*mut Tcb),
-    Endpoint(*mut Endpoint),
-    Notification(*mut Notification),
-}
-
-impl Object {
-    /// The object `cap` names, if the audit checks objects of its type.
-    pub fn named_by(cap: Cap) -> Option<Object> {
-        match cap {
-            Cap::CNode { ptr, radix, .. } => Some(Object::CNode { ptr, radix }),
-            Cap::Thread { ptr } => Some(Object::Thread(ptr as *mut Tcb)),
-            Cap::Endpoint { ptr, .. } => Some(Object::Endpoint(ptr as *mut Endpoint)),
-            Cap::Notification { ptr, .. } => Some(Object::Notification(ptr as *mut Notification)),
-            _ => None,
-        }
-    }
-
-    fn address(&self) -> usize {
-        match *self {
-            Object::CNode { ptr, .. } => ptr,
-            Object::Thread(tcb) => tcb as usize,
-            Object::Endpoint(ep) => ep as usize,
-            Object::Notification(ntfn) => ntfn as usize,
-        }
-    }
-}
-
-/// The objects one audit has reached: in the order reached, which is the
-/// order they are checked in, and indexed by address, to reach each once.
-struct Reached {
-    objects: [Object; MAX_REACHED],
-    by_address: [u16; MAX_REACHED],
-    len: usize,
-}
-
-const _: () = assert!(MAX_REACHED <= u16::MAX as usize + 1);
-
-impl Reached {
-    /// Add `object`, unless it was reached already.
-    fn add(&mut self, object: Object) {
-        let address = object.address();
-        let objects = &self.objects;
-        let found = self.by_address[..self.len]
-            .binary_search_by_key(&address, |&i| objects[i as usize].address());
-        let Err(position) = found else {
-            return;
-        };
-
-        assert!(
-            self.len < MAX_REACHED,
-            "audit: more than {MAX_REACHED} objects reached"
-        );
-        self.objects[self.len] = object;
-        self.by_address
-            .copy_within(position..self.len, position + 1);
-        self.by_address[position] = self.len as u16;
-        self.len += 1;
-    }
-}
-
-static REACHED: Global<Reached> = Global::new(Reached {
-    objects: [Object::Thread(core::ptr::null_mut()); MAX_REACHED],
-    by_address: [0; MAX_REACHED],
-    len: 0,
-});
+use crate::cspace::{SLOT_BITS, Slot};
+use crate::thread::{TCB_SLOTS, Tcb};
+use ledger::{Entry, Identity, Ledger};
 
 /// Audit every this many returns to user mode (`SAP_AUDIT_INTERVAL`).
 const INTERVAL: usize = parse_interval(env!("SAP_AUDIT_INTERVAL"));
@@ -128,8 +59,8 @@ const fn parse_interval(text: &str) -> usize {
 /// Returns to user mode since the last audit.
 static SINCE_LAST: AtomicUsize = AtomicUsize::new(0);
 
-/// Check everything reachable, every `INTERVAL` calls. Called before every
-/// return to user mode.
+/// Check every object, every `INTERVAL` calls. Called before every return
+/// to user mode.
 pub fn run() {
     let since_last = SINCE_LAST.load(Ordering::Relaxed) + 1;
     if since_last < INTERVAL {
@@ -138,54 +69,177 @@ pub fn run() {
     }
     SINCE_LAST.store(0, Ordering::Relaxed);
 
-    // SAFETY: the audit runs between kernel operations, and nothing else
-    // uses REACHED.
-    let reached = unsafe { REACHED.get() };
-    reached.len = 0;
+    let ledger = ledger::get();
+    ledger.clear_counters();
 
-    reached.add(Object::Thread(crate::fault::root()));
-    crate::sched::audit::queues(|tcb| reached.add(Object::Thread(tcb)));
+    slots(ledger);
+    crate::sched::audit::queues(ledger);
+    waiting(ledger);
+    threads(ledger);
+    crate::arch::audit::address_spaces(ledger);
+    counts(ledger);
+}
 
-    let mut next = 0;
-    while next < reached.len {
-        let object = reached.objects[next];
-        next += 1;
-        // SAFETY: reached objects are live (see the module comment).
-        unsafe { check(object, reached) };
+/// Record the root task's objects, which the kernel makes at boot: those
+/// its CNode (`cnode`) and thread (`tcb`) hold capabilities to.
+pub fn register_root_task(cnode: Cap, tcb: *mut Tcb) {
+    let ledger = ledger::get();
+    let Cap::CNode { ptr, radix, .. } = cnode else {
+        panic!("audit: the root task's CNode isn't a CNode");
+    };
+
+    let register = |ledger: &mut Ledger, slot: *mut Slot| {
+        // SAFETY: the root task's slots are live.
+        let cap = unsafe { (*slot).cap };
+        if let Some(identity) = Identity::of(&cap) {
+            ledger.register(identity);
+        }
+    };
+    for i in 0..1usize << radix {
+        register(ledger, (ptr + (i << SLOT_BITS)) as *mut Slot);
+    }
+    for i in 0..TCB_SLOTS {
+        // SAFETY: the root task's thread is live.
+        register(ledger, unsafe { &raw mut (*tcb).slots[i] });
     }
 }
 
-/// Check one object, adding the objects it leads to.
-///
-/// # Safety
-/// `object` must be live.
-unsafe fn check(object: Object, reached: &mut Reached) {
-    let mut found = |cap: Cap| {
-        if let Some(object) = Object::named_by(cap) {
-            reached.add(object);
+/// Check every slot of every CNode and thread, and count what the
+/// capabilities in them name.
+fn slots(ledger: &mut Ledger) {
+    for i in 0..ledger.entries().len() {
+        let container = ledger.entries()[i];
+        let address = crate::arch::phys_to_virt(container.identity.pa);
+
+        match container.identity.object_type {
+            object::CNODE => {
+                let count = 1usize << (container.identity.bits as usize - SLOT_BITS);
+                for index in 0..count {
+                    let slot = (address + (index << SLOT_BITS)) as *mut Slot;
+                    check_slot(ledger, slot, container);
+                }
+            }
+
+            object::TCB => {
+                let tcb = address as *mut Tcb;
+                for index in 0..TCB_SLOTS {
+                    // SAFETY: the ledger holds the thread, so it is in memory.
+                    let slot = unsafe { &raw mut (*tcb).slots[index] };
+                    check_slot(ledger, slot, container);
+                }
+            }
+
+            _ => {}
         }
+    }
+}
+
+/// Check one slot of `container`, and count what its capability names.
+fn check_slot(ledger: &mut Ledger, slot: *mut Slot, container: Entry) {
+    // SAFETY: the slot is inside an object the ledger holds.
+    let cap = unsafe { crate::cspace::audit::slot(slot, ledger) };
+    if cap.is_null() {
+        return;
+    }
+
+    let holder = container.identity;
+    assert!(
+        container.live,
+        "audit: {slot:p} holds a capability inside finalised {holder:?}"
+    );
+
+    if matches!(cap, Cap::Untyped { .. }) {
+        // SAFETY: as above.
+        unsafe { crate::cspace::audit::untyped(slot, ledger) };
+        return;
+    }
+
+    let Some(identity) = Identity::of(&cap) else {
+        return;
+    };
+    let Some(index) = ledger.live(identity) else {
+        panic!("audit: {slot:p} names {identity:?}, which isn't live");
     };
 
-    // SAFETY: per the caller's guarantee.
-    unsafe {
-        match object {
-            Object::CNode { ptr, radix } => crate::cspace::audit::cnode(ptr, radix, found),
+    // SAFETY: as above; its neighbours were checked by `slot`.
+    let starts_run = unsafe { crate::cspace::audit::starts_run(slot) };
+    let present = crate::arch::audit::mapping_in_place(&cap);
 
-            Object::Thread(tcb) => {
-                for i in 0..crate::thread::TCB_SLOTS {
-                    found(crate::cspace::audit::slot(&raw mut (*tcb).slots[i]));
+    let entry = &mut ledger.entries()[index];
+    entry.caps += 1;
+    entry.runs += starts_run as u32;
+    entry.present += present as u32;
+}
+
+/// Check every live endpoint, notification and reply object.
+fn waiting(ledger: &mut Ledger) {
+    for i in 0..ledger.entries().len() {
+        let entry = ledger.entries()[i];
+        if !entry.live {
+            continue;
+        }
+        let address = crate::arch::phys_to_virt(entry.identity.pa);
+
+        // SAFETY: live objects in the ledger are in memory.
+        unsafe {
+            match entry.identity.object_type {
+                object::ENDPOINT => crate::endpoint::audit::queue(address as *mut _, ledger),
+                object::REPLY => crate::endpoint::audit::reply(address as *mut _, ledger),
+                object::NOTIFICATION => {
+                    crate::notification::audit::notification(address as *mut _, ledger);
                 }
-                crate::thread::audit::thread(tcb, |object| reached.add(object));
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Check every live thread. After `waiting` and the ready queues, whose
+/// counts it checks.
+fn threads(ledger: &mut Ledger) {
+    for i in 0..ledger.entries().len() {
+        let entry = ledger.entries()[i];
+        if entry.live && entry.identity.object_type == object::TCB {
+            let tcb = crate::arch::phys_to_virt(entry.identity.pa) as *mut Tcb;
+            // SAFETY: as above.
+            unsafe { crate::thread::audit::thread(tcb, entry, ledger) };
+        }
+    }
+}
+
+/// Check what was counted about each live object.
+fn counts(ledger: &mut Ledger) {
+    for entry in ledger.entries().iter() {
+        if !entry.live {
+            continue;
+        }
+        let identity = entry.identity;
+
+        assert!(
+            entry.caps > 0,
+            "audit: {identity:?} is live, but no capability names it"
+        );
+        let runs = entry.runs;
+        assert!(
+            runs == 1,
+            "audit: {identity:?}'s capabilities are in {runs} separate runs"
+        );
+
+        let refs = entry.refs;
+        match identity.object_type {
+            object::PAGE_TABLE => {
+                assert!(refs <= 1, "audit: {identity:?} is mapped in {refs} places");
             }
 
-            Object::Endpoint(ep) => {
-                crate::endpoint::audit::queue(ep, |tcb| reached.add(Object::Thread(tcb)));
+            object::FRAME_4K | object::FRAME_2M | object::FRAME_1G => {
+                let present = entry.present;
+                assert!(
+                    refs <= present,
+                    "audit: {identity:?} is mapped {refs} times, but capabilities record {present}"
+                );
             }
 
-            Object::Notification(ntfn) => {
-                let found = |tcb| reached.add(Object::Thread(tcb));
-                crate::notification::audit::notification(ntfn, found);
-            }
+            _ => {}
         }
     }
 }

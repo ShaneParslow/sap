@@ -312,6 +312,10 @@ unsafe fn delete_at_depth(slot: *mut Slot, depth: usize) -> Result<(), DeleteErr
             return Ok(());
         }
         let last = is_final(slot);
+        #[cfg(feature = "audit")]
+        if last {
+            crate::audit::ledger::finalised(&cap);
+        }
         // Empty the slot before finalising, so a CNode that (directly or
         // not) contains this slot can't reach it again while its contents
         // are deleted.
@@ -379,27 +383,17 @@ pub unsafe fn revoke(slot: *mut Slot) -> Result<(), DeleteError> {
 pub(crate) mod audit {
     //! The audit's checks of slots and derivation lists (`crate::audit`).
 
-    use super::{Cap, Slot, slot_at};
+    use super::{Cap, Slot, is_parent_of};
+    use crate::audit::ledger::{Identity, Ledger};
 
-    /// Check every slot of the CNode at `ptr` with `radix` bits of slots,
-    /// passing each slot's capability to `found`.
+    /// Check `slot` and return its capability. An empty slot is on no list
+    /// and keeps no flags. A full one is linked both ways with full
+    /// neighbours, which must be live slots; if it heads a list, the whole
+    /// list is checked.
     ///
     /// # Safety
-    /// The CNode must be live.
-    pub unsafe fn cnode(ptr: usize, radix: u8, mut found: impl FnMut(Cap)) {
-        for i in 0..1usize << radix {
-            // SAFETY: the slot is inside the live CNode.
-            found(unsafe { slot(slot_at(ptr, i)) });
-        }
-    }
-
-    /// Check `slot` and return its capability. An empty slot is on no list.
-    /// A full one is linked both ways with full neighbours, and if it heads
-    /// a list, the whole list is checked.
-    ///
-    /// # Safety
-    /// `slot` must be a live slot, and its neighbours live slots.
-    pub unsafe fn slot(slot: *mut Slot) -> Cap {
+    /// `slot` must be in memory.
+    pub unsafe fn slot(slot: *mut Slot, ledger: &Ledger) -> Cap {
         // SAFETY: per the caller's guarantee.
         let s = unsafe { &*slot };
 
@@ -419,7 +413,7 @@ pub(crate) mod audit {
         let flags_agree = s.first_badged == s.revocable;
         assert!(
             flags_agree,
-            "audit: slot {slot:p} is first-badged but not revocable, or the reverse"
+            "audit: {slot:p} is first-badged but not revocable, or the reverse"
         );
         if matches!(s.cap, Cap::Untyped { .. }) {
             assert!(
@@ -428,7 +422,17 @@ pub(crate) mod audit {
             );
         }
 
-        // SAFETY: neighbours are live slots (caller's guarantee).
+        for neighbour in [s.prev, s.next] {
+            if !neighbour.is_null() {
+                let live = ledger.is_slot(neighbour);
+                assert!(
+                    live,
+                    "audit: {slot:p} links to {neighbour:p}, which isn't a live slot"
+                );
+            }
+        }
+
+        // SAFETY: the neighbours are live slots.
         unsafe {
             if !s.prev.is_null() {
                 assert!(
@@ -450,21 +454,23 @@ pub(crate) mod audit {
                     "audit: an empty slot follows {slot:p}"
                 );
             }
-            if s.prev.is_null() {
-                list(slot);
-            }
+        }
+
+        if s.prev.is_null() {
+            // SAFETY: per the caller's guarantee.
+            unsafe { list(slot, ledger) };
         }
 
         s.cap
     }
 
-    /// Walk the list headed by `head` to its end: every slot full and
+    /// Walk the list headed by `head` to its end: every slot live, full and
     /// linked back to the one before, and no cycle (Brent's algorithm, so
     /// the walk needs no memory).
     ///
     /// # Safety
-    /// The list's slots must be live.
-    unsafe fn list(head: *mut Slot) {
+    /// `head` must be in memory.
+    unsafe fn list(head: *mut Slot, ledger: &Ledger) {
         let mut previous = head;
         // SAFETY: per the caller's guarantee.
         let mut current = unsafe { (*head).next };
@@ -473,7 +479,13 @@ pub(crate) mod audit {
         let mut steps = 0usize;
 
         while !current.is_null() {
-            // SAFETY: per the caller's guarantee.
+            let live = ledger.is_slot(current);
+            assert!(
+                live,
+                "audit: list from {head:p} reaches {current:p}, which isn't a live slot"
+            );
+
+            // SAFETY: a live slot.
             let c = unsafe { &*current };
             assert!(
                 c.prev == previous,
@@ -498,6 +510,65 @@ pub(crate) mod audit {
             previous = current;
             current = c.next;
         }
+    }
+
+    /// Whether `slot` starts a run of capabilities to one object: the slot
+    /// before it holds a capability to another.
+    ///
+    /// # Safety
+    /// `slot` and its neighbours must be live slots.
+    pub unsafe fn starts_run(slot: *mut Slot) -> bool {
+        // SAFETY: per the caller's guarantee.
+        unsafe {
+            let s = &*slot;
+            s.prev.is_null() || !(*s.prev).cap.same_object_as(&s.cap)
+        }
+    }
+
+    /// Check the objects in the untyped region whose capability is in
+    /// `slot`: none is live above its watermark, and every live one is
+    /// among its descendants, so revoking it reaches them all.
+    ///
+    /// # Safety
+    /// `slot` must be a live slot holding an untyped capability, and its
+    /// list must be live slots.
+    pub unsafe fn untyped(slot: *mut Slot, ledger: &Ledger) {
+        // SAFETY: per the caller's guarantee.
+        let s = unsafe { &*slot };
+        let Cap::Untyped {
+            base,
+            size_bits,
+            free_index,
+            ..
+        } = s.cap
+        else {
+            return;
+        };
+        let end = base + (1usize << size_bits);
+
+        let above = ledger.live_count(base + free_index, end);
+        assert!(
+            above == 0,
+            "audit: untyped {slot:p} has {above} live object(s) above its watermark"
+        );
+
+        let mut descendants = 0;
+        let mut next = s.next;
+        // SAFETY: the list is live slots (caller's guarantee).
+        unsafe {
+            while !next.is_null() && is_parent_of(s, &*next) {
+                if starts_run(next) && Identity::of(&(*next).cap).is_some() {
+                    descendants += 1;
+                }
+                next = (*next).next;
+            }
+        }
+
+        let inside = ledger.live_count(base, end);
+        assert!(
+            descendants == inside,
+            "audit: untyped {slot:p} holds {inside} live object(s), {descendants} of them descendants"
+        );
     }
 }
 

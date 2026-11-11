@@ -38,6 +38,13 @@ pub fn kmain(boot: BootInfo, alloc: BootAllocator) -> ! {
     boot_checks();
     info!("boot checks passed");
 
+    #[cfg(feature = "audit")]
+    let alloc = {
+        let mut alloc = alloc;
+        audit::ledger::init(&mut alloc);
+        alloc
+    };
+
     root_task::start(alloc);
     sched::run()
 }

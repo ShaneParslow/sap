@@ -101,6 +101,10 @@ pub unsafe fn retype(slot: *mut Slot, request: &Request) -> Result<(), usize> {
     }
 
     // Commit: advance the watermark, then create and record each object.
+    #[cfg(feature = "audit")]
+    if reset {
+        crate::audit::ledger::reclaimed(base, region_bits as usize);
+    }
     // SAFETY: slot is live and holds this untyped capability.
     unsafe {
         (*slot).cap = Cap::Untyped { size_bits: region_bits, device, base, free_index: end };
@@ -113,6 +117,8 @@ pub unsafe fn retype(slot: *mut Slot, request: &Request) -> Result<(), usize> {
             unsafe { core::ptr::write_bytes(arch::phys_to_virt(pa) as *mut u8, 0, 1 << bits) };
         }
         let cap = create(request.object_type, request.size_bits, pa, device);
+        #[cfg(feature = "audit")]
+        crate::audit::ledger::created(&cap);
         // SAFETY: the parent and destination slots are live; the
         // destination is empty (checked above).
         unsafe { cspace::insert_original(cap, Some(slot), dest_slot(i)) };

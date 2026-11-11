@@ -409,98 +409,144 @@ pub unsafe fn finalise_reply(reply: *mut Reply) {
 
 #[cfg(feature = "audit")]
 pub(crate) mod audit {
-    //! The audit's checks of endpoint queues (`crate::audit`).
+    //! The audit's checks of endpoint queues and reply objects
+    //! (`crate::audit`).
 
     use core::ptr;
 
-    use super::{Endpoint, Tcb, ThreadState};
+    use sap_abi::object;
+
+    use super::{Endpoint, Reply, Tcb, ThreadState};
+    use crate::audit::ledger::{Identity, Ledger};
 
     /// The longest queue walked before calling it a cycle.
     const MAX_QUEUE: usize = 1 << 16;
 
-    /// Check `ep`'s queue: its threads all sending or all receiving, each
-    /// blocked on `ep` and linked both ways, ending at the tail. Pass each
-    /// thread to `found`.
+    /// The live thread at `tcb`, or a panic naming `what` points at it.
+    fn live_thread(ledger: &Ledger, tcb: *mut Tcb, what: &str) -> usize {
+        let identity = Identity::at(tcb as usize, object::TCB);
+        let found = ledger.live(identity);
+        found
+            .unwrap_or_else(|| panic!("audit: {what} points at {tcb:p}, which isn't a live thread"))
+    }
+
+    /// Check `ep`'s queue: live threads, all sending or all receiving, each
+    /// blocked on `ep` and linked both ways, ending at the tail. Counts each
+    /// thread's queues.
     ///
     /// # Safety
-    /// `ep` must be a live endpoint, and its queued threads live TCBs.
-    pub unsafe fn queue(ep: *mut Endpoint, mut found: impl FnMut(*mut Tcb)) {
+    /// `ep` must be a live endpoint.
+    pub unsafe fn queue(ep: *mut Endpoint, ledger: &mut Ledger) {
         // SAFETY: per the caller's guarantee.
-        unsafe {
-            let e = &*ep;
-            if e.head.is_null() {
-                assert!(
-                    e.tail.is_null(),
-                    "audit: endpoint {ep:p} has a tail but no head"
-                );
-                return;
-            }
+        let e = unsafe { &*ep };
+        if e.head.is_null() {
+            assert!(
+                e.tail.is_null(),
+                "audit: endpoint {ep:p} has a tail but no head"
+            );
+            return;
+        }
 
-            let state = (*e.head).state;
+        let mut previous = ptr::null_mut();
+        let mut thread = e.head;
+        let mut state = None;
+        let mut length = 0;
+        while !thread.is_null() {
+            let at = "audit: endpoint";
+            let index = live_thread(ledger, thread, "an endpoint queue");
+            ledger.entries()[index].waits += 1;
+
+            // SAFETY: a live thread.
+            let t = unsafe { &*thread };
             let waiting = matches!(
-                state,
+                t.state,
                 ThreadState::BlockedOnSend | ThreadState::BlockedOnReceive
             );
             assert!(
                 waiting,
-                "audit: endpoint {ep:p} queues a thread in state {state:?}"
+                "{at} {ep:p} queues {thread:p}, which isn't sending or receiving"
+            );
+            let first = *state.get_or_insert(t.state);
+            assert!(
+                t.state == first,
+                "{at} {ep:p} queues senders and receivers together"
+            );
+            assert!(
+                t.blocked_on == ep as usize,
+                "{at} {ep:p} queues {thread:p}, blocked elsewhere"
+            );
+            assert!(
+                t.ipc_prev == previous,
+                "{at} {ep:p}: {thread:p} doesn't link back"
             );
 
-            let mut previous = ptr::null_mut();
-            let mut thread = e.head;
-            let mut length = 0;
-            while !thread.is_null() {
-                let t = &*thread;
-                let at = "audit: endpoint";
-                assert!(
-                    t.state == state,
-                    "{at} {ep:p} queues senders and receivers together"
-                );
-                assert!(
-                    t.blocked_on == ep as usize,
-                    "{at} {ep:p} queues {thread:p}, blocked elsewhere"
-                );
-                assert!(
-                    t.ipc_prev == previous,
-                    "{at} {ep:p}: {thread:p} doesn't link back"
-                );
+            length += 1;
+            assert!(
+                length <= MAX_QUEUE,
+                "{at} {ep:p}'s queue is a cycle or too long"
+            );
+            previous = thread;
+            thread = t.ipc_next;
+        }
+        assert!(e.tail == previous, "audit: endpoint {ep:p}'s tail is wrong");
+    }
 
-                length += 1;
-                assert!(
-                    length <= MAX_QUEUE,
-                    "{at} {ep:p}'s queue is a cycle or too long"
-                );
-                found(thread);
+    /// Check `reply`'s links: its caller waits for a reply through it, and
+    /// the receiver it is lent to waits to receive with it.
+    ///
+    /// # Safety
+    /// `reply` must be a live reply object.
+    pub unsafe fn reply(reply: *mut Reply, ledger: &Ledger) {
+        // SAFETY: per the caller's guarantee; the threads are checked live
+        // before they are read.
+        unsafe {
+            let r = &*reply;
 
-                previous = thread;
-                thread = t.ipc_next;
+            if !r.caller.is_null() {
+                live_thread(ledger, r.caller, "a reply object's caller");
+                let c = &*r.caller;
+                let waiting = c.state == ThreadState::BlockedOnReply;
+                let at = "audit: reply object";
+                assert!(waiting, "{at} {reply:p}'s caller isn't waiting for a reply");
+                assert!(
+                    c.blocked_on == reply as usize,
+                    "{at} {reply:p}'s caller waits elsewhere"
+                );
             }
-            assert!(e.tail == previous, "audit: endpoint {ep:p}'s tail is wrong");
+
+            if !r.receiver.is_null() {
+                live_thread(ledger, r.receiver, "a reply object's receiver");
+                let receiver = &*r.receiver;
+                let at = "audit: reply object";
+                let receiving = receiver.state == ThreadState::BlockedOnReceive;
+                assert!(
+                    receiving,
+                    "{at} {reply:p} is lent to a thread that isn't receiving"
+                );
+                assert!(
+                    receiver.ipc_reply == reply,
+                    "{at} {reply:p}'s receiver holds another"
+                );
+            }
         }
     }
 
-    /// Check that `tcb`, blocked on `ep`, is in its queue, as far as the
-    /// queue's ends show.
+    /// The thread waiting for an answer through `reply`.
     ///
     /// # Safety
-    /// Both must be live.
-    pub unsafe fn member(ep: *mut Endpoint, tcb: *mut Tcb) {
+    /// `reply` must be a live reply object.
+    pub unsafe fn caller(reply: *mut Reply) -> *mut Tcb {
         // SAFETY: per the caller's guarantee.
-        unsafe {
-            let (e, t) = (&*ep, &*tcb);
-            if t.ipc_prev.is_null() {
-                assert!(
-                    e.head == tcb,
-                    "audit: {tcb:p} is blocked on {ep:p} but not queued"
-                );
-            }
-            if t.ipc_next.is_null() {
-                assert!(
-                    e.tail == tcb,
-                    "audit: {tcb:p} is blocked on {ep:p} but not queued"
-                );
-            }
-        }
+        unsafe { (*reply).caller }
+    }
+
+    /// The thread `reply` is lent to.
+    ///
+    /// # Safety
+    /// `reply` must be a live reply object.
+    pub unsafe fn receiver(reply: *mut Reply) -> *mut Tcb {
+        // SAFETY: per the caller's guarantee.
+        unsafe { (*reply).receiver }
     }
 }
 

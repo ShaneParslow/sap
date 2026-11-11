@@ -203,3 +203,90 @@ fn unmap(asid: u16, va: usize, level: usize, pa: usize) {
         }
     }
 }
+
+#[cfg(feature = "audit")]
+pub mod audit {
+    //! The audit's checks of address spaces (`crate::audit`).
+
+    use sap_abi::object;
+
+    use super::super::paging::{self, UserMapping};
+    use super::{ArchCap, MAX_ASIDS, asid_root, asids};
+    use crate::audit::ledger::{Identity, Ledger};
+    use crate::cap::Cap;
+
+    /// Whether `cap` is a frame capability whose recorded mapping is in
+    /// place: the entry where it says it maps its frame points at the frame.
+    pub fn mapping_in_place(cap: &Cap) -> bool {
+        let Cap::Arch(ArchCap::Frame {
+            size_bits,
+            asid,
+            pa,
+            va,
+            ..
+        }) = *cap
+        else {
+            return false;
+        };
+        let Some(root) = (asid != 0).then(|| asid_root(asid)).flatten() else {
+            return false;
+        };
+
+        let level = (size_bits as usize - 12) / 9;
+        let entry = paging::entry_at(root, va, level);
+        entry.is_some_and(|e| e.is_valid() && e.pa() == pa)
+    }
+
+    /// Check every address space the ASID table names: its root and every
+    /// page table in it a live page table, and every page a live frame of
+    /// the page's size. Counts each table's and frame's references.
+    pub fn address_spaces(ledger: &mut Ledger) {
+        for asid in 1..MAX_ASIDS {
+            let root = asids()[asid];
+            if root == 0 {
+                continue;
+            }
+
+            let identity = Identity {
+                pa: root,
+                bits: 12,
+                object_type: object::PAGE_TABLE,
+            };
+            reference(ledger, identity, asid, 0);
+
+            paging::walk_user(root, |mapping| match mapping {
+                UserMapping::Table { pa, va, .. } => {
+                    let identity = Identity {
+                        pa,
+                        bits: 12,
+                        object_type: object::PAGE_TABLE,
+                    };
+                    reference(ledger, identity, asid, va);
+                }
+
+                UserMapping::Page {
+                    pa, va, size_bits, ..
+                } => {
+                    let object_type = match size_bits {
+                        12 => object::FRAME_4K,
+                        21 => object::FRAME_2M,
+                        _ => object::FRAME_1G,
+                    };
+                    let identity = Identity {
+                        pa,
+                        bits: size_bits,
+                        object_type,
+                    };
+                    reference(ledger, identity, asid, va);
+                }
+            });
+        }
+    }
+
+    fn reference(ledger: &mut Ledger, identity: Identity, asid: usize, va: usize) {
+        let Some(index) = ledger.live(identity) else {
+            panic!("audit: ASID {asid} maps {identity:?} at {va:#x}, which isn't live");
+        };
+        ledger.entries()[index].refs += 1;
+    }
+}

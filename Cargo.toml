@@ -17,6 +17,13 @@ panic = "abort"
 [profile.release]
 panic = "abort"
 
+# For the kernel's audit (kernel/audit.rs): optimized, so auditing on every
+# return to user mode stays quick, but keeping debug assertions and overflow
+# checks. `cargo run --profile audit --features audit`.
+[profile.audit]
+inherits = "dev"
+opt-level = 2
+
 # Cap'n Proto's code generator with `no_rpc` (user/lib/interfaces/build.rs),
 # from a fork until upstream has it; then back to crates.io's.
 [patch.crates-io]

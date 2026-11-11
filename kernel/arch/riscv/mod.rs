@@ -13,6 +13,8 @@ pub use caps::{create_object, is_frame_type, object_bits, unmapped_frame, ArchCa
 pub use paging::{phys_to_virt, walk_user, AddressSpace, UserMapping, USER_END};
 pub use trap::UserContext;
 pub use vspace::assign_asid;
+#[cfg(feature = "audit")]
+pub use vspace::audit;
 
 use core::sync::atomic::{AtomicU8, Ordering};
 

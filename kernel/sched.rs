@@ -198,15 +198,18 @@ pub(crate) mod audit {
 
     use core::ptr;
 
-    use super::{PRIORITIES, Tcb, ThreadState, sched};
+    use sap_abi::object;
+
+    use super::{PRIORITIES, ThreadState, sched};
+    use crate::audit::ledger::{Identity, Ledger};
 
     /// The longest queue walked before calling it a cycle.
     const MAX_QUEUE: usize = 1 << 16;
 
     /// Check every ready queue: its bitmap bit set exactly when it has
-    /// threads, each of them runnable, at the queue's priority and linked
-    /// both ways, ending at the tail. Pass each thread to `found`.
-    pub fn queues(mut found: impl FnMut(*mut Tcb)) {
+    /// threads, each a live thread, runnable, at the queue's priority and
+    /// linked both ways, ending at the tail. Counts each thread's queues.
+    pub fn queues(ledger: &mut Ledger) {
         let s = sched();
         for priority in 0..PRIORITIES {
             let queue = s.queues[priority];
@@ -221,9 +224,14 @@ pub(crate) mod audit {
             let mut thread = queue.head;
             let mut length = 0;
             while !thread.is_null() {
-                // SAFETY: queued threads are live TCBs.
-                let t = unsafe { &*thread };
                 let at = "audit: ready queue";
+                let Some(index) = ledger.live(Identity::at(thread as usize, object::TCB)) else {
+                    panic!("{at} {priority} holds {thread:p}, which isn't a live thread");
+                };
+                ledger.entries()[index].queued += 1;
+
+                // SAFETY: a live thread.
+                let t = unsafe { &*thread };
                 assert!(
                     t.state == ThreadState::Running,
                     "{at} {priority}: {thread:p} isn't runnable"
@@ -242,47 +250,12 @@ pub(crate) mod audit {
                     length <= MAX_QUEUE,
                     "{at} {priority} is a cycle or too long"
                 );
-                found(thread);
-
                 previous = thread;
                 thread = t.queue_next;
             }
             assert!(
                 queue.tail == previous,
                 "audit: ready queue {priority}'s tail is wrong"
-            );
-        }
-    }
-
-    /// Check that `tcb` is in its ready queue exactly when it is runnable,
-    /// as far as the queue's ends show.
-    ///
-    /// # Safety
-    /// `tcb` must be a live TCB.
-    pub unsafe fn thread(tcb: *mut Tcb) {
-        // SAFETY: per the caller's guarantee.
-        let t = unsafe { &*tcb };
-        let queue = sched().queues[t.priority as usize];
-
-        if t.state == ThreadState::Running {
-            if t.queue_prev.is_null() {
-                assert!(
-                    queue.head == tcb,
-                    "audit: runnable {tcb:p} isn't in its ready queue"
-                );
-            }
-            if t.queue_next.is_null() {
-                assert!(
-                    queue.tail == tcb,
-                    "audit: runnable {tcb:p} isn't in its ready queue"
-                );
-            }
-        } else {
-            let linked = !t.queue_prev.is_null() || !t.queue_next.is_null();
-            let at_an_end = queue.head == tcb || queue.tail == tcb;
-            assert!(
-                !linked && !at_an_end,
-                "audit: {tcb:p} isn't runnable but is in a ready queue"
             );
         }
     }
