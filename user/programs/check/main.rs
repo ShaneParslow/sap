@@ -1,6 +1,6 @@
-//! The kernel checks: the program the root supervisor starts at boot to
-//! check the kernel's features as they arrive, and the services' too. Its
-//! bootstrap message (`CheckBootstrap` in `check.capnp`) gives it
+//! The program the root supervisor starts at boot to check the runtime and
+//! the services; the kernel's own tests are `test-kernel`. Its bootstrap
+//! message (`CheckBootstrap` in `check.capnp`) gives it
 //! the ASID pool, which only the root task holds at boot; its untyped
 //! memory is chunks of its memory account. Its output
 //! goes to the log, which puts the component's name before each line. It
@@ -20,10 +20,6 @@
 extern crate alloc;
 
 mod accounts;
-mod caps;
-mod memory;
-mod threads;
-mod kernel_ipc;
 mod processes;
 mod rt;
 mod channels;
@@ -55,14 +51,10 @@ use sap_rt::{account, println, startup};
 use capnp::message::{Reader, ReaderOptions, SegmentArray};
 use components::check_capnp::check_bootstrap;
 use accounts::check_accounts;
-use caps::{check_cnode_operations, check_retype};
 use channels::{check_capnp, check_echo_service, check_ring, measure_transfer};
 use cheri::check_cheri;
-use kernel_ipc::{check_cap_transfer, check_faults, check_ipc, check_notifications};
-use memory::check_mapping;
 use processes::{check_compose, check_instances, check_log, check_process, check_restart};
 use rt::check_heap;
-use threads::check_threads;
 
 /// Slot `i` of this process's CNode.
 fn slot(i: usize) -> SlotRef {
@@ -77,7 +69,6 @@ struct Env {
     timer_hz: u64,
     /// `sap_process::startup_flags`, passed on to processes the checks start.
     flags: usize,
-    cnode_radix: usize,
     /// Free slots.
     empty: SlotRange,
     asid_pool: usize,
@@ -100,9 +91,9 @@ struct Env {
 }
 
 /// The chunks of untyped memory the checks use, by size, from the account:
-/// the first is revoked by `check_cnode_operations`, and each check takes
-/// the first that is large enough. The runtime takes chunks of its own.
-const CHUNKS: [u8; 4] = [16, 18, 20, 22];
+/// each check takes the first that is large enough. The runtime takes
+/// chunks of its own.
+const CHUNKS: [u8; 3] = [16, 18, 20];
 
 /// Read the bootstrap message into an `Env`, and take the chunks.
 fn env(startup: &'static Startup) -> Result<Env, capnp::Error> {
@@ -120,7 +111,6 @@ fn env(startup: &'static Startup) -> Result<Env, capnp::Error> {
     Ok(Env {
         timer_hz: startup.timer_hz,
         flags: startup.flags,
-        cnode_radix: startup.cnode_radix,
         empty: SlotRange { start: untyped.end, end: startup.free.end },
         asid_pool: import(imports.get_asid_pool()),
         supervisor: import(imports.get_supervisor()),
@@ -164,14 +154,6 @@ fn sap_main(a0: usize, _: usize, _: usize) -> ! {
         memory: Memory::Account(info.account),
         heap: HEAP,
     });
-    check_cnode_operations(info);
-    check_retype(info);
-    check_mapping(info);
-    check_threads(info);
-    check_notifications(info);
-    check_ipc(info);
-    check_cap_transfer(info);
-    check_faults(info);
     // Before anything else allocates: it checks that the heap starts empty.
     check_heap(info);
     check_process(info);

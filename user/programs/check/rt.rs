@@ -6,11 +6,42 @@ use alloc::vec::Vec;
 use core::alloc::Layout;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use sap_process::process_slot;
-use sap_rt::abi::{object, rights};
+use sap_rt::abi::{attr, object, reg, rights};
 use sap_rt::cnode::SlotRef;
-use sap_rt::{account, heap, notification, println, slots, sync, sys, tcb, untyped};
+use sap_rt::{account, heap, notification, println, slots, sync, sys, tcb, untyped, vspace};
 use crate::{Env, expect, slot, untyped_at_least};
-use crate::threads::spawn;
+
+/// Start a thread in this address space at `entry(args)`, with a 4 KiB
+/// stack and an IPC buffer in a fresh 1 GiB-aligned region at `va`. Uses
+/// six slots from `slots` and memory from `untyped`.
+fn spawn(untyped: usize, slots: usize, va: usize, entry: extern "C" fn(usize, usize, usize) -> !, args: [usize; 3]) {
+    let in_root = SlotRef { root: process_slot::CNODE, index: 0, depth: 0 };
+    let thread = slots;
+    let tables = slots + 1;
+    let frames = slots + 3;
+    let buffer = va + 0x2000;
+    let me = process_slot::VSPACE;
+    let rw = rights::READ | rights::WRITE;
+
+    expect("spawn: tcb", untyped::retype(untyped, object::TCB, 0, in_root, thread, 1), Ok(()));
+    expect("spawn: tables", untyped::retype(untyped, object::PAGE_TABLE, 0, in_root, tables, 2), Ok(()));
+    expect("spawn: frames", untyped::retype(untyped, object::FRAME_4K, 0, in_root, frames, 2), Ok(()));
+
+    expect("spawn: map", vspace::map_page_table(tables, me, va), Ok(()));
+    expect("spawn: map", vspace::map_page_table(tables + 1, me, va), Ok(()));
+    expect("spawn: stack", vspace::map_frame(frames, me, va, rw, attr::EXECUTE_NEVER), Ok(()));
+    expect("spawn: buffer", vspace::map_frame(frames + 1, me, buffer, rw, attr::EXECUTE_NEVER), Ok(()));
+
+    expect("spawn: configure", tcb::configure(thread, process_slot::CNODE, me, Some((frames + 1, buffer))), Ok(()));
+    expect("spawn: priority", tcb::set_priority(thread, process_slot::TCB, 255), Ok(()));
+
+    let mut regs = [0; reg::COUNT];
+    regs[reg::PC] = (entry as *const ()).addr();
+    regs[reg::SP] = va + 0x1000;
+    regs[reg::TP] = buffer;
+    regs[reg::A0..reg::A0 + 3].copy_from_slice(&args);
+    expect("spawn: registers", tcb::write_registers(thread, true, &regs), Ok(()));
+}
 
 const HEAP_ROUNDS: usize = 40_000;
 static HEAP_SUMS: [AtomicUsize; 2] = [const { AtomicUsize::new(0) }; 2];

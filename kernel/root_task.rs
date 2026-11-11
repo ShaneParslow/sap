@@ -1,9 +1,9 @@
 //! Loading the root task: the one program the kernel starts by itself, as
 //! seL4 does. Every other program is loaded by the root task, which will
 //! become the process manager (M7), so this is the only ELF loader in the
-//! kernel and it handles only what `user/programs/init` produces: a static,
-//! position-independent RISC-V executable whose only relocations are
-//! relative ones.
+//! kernel and it handles only what the user build produces (`init`, or
+//! `test-kernel` with `SAP_ROOT`): a static, position-independent RISC-V
+//! executable whose only relocations are relative ones.
 //!
 //! The kernel also gives the root task all the authority there is, as
 //! capabilities in a CNode it builds here: its own thread, CNode and address
@@ -22,7 +22,7 @@ use crate::cspace::{self, Slot, SLOT_BITS};
 use crate::mm::{BootAllocator, Perms, PAGE_SIZE};
 use crate::thread::{self, Tcb, MAX_PRIORITY};
 
-static IMAGE: &[u8] = include_bytes!(env!("INIT_ELF"));
+static IMAGE: &[u8] = include_bytes!(env!("ROOT_TASK_ELF"));
 
 /// Where the image is placed. Leaves the low pages unmapped so null pointer
 /// accesses fault.

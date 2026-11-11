@@ -1,6 +1,6 @@
 @0xaa31abaf4b600755;
 # `check` as a component (`interfaces/system/component.capnp`): the program
-# that checks the kernel's and the services' features. Besides its imports
+# that checks the runtime and the services. Besides its imports
 # it has a memory account (`process_slot::ACCOUNT`), whose chunks are the
 # untyped memory the checks use.
 # TODO: capability fields once RPC brings capability tables (M6).

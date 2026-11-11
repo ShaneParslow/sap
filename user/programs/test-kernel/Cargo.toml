@@ -1,0 +1,14 @@
+[package]
+name = "test-kernel"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "test-kernel"
+path = "main.rs"
+test = false
+bench = false
+
+[dependencies]
+# No heap: the tests use only what the kernel provides.
+sap-rt = { path = "../../lib/rt", default-features = false }

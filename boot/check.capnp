@@ -1,5 +1,5 @@
 @0xbf27122c15ed85a9;
-# The default boot request (`SAP_BOOT=check`): the kernel and service
+# The default boot request (`SAP_BOOT=check`): the runtime and service
 # checks, and a service for them to restart. The resolver adds what they
 # import (the log); the memory manager and the resolver are init's own.
 
